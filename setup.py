@@ -1,128 +1,142 @@
-#!/usr/bin/env python3
 """
-Setup script for TurboLoader - High-Performance ML Data Loading Library
+Setup script for TurboLoader Python bindings
+
+Builds the turboloader module using pybind11.
 """
 
-from setuptools import setup, Extension, find_packages
+from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 import sys
 import os
 import subprocess
-from pathlib import Path
 
-class CMakeExtension(Extension):
-    def __init__(self, name, sourcedir=''):
-        Extension.__init__(self, name, sources=[])
-        self.sourcedir = os.path.abspath(sourcedir)
+class get_pybind_include(object):
+    """Helper class to determine the pybind11 include path"""
+
+    def __str__(self):
+        import pybind11
+        return pybind11.get_include()
 
 
-class CMakeBuild(build_ext):
-    def run(self):
-        try:
-            out = subprocess.check_output(['cmake', '--version'])
-        except OSError:
-            raise RuntimeError(
-                "CMake must be installed to build the following extensions: " +
-                ", ".join(e.name for e in self.extensions))
+def find_jpeg_turbo():
+    """Find libjpeg-turbo installation"""
+    # Try common locations
+    possible_paths = [
+        '/opt/homebrew/opt/jpeg-turbo',  # Homebrew on Apple Silicon
+        '/usr/local/opt/jpeg-turbo',      # Homebrew on Intel
+        '/usr',                           # System
+    ]
+
+    for base_path in possible_paths:
+        include_path = os.path.join(base_path, 'include')
+        lib_path = os.path.join(base_path, 'lib')
+
+        if os.path.exists(include_path) and os.path.exists(lib_path):
+            return include_path, lib_path
+
+    # Try pkg-config
+    try:
+        include_path = subprocess.check_output(
+            ['pkg-config', '--variable=includedir', 'libjpeg'],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+
+        lib_path = subprocess.check_output(
+            ['pkg-config', '--variable=libdir', 'libjpeg'],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+
+        if include_path and lib_path:
+            return include_path, lib_path
+    except:
+        pass
+
+    raise RuntimeError(
+        "Could not find libjpeg-turbo installation.\n"
+        "Please install it:\n"
+        "  macOS: brew install jpeg-turbo\n"
+        "  Linux: sudo apt-get install libjpeg-turbo8-dev\n"
+    )
+
+
+# Find JPEG library
+jpeg_include, jpeg_lib = find_jpeg_turbo()
+
+print(f"Found libjpeg-turbo:")
+print(f"  Include: {jpeg_include}")
+print(f"  Library: {jpeg_lib}")
+
+ext_modules = [
+    Extension(
+        'turboloader',
+        sources=['src/python/turboloader_bindings.cpp'],
+        include_dirs=[
+            get_pybind_include(),
+            jpeg_include,
+            'src',  # For pipeline_v2 headers
+        ],
+        library_dirs=[jpeg_lib],
+        libraries=['jpeg'],
+        language='c++',
+        extra_compile_args=[
+            '-std=c++20',
+            '-O3',
+            '-march=native',  # Enable CPU-specific optimizations
+            '-fvisibility=hidden',
+        ],
+    ),
+]
+
+
+class BuildExt(build_ext):
+    """Custom build extension to set C++20 flag"""
+
+    def build_extensions(self):
+        # Set C++20 standard
+        ct = self.compiler.compiler_type
+        opts = []
+
+        if ct == 'unix':
+            opts.append('-std=c++20')
+        elif ct == 'msvc':
+            opts.append('/std:c++20')
 
         for ext in self.extensions:
-            self.build_extension(ext)
+            ext.extra_compile_args = opts + ext.extra_compile_args
 
-    def build_extension(self, ext):
-        extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
+        build_ext.build_extensions(self)
 
-        # Required for auto-detection of auxiliary "native" libs
-        if not extdir.endswith(os.path.sep):
-            extdir += os.path.sep
-
-        # Place the .so file inside the turboloader/ package directory
-        library_output_dir = os.path.join(extdir, 'turboloader')
-
-        cmake_args = [
-            f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={library_output_dir}',
-            f'-DPYTHON_EXECUTABLE={sys.executable}',
-            '-DTURBOLOADER_BUILD_TESTS=OFF',
-            '-DTURBOLOADER_BUILD_BENCHMARKS=OFF',
-        ]
-
-        cfg = 'Debug' if self.debug else 'Release'
-        build_args = ['--config', cfg]
-
-        cmake_args += [f'-DCMAKE_BUILD_TYPE={cfg}']
-
-        # Parallel build
-        build_args += ['--', '-j8']
-
-        env = os.environ.copy()
-        env['CXXFLAGS'] = f'{env.get("CXXFLAGS", "")} -DVERSION_INFO=\\"{self.distribution.get_version()}\\"'
-
-        if not os.path.exists(self.build_temp):
-            os.makedirs(self.build_temp)
-
-        subprocess.check_call(['cmake', ext.sourcedir] + cmake_args, cwd=self.build_temp, env=env)
-        subprocess.check_call(['cmake', '--build', '.'] + build_args, cwd=self.build_temp)
-
-
-# Read long description from README
-long_description = ""
-readme_path = Path(__file__).parent / "README.md"
-if readme_path.exists():
-    long_description = readme_path.read_text(encoding='utf-8')
 
 setup(
     name='turboloader',
-    version='0.3.7',
-    author='Arnav Jain',
-    author_email='arnav@arnavjain.com',
-    description='High-performance ML data loading library with SIMD optimizations',
-    long_description=long_description,
+    version='0.4.0',
+    author='TurboLoader Contributors',
+    description='High-performance data loading for PyTorch (TurboLoader)',
+    long_description=open('README.md').read() if os.path.exists('README.md') else '',
     long_description_content_type='text/markdown',
-    url='https://github.com/arnavjain/turboloader',
-    project_urls={
-        'Bug Reports': 'https://github.com/arnavjain/turboloader/issues',
-        'Source': 'https://github.com/arnavjain/turboloader',
-        'Documentation': 'https://github.com/arnavjain/turboloader/blob/main/README.md',
-    },
-    ext_modules=[CMakeExtension('turboloader')],
-    cmdclass=dict(build_ext=CMakeBuild),
-    zip_safe=False,
-    python_requires='>=3.8',
+    ext_modules=ext_modules,
+    cmdclass={'build_ext': BuildExt},
     install_requires=[
-        'numpy>=1.19.0',
+        'pybind11>=2.10.0',
+        'numpy>=1.20.0',
     ],
     extras_require={
-        'dev': [
-            'pytest>=6.0',
-            'torch>=1.9.0',
-            'torchvision>=0.10.0',
-            'webdataset>=0.2.0',
-            'pillow>=8.0.0',
-        ],
-        'benchmarks': [
-            'torch>=1.9.0',
-            'torchvision>=0.10.0',
-            'webdataset>=0.2.0',
-            'pillow>=8.0.0',
-            'matplotlib>=3.3.0',
-        ],
+        'torch': ['torch>=1.10.0'],
+        'dev': ['pytest', 'black', 'mypy'],
     },
+    python_requires='>=3.8',
     classifiers=[
         'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',
         'Intended Audience :: Science/Research',
-        'Topic :: Scientific/Engineering :: Artificial Intelligence',
-        'Topic :: Software Development :: Libraries :: Python Modules',
+        'License :: OSI Approved :: MIT License',
+        'Programming Language :: C++',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
-        'Programming Language :: Python :: 3.12',
-        'Programming Language :: Python :: 3.13',
-        'Programming Language :: C++',
-        'Operating System :: POSIX :: Linux',
-        'Operating System :: MacOS',
+        'Topic :: Scientific/Engineering :: Artificial Intelligence',
     ],
-    license='MIT',
-    keywords='machine-learning data-loading simd performance pytorch tensorflow',
+    zip_safe=False,
 )
