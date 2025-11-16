@@ -1,57 +1,139 @@
-# Download and setup Google Test
-include(FetchContent)
+# Test suite for TurboLoader
 
-FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.14.0
-)
+# Test executable for TAR reader
+add_executable(test_tar_reader test_tar_reader.cpp)
+target_link_libraries(test_tar_reader PRIVATE turboloader)
+add_test(NAME tar_reader COMMAND test_tar_reader)
 
-# For Windows: Prevent overriding the parent project's compiler/linker settings
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+# Test executable for image decoder (JPEG, PNG, WebP, BMP, TIFF)
+add_executable(test_image_decoder test_image_decoder.cpp)
+target_link_libraries(test_image_decoder PRIVATE turboloader)
+add_test(NAME image_decoder COMMAND test_image_decoder)
 
-# Enable testing
-enable_testing()
-include(GoogleTest)
-
-# Test executable
-add_executable(turboloader_tests
-    test_lock_free_queue.cpp
-    test_memory_pool.cpp
-    test_mmap_reader.cpp
-)
-
-target_link_libraries(turboloader_tests
-    PRIVATE
-        turboloader
-        GTest::gtest_main
-)
-
-target_include_directories(turboloader_tests
-    PRIVATE
-        ${TURBOLOADER_INCLUDE_DIR}
-)
-
-# Discover tests
-gtest_discover_tests(turboloader_tests)
-
-# HTTP Reader test (standalone, requires network)
+# Test executable for HTTP reader with connection pooling
+find_package(CURL REQUIRED)
 add_executable(test_http_reader test_http_reader.cpp)
-target_link_libraries(test_http_reader PRIVATE turboloader)
-target_include_directories(test_http_reader PRIVATE ${TURBOLOADER_INCLUDE_DIR})
+target_link_libraries(test_http_reader PRIVATE CURL::libcurl)
+target_include_directories(test_http_reader PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME http_reader COMMAND test_http_reader)
 
-# Transforms test
-add_executable(test_transforms test_transforms.cpp)
-target_link_libraries(test_transforms PRIVATE turboloader)
-target_include_directories(test_transforms PRIVATE ${TURBOLOADER_INCLUDE_DIR})
+# Test executable for S3 reader (uses HTTP fallback without AWS SDK)
+add_executable(test_s3_reader test_s3_reader.cpp)
+target_link_libraries(test_s3_reader PRIVATE CURL::libcurl)
+target_include_directories(test_s3_reader PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME s3_reader COMMAND test_s3_reader)
 
-# SIMD Transforms test
-add_executable(test_simd_transforms test_simd_transforms.cpp)
-target_link_libraries(test_simd_transforms PRIVATE turboloader)
-target_include_directories(test_simd_transforms PRIVATE ${TURBOLOADER_INCLUDE_DIR})
+# Test executable for GCS reader (uses HTTP fallback without Google Cloud SDK)
+add_executable(test_gcs_reader test_gcs_reader.cpp)
+target_link_libraries(test_gcs_reader PRIVATE CURL::libcurl)
+target_include_directories(test_gcs_reader PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME gcs_reader COMMAND test_gcs_reader)
 
-# Concurrency test (for ThreadSanitizer)
-add_executable(test_concurrency test_concurrency.cpp)
-target_link_libraries(test_concurrency PRIVATE turboloader)
-target_include_directories(test_concurrency PRIVATE ${TURBOLOADER_INCLUDE_DIR})
+# Test executable for unified reader orchestrator (auto-selects reader based on source)
+add_executable(test_reader_orchestrator test_reader_orchestrator.cpp)
+target_link_libraries(test_reader_orchestrator PRIVATE CURL::libcurl)
+target_include_directories(test_reader_orchestrator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME reader_orchestrator COMMAND test_reader_orchestrator)
+
+# Test executable for video decoder (requires FFmpeg)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(FFMPEG QUIET
+        libavcodec
+        libavformat
+        libavutil
+        libswscale
+    )
+endif()
+
+if(FFMPEG_FOUND)
+    add_executable(test_video_decoder test_video_decoder.cpp)
+    target_include_directories(test_video_decoder PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${FFMPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_video_decoder PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(test_video_decoder PRIVATE ${FFMPEG_LIBRARIES})
+    target_compile_definitions(test_video_decoder PRIVATE HAVE_FFMPEG)
+    add_test(NAME video_decoder COMMAND test_video_decoder)
+    message(STATUS "Building video decoder test with FFmpeg support")
+else()
+    # Build test without FFmpeg (will show skipped tests)
+    add_executable(test_video_decoder test_video_decoder.cpp)
+    target_include_directories(test_video_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME video_decoder COMMAND test_video_decoder)
+    message(STATUS "Building video decoder test without FFmpeg (tests will be skipped)")
+endif()
+
+# Test executable for CSV decoder (header-only, no dependencies)
+add_executable(test_csv_decoder test_csv_decoder.cpp)
+target_include_directories(test_csv_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME csv_decoder COMMAND test_csv_decoder)
+
+# Test executable for Parquet decoder (requires Apache Arrow)
+if(PkgConfig_FOUND)
+    pkg_check_modules(ARROW QUIET arrow parquet)
+endif()
+
+if(ARROW_FOUND)
+    add_executable(test_parquet_decoder test_parquet_decoder.cpp)
+    target_include_directories(test_parquet_decoder PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${ARROW_INCLUDE_DIRS}
+    )
+    target_link_directories(test_parquet_decoder PRIVATE ${ARROW_LIBRARY_DIRS})
+    target_link_libraries(test_parquet_decoder PRIVATE ${ARROW_LIBRARIES})
+    target_compile_definitions(test_parquet_decoder PRIVATE HAVE_ARROW)
+    add_test(NAME parquet_decoder COMMAND test_parquet_decoder)
+    message(STATUS "Building Parquet decoder test with Apache Arrow support")
+else()
+    # Build test without Arrow (will show skipped tests)
+    add_executable(test_parquet_decoder test_parquet_decoder.cpp)
+    target_include_directories(test_parquet_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME parquet_decoder COMMAND test_parquet_decoder)
+    message(STATUS "Building Parquet decoder test without Apache Arrow (tests will be skipped)")
+endif()
+
+# Test executable for unified pipeline (all formats, all sources)
+add_executable(test_unified_pipeline test_unified_pipeline.cpp)
+target_include_directories(test_unified_pipeline PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_unified_pipeline PRIVATE turboloader)
+add_test(NAME unified_pipeline COMMAND test_unified_pipeline)
+
+# Test executable for nvJPEG decoder (GPU-accelerated JPEG with CPU fallback)
+find_package(CUDA QUIET)
+if(CUDA_FOUND)
+    find_library(NVJPEG_LIBRARY nvjpeg HINTS ${CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CUDA_TOOLKIT_ROOT_DIR}/lib)
+    if(NVJPEG_LIBRARY)
+        add_executable(test_nvjpeg_decoder test_nvjpeg_decoder.cpp)
+        target_include_directories(test_nvjpeg_decoder PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+            ${CUDA_INCLUDE_DIRS}
+        )
+        target_link_libraries(test_nvjpeg_decoder PRIVATE
+            turboloader
+            ${NVJPEG_LIBRARY}
+            ${CUDA_LIBRARIES}
+        )
+        target_compile_definitions(test_nvjpeg_decoder PRIVATE HAVE_NVJPEG)
+        add_test(NAME nvjpeg_decoder COMMAND test_nvjpeg_decoder)
+        message(STATUS "Building nvJPEG decoder test with GPU support")
+    else()
+        # Build test without nvJPEG (will use CPU fallback)
+        add_executable(test_nvjpeg_decoder test_nvjpeg_decoder.cpp)
+        target_include_directories(test_nvjpeg_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_link_libraries(test_nvjpeg_decoder PRIVATE turboloader)
+        add_test(NAME nvjpeg_decoder COMMAND test_nvjpeg_decoder)
+        message(STATUS "Building nvJPEG decoder test without GPU (CPU fallback only)")
+    endif()
+else()
+    # Build test without CUDA (CPU fallback only)
+    add_executable(test_nvjpeg_decoder test_nvjpeg_decoder.cpp)
+    target_include_directories(test_nvjpeg_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_nvjpeg_decoder PRIVATE turboloader)
+    add_test(NAME nvjpeg_decoder COMMAND test_nvjpeg_decoder)
+    message(STATUS "Building nvJPEG decoder test without CUDA (CPU fallback only)")
+endif()
+
+# Additional tests will be added as we implement more components
+# add_executable(test_core test_core.cpp)

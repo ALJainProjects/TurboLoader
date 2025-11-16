@@ -11,7 +11,7 @@
 #include "../pipeline/pipeline.hpp"
 
 namespace py = pybind11;
-using namespace turboloader::core;
+using namespace turboloader;
 
 /**
  * @brief Python wrapper for Sample

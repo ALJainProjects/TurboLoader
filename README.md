@@ -29,7 +29,7 @@ TurboLoader is a high-performance data loading library designed to accelerate ML
 
 ### Current Status (v0.3.8)
 
-> **IMPORTANT**: TurboLoader v0.3.8 has a critical performance issue and is currently **2.7x slower** than PyTorch DataLoader. We have identified the root causes and are implementing a complete rewrite in v2.0 (see roadmap below).
+> **IMPORTANT**: TurboLoader v0.3.8 has a critical performance issue and is currently **2.7x slower** than PyTorch DataLoader. We have identified the root causes and are implementing a complete rewrite in TurboLoader (see roadmap below).
 
 **End-to-End Data Loading Benchmark** (1000 images, 4 workers, batch_size=32):
 
@@ -37,7 +37,7 @@ TurboLoader is a high-performance data loading library designed to accelerate ML
 |---------|------------|--------|
 | PyTorch DataLoader | 48.07 img/s | ✅ Baseline |
 | TurboLoader v0.3.8 | 17.56 img/s | ❌ 63% slower |
-| TurboLoader v2.0 (target) | 150-200 img/s | 🚧 In development |
+| TurboLoader TurboLoader (target) | 150-200 img/s | 🚧 In development |
 
 **Identified Root Causes**:
 1. TAR mutex contention (75% impact) - all workers serialize on shared file handle
@@ -46,7 +46,7 @@ TurboLoader is a high-performance data loading library designed to accelerate ML
 4. Thread pool contention (10% impact)
 5. JPEG decoder inefficiency (5% impact)
 
-See [GitHub Issue](https://github.com/ALJainProjects/TurboLoader/issues) and [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/v2.0-rewrite/ARCHITECTURE_V2.md) for detailed analysis.
+See [GitHub Issue](https://github.com/ALJainProjects/TurboLoader/issues) and [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/TurboLoader-rewrite/ARCHITECTURE_V2.md) for detailed analysis.
 
 ### SIMD Transform Performance (Micro-benchmarks)
 
@@ -264,11 +264,11 @@ class ColorJitter(AugmentationTransform):
 
 ## Roadmap
 
-### v2.0.0 (Q1 2025) - HIGH PRIORITY
+### TurboLoader.0 (Q1 2025) - HIGH PRIORITY
 
 **Complete pipeline rewrite to fix critical performance issues**
 
-See [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/v2.0-rewrite/ARCHITECTURE_V2.md) for full design.
+See [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/TurboLoader-rewrite/ARCHITECTURE_V2.md) for full design.
 
 #### Core Infrastructure
 - [ ] Lock-free SPSC ring buffers (~50x faster than mutex queues)
@@ -295,7 +295,7 @@ See [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/v2.0
 
 **Estimated Timeline**: 11-17 hours of development
 
-**Branch**: `v2.0-rewrite`
+**Branch**: `TurboLoader-rewrite`
 
 ---
 
