@@ -1,6 +1,9 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v0.6.0 Features:
+v0.7.0 Features:
+- 19 SIMD-accelerated data augmentation transforms (5 new in v0.7.0)
+- Advanced transforms: RandomPerspective, RandomPosterize, RandomSolarize, AutoAugment, Lanczos interpolation
+- AutoAugment learned policies: ImageNet, CIFAR10, SVHN
 - Comprehensive benchmarking infrastructure with 8 framework comparisons
 - 10,146 img/s throughput (12x faster than PyTorch Optimized, 1.3x faster than TensorFlow)
 - Interactive Plotly visualizations with 13 chart types
@@ -19,7 +22,7 @@ v0.6.0 Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 # Import C++ extension module
 try:

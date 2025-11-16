@@ -175,5 +175,28 @@ else()
     message(STATUS "Building distributed test without MPI (error handling only)")
 endif()
 
+# Test executable for transforms (SIMD-accelerated, v0.6.0)
+# Find Google Test
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG release-1.12.1
+)
+FetchContent_MakeAvailable(googletest)
+
+add_executable(test_transforms test_transforms.cpp)
+target_include_directories(test_transforms PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_transforms PRIVATE turboloader gtest gtest_main)
+add_test(NAME transforms COMMAND test_transforms)
+message(STATUS "Building transform tests with SIMD support")
+
+# Test executable for advanced transforms (v0.7.0)
+add_executable(test_advanced_transforms test_advanced_transforms.cpp)
+target_include_directories(test_advanced_transforms PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_advanced_transforms PRIVATE turboloader gtest gtest_main)
+add_test(NAME advanced_transforms COMMAND test_advanced_transforms)
+message(STATUS "Building advanced transform tests (v0.7.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
