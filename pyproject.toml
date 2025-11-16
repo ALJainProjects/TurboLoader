@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboloader"
-version = "0.6.0"
-description = "High-performance multi-framework data loading library (10,146 img/s, 12x faster than PyTorch). Features: TensorFlow/Keras, JAX/Flax, PyTorch support, WebDataset format, cloud storage (S3/GCS/HTTP), SIMD-optimized JPEG decoder, and comprehensive benchmarking. Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+"
+version = "0.7.0"
+description = "High-performance multi-framework data loading library (10,146 img/s, 12x faster than PyTorch). Features: TensorFlow/Keras, JAX/Flax, PyTorch support, WebDataset format, cloud storage (S3/GCS/HTTP), SIMD-optimized JPEG decoder, 19 advanced transforms (including AutoAugment), and comprehensive benchmarking. Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"

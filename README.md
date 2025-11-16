@@ -20,14 +20,28 @@ TurboLoader is a high-performance data loading library designed to accelerate ML
 - 💾 **Zero-Copy Memory-Mapped I/O** for efficient file reading
 - 📦 **WebDataset TAR Format** support for sharded datasets
 - 🎯 **SIMD-Accelerated Image Decoders** (JPEG, PNG, WebP)
-- 🎨 **7 Data Augmentation Transforms** with SIMD optimization
+- 🎨 **19 Data Augmentation Transforms** with SIMD optimization (5 new in v0.7.0)
+- 🤖 **AutoAugment Policies** for state-of-the-art augmentation
 - 🐍 **PyTorch-Compatible API** drop-in replacement
 
 ---
 
 ## Performance
 
-### Current Status (v0.6.0)
+### v0.7.0 Advanced Transforms (New!)
+
+**5 Additional SIMD-Accelerated Transforms:**
+- **RandomPosterize**: Bit-depth reduction (ultra-fast bitwise ops, 336,000+ img/s)
+- **RandomSolarize**: Threshold-based pixel inversion (21,000+ img/s)
+- **RandomPerspective**: Perspective warping with SIMD interpolation (9,900+ img/s)
+- **AutoAugment**: Learned augmentation policies (ImageNet, CIFAR10, SVHN) (19,800+ img/s)
+- **Lanczos Interpolation**: High-quality downsampling for Resize (2,900+ img/s)
+
+See [BENCHMARK_RESULTS_V0.7.md](BENCHMARK_RESULTS_V0.7.md) for detailed performance analysis.
+
+---
+
+### Overall Performance (v0.6.0)
 
 **Comprehensive Benchmark Results** (2000 images, 8 workers, batch_size=32, 3 epochs):
 
