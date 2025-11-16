@@ -27,15 +27,28 @@ TurboLoader is a high-performance data loading library designed to accelerate ML
 
 ## Performance
 
-TurboLoader achieves high performance through several optimizations:
+### Current Status (v0.3.8)
 
-- **Thread-safe concurrent queues** provide reliable multi-threaded data passing
-- **SIMD-optimized transforms** (AVX2/NEON) accelerate image preprocessing
-- **Native C++ threads** avoid Python GIL and multiprocessing overhead
-- **Memory-mapped I/O** enables zero-copy file reading
-- **Thread-local decoders** eliminate allocation overhead
+> **IMPORTANT**: TurboLoader v0.3.8 has a critical performance issue and is currently **2.7x slower** than PyTorch DataLoader. We have identified the root causes and are implementing a complete rewrite in TurboLoader (see roadmap below).
 
-### Benchmark Results
+**End-to-End Data Loading Benchmark** (1000 images, 4 workers, batch_size=32):
+
+| Library | Throughput | Status |
+|---------|------------|--------|
+| PyTorch DataLoader | 48.07 img/s | ✅ Baseline |
+| TurboLoader v0.3.8 | 17.56 img/s | ❌ 63% slower |
+| TurboLoader TurboLoader (target) | 150-200 img/s | 🚧 In development |
+
+**Identified Root Causes**:
+1. TAR mutex contention (75% impact) - all workers serialize on shared file handle
+2. Memory allocation/copy overhead (20% impact)
+3. Busy-wait spinning (10% impact)
+4. Thread pool contention (10% impact)
+5. JPEG decoder inefficiency (5% impact)
+
+See [GitHub Issue](https://github.com/ALJainProjects/TurboLoader/issues) and [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/TurboLoader-rewrite/ARCHITECTURE_V2.md) for detailed analysis.
+
+### SIMD Transform Performance (Micro-benchmarks)
 
 **SIMD Transform Performance** (Apple M1 Pro, NEON backend):
 
@@ -50,7 +63,7 @@ TurboLoader achieves high performance through several optimizations:
 - Backend: NEON SIMD instructions
 - All tests run on synthetic datasets
 
-> **Note**: These are micro-benchmarks of individual SIMD operations. End-to-end data loading performance depends on dataset size, hardware, I/O bandwidth, and pipeline configuration. We recommend benchmarking on your specific use case.
+> **Note**: These are micro-benchmarks of individual SIMD operations. End-to-end data loading performance is affected by the architectural issues described above.
 
 ---
 
@@ -250,6 +263,41 @@ class ColorJitter(AugmentationTransform):
 ---
 
 ## Roadmap
+
+### TurboLoader.0 (Q1 2025) - HIGH PRIORITY
+
+**Complete pipeline rewrite to fix critical performance issues**
+
+See [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/TurboLoader-rewrite/ARCHITECTURE_V2.md) for full design.
+
+#### Core Infrastructure
+- [ ] Lock-free SPSC ring buffers (~50x faster than mutex queues)
+- [ ] Object pool for buffer reuse (eliminate malloc/free overhead)
+- [ ] Zero-copy sample struct using `std::span` views
+
+#### I/O Layer
+- [ ] Per-worker TAR file handles (eliminate mutex bottleneck)
+- [ ] Memory-mapped I/O for true zero-copy reads
+- [ ] Worker-based sample partitioning
+
+#### Decoding & Performance
+- [ ] TurboJPEG SIMD decoder integration (2-3x faster)
+- [ ] Object pool for decoded buffers
+- [ ] Fallback to libjpeg for compatibility
+
+#### Testing & Validation
+- [ ] Comprehensive unit tests (all components)
+- [ ] Performance benchmarks vs PyTorch (target: >100 img/s)
+- [ ] Memory leak checks (valgrind)
+- [ ] Thread safety verification (ThreadSanitizer)
+
+**Expected Performance**: 150-200 img/s (3-4x faster than PyTorch baseline)
+
+**Estimated Timeline**: 11-17 hours of development
+
+**Branch**: `TurboLoader-rewrite`
+
+---
 
 ### v0.4.0 (Q2 2025)
 - [ ] Full ImageNet benchmark suite

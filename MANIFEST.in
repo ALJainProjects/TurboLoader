@@ -5,9 +5,9 @@ include AUTHORS.md
 include CONTRIBUTING.md
 include ARCHITECTURE.md
 
-# Include C++ source files
-recursive-include include *.hpp *.h
-recursive-include src *.cpp *.c
+# Include ALL C++ source files and headers
+graft src
+recursive-include src *.hpp *.h *.cpp *.c
 
 # Include CMake files
 include CMakeLists.txt
