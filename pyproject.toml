@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboloader"
-version = "0.5.2"
-description = "High-performance multi-framework data loading with cloud storage, GPU acceleration, and distributed training support"
+version = "0.5.3"
+description = "High-performance multi-framework data loading library with TensorFlow/Keras, JAX/Flax, PyTorch support, WebDataset format, cloud storage (S3/GCS/HTTP), and comprehensive integration testing. Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
