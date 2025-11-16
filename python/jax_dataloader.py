@@ -43,6 +43,7 @@ class JAXDataLoader:
         transform: Optional[Callable] = None,
         device: Optional[jax.Device] = None,
         prefetch_size: int = 2,
+        prefetch: Optional[int] = None,  # Alias for prefetch_size
     ):
         """
         Initialize JAX DataLoader.
@@ -55,6 +56,7 @@ class JAXDataLoader:
             transform: Optional transform function (numpy -> numpy)
             device: JAX device to place data on (default: jax.devices()[0])
             prefetch_size: Number of batches to prefetch
+            prefetch: Alias for prefetch_size (for compatibility)
         """
         self.data_path = data_path
         self.batch_size = batch_size
@@ -62,7 +64,8 @@ class JAXDataLoader:
         self.shuffle = shuffle
         self.transform = transform
         self.device = device or jax.devices()[0]
-        self.prefetch_size = prefetch_size
+        # Use prefetch if provided, otherwise use prefetch_size
+        self.prefetch_size = prefetch if prefetch is not None else prefetch_size
 
         # Create C++ backend loader
         self._cpp_loader = _CppDataLoader(
