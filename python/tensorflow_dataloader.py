@@ -173,11 +173,11 @@ class KerasSequence(tf.keras.utils.Sequence):
         )
 
         # Pre-load to determine dataset size
-        self.num_batches = 0
+        self._num_batches = 0
         while not self._cpp_loader.is_finished():
             batch = self._cpp_loader.next_batch()
             if batch:
-                self.num_batches += 1
+                self._num_batches += 1
             else:
                 break
 
@@ -192,7 +192,7 @@ class KerasSequence(tf.keras.utils.Sequence):
 
     def __len__(self):
         """Number of batches per epoch"""
-        return self.num_batches
+        return self._num_batches
 
     def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
         """Get batch at index"""
