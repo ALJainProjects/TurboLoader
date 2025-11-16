@@ -1,19 +1,23 @@
 /**
  * @file tar_reader.hpp
- * @brief Zero-copy TAR reader with per-worker file handles
+ * @brief Zero-copy TAR reader with per-worker file handles and remote support
  *
- * Eliminates mutex contention by giving each worker its own file handle.
- * Uses memory-mapped I/O for zero-copy reads of TAR archives.
+ * Features:
+ * - Local files: Memory-mapped I/O for zero-copy access
+ * - Remote files: In-memory TAR data from HTTP/S3/GCS sources
+ * - Per-worker isolation (no mutex contention)
+ * - Worker-based sample partitioning
+ * - std::span for zero-copy JPEG data views
  *
  * Design:
  * - Each worker gets independent file descriptor (parallel reads)
- * - Memory-mapped I/O for zero-copy access
+ * - Memory-mapped I/O for local TAR files (52+ Gbps throughput)
+ * - In-memory buffer for remote TAR data
  * - Worker-based sample partitioning (no sharing between workers)
- * - std::span for zero-copy JPEG data views
  *
  * Performance:
- * - Old design: 1 shared FD + mutex = serialized reads
- * - New design: N worker FDs = parallel reads (4x speedup)
+ * - Local: 52+ Gbps throughput via mmap
+ * - Remote: No memory duplication via std::shared_ptr
  */
 
 #pragma once
@@ -27,6 +31,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
+#include <memory>
 #include <stdexcept>
 #include <cstring>
 
@@ -126,17 +131,20 @@ struct TarEntry {
 };
 
 /**
- * @brief Per-worker TAR reader with zero-copy access
+ * @brief Per-worker TAR reader with zero-copy access (local or remote)
  *
- * Each worker gets its own instance with independent file descriptor.
- * Eliminates mutex contention from v0.3.8 design.
+ * Supports two modes:
+ * 1. Local files: Memory-mapped I/O for maximum performance
+ * 2. Remote files: In-memory buffer shared across workers via std::shared_ptr
+ *
+ * Each worker gets its own instance with independent data access.
  */
 class TarReader {
 public:
     /**
-     * @brief Construct TAR reader for specific worker
+     * @brief Construct TAR reader for local file (memory-mapped)
      *
-     * @param tar_path Path to TAR file
+     * @param tar_path Path to local TAR file
      * @param worker_id Worker ID (0-based)
      * @param num_workers Total number of workers
      *
@@ -144,20 +152,49 @@ public:
      * Each worker gets exclusive access to its partition.
      */
     TarReader(const std::string& tar_path, size_t worker_id, size_t num_workers)
-        : tar_path_(tar_path),
-          worker_id_(worker_id),
+        : worker_id_(worker_id),
           num_workers_(num_workers),
           fd_(-1),
           mmap_ptr_(nullptr),
-          mmap_size_(0) {
+          mmap_size_(0),
+          is_remote_(false) {
 
-        open_and_mmap();
-        index_tar_file();
+        open_and_mmap(tar_path);
+        index_tar_data(static_cast<const uint8_t*>(mmap_ptr_), mmap_size_);
         partition_samples();
     }
 
     /**
-     * @brief Destructor - unmaps memory and closes file
+     * @brief Construct TAR reader for remote file (in-memory)
+     *
+     * @param tar_data Shared pointer to in-memory TAR data
+     * @param worker_id Worker ID (0-based)
+     * @param num_workers Total number of workers
+     *
+     * Uses shared in-memory buffer for TAR data.
+     * Multiple workers share the same buffer via std::shared_ptr.
+     */
+    TarReader(std::shared_ptr<std::vector<uint8_t>> tar_data,
+              size_t worker_id,
+              size_t num_workers)
+        : worker_id_(worker_id),
+          num_workers_(num_workers),
+          fd_(-1),
+          mmap_ptr_(nullptr),
+          mmap_size_(0),
+          is_remote_(true),
+          remote_data_(tar_data) {
+
+        if (!tar_data || tar_data->empty()) {
+            throw std::runtime_error("Invalid remote TAR data");
+        }
+
+        index_tar_data(tar_data->data(), tar_data->size());
+        partition_samples();
+    }
+
+    /**
+     * @brief Destructor - cleanup resources
      */
     ~TarReader() {
         if (mmap_ptr_ != nullptr && mmap_ptr_ != MAP_FAILED) {
@@ -187,7 +224,7 @@ public:
      * @brief Get zero-copy view of JPEG data for sample
      *
      * @param sample_idx Index within worker's partition (0 to num_samples()-1)
-     * @return Span pointing directly into memory-mapped region
+     * @return Span pointing directly into data (mmap or in-memory buffer)
      *
      * Complexity: O(1)
      * Thread-safe: Yes (each worker has own instance)
@@ -198,7 +235,7 @@ public:
         }
 
         const TarEntry& entry = worker_samples_[sample_idx];
-        const uint8_t* data = static_cast<const uint8_t*>(mmap_ptr_) + entry.offset;
+        const uint8_t* data = get_data_ptr() + entry.offset;
         return std::span<const uint8_t>(data, entry.size);
     }
 
@@ -233,15 +270,39 @@ public:
         return worker_id_;
     }
 
+    /**
+     * @brief Check if this is a remote TAR (in-memory)
+     *
+     * @return true if remote, false if local mmap
+     */
+    bool is_remote() const {
+        return is_remote_;
+    }
+
 private:
     /**
-     * @brief Open TAR file and memory-map it
+     * @brief Get pointer to TAR data (mmap or in-memory)
+     *
+     * @return Pointer to TAR data
      */
-    void open_and_mmap() {
+    const uint8_t* get_data_ptr() const {
+        if (is_remote_) {
+            return remote_data_->data();
+        } else {
+            return static_cast<const uint8_t*>(mmap_ptr_);
+        }
+    }
+
+    /**
+     * @brief Open TAR file and memory-map it (local files only)
+     *
+     * @param tar_path Path to local TAR file
+     */
+    void open_and_mmap(const std::string& tar_path) {
         // Open file
-        fd_ = open(tar_path_.c_str(), O_RDONLY);
+        fd_ = open(tar_path.c_str(), O_RDONLY);
         if (fd_ < 0) {
-            throw std::runtime_error("Failed to open TAR file: " + tar_path_);
+            throw std::runtime_error("Failed to open TAR file: " + tar_path);
         }
 
         // Get file size
@@ -264,17 +325,19 @@ private:
     }
 
     /**
-     * @brief Index all entries in TAR file
+     * @brief Index all entries in TAR data
+     *
+     * @param data Pointer to TAR data (mmap or in-memory)
+     * @param data_size Size of TAR data
      *
      * Scans TAR headers to build index of all files.
      * Filters for JPEG files only (.jpg, .jpeg extensions).
      */
-    void index_tar_file() {
+    void index_tar_data(const uint8_t* data, size_t data_size) {
         size_t offset = 0;
         size_t sample_index = 0;
-        const uint8_t* data = static_cast<const uint8_t*>(mmap_ptr_);
 
-        while (offset + sizeof(TarHeader) <= mmap_size_) {
+        while (offset + sizeof(TarHeader) <= data_size) {
             const TarHeader* header = reinterpret_cast<const TarHeader*>(data + offset);
 
             // Check for end of archive (two consecutive zero blocks)
@@ -362,12 +425,13 @@ private:
         return false;
     }
 
-    std::string tar_path_;              // Path to TAR file
     size_t worker_id_;                  // Worker ID (0-based)
     size_t num_workers_;                // Total number of workers
-    int fd_;                            // File descriptor
-    void* mmap_ptr_;                    // Memory-mapped region
+    int fd_;                            // File descriptor (local files only)
+    void* mmap_ptr_;                    // Memory-mapped region (local files only)
     size_t mmap_size_;                  // Size of mmap region
+    bool is_remote_;                    // true if remote/in-memory, false if local mmap
+    std::shared_ptr<std::vector<uint8_t>> remote_data_; // Shared in-memory TAR data (remote only)
     std::vector<TarEntry> all_entries_; // All entries in TAR
     std::vector<TarEntry> worker_samples_; // This worker's partition
 };
