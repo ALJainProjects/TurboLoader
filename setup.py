@@ -71,7 +71,7 @@ if readme_path.exists():
 
 setup(
     name='turboloader',
-    version='0.3.1',
+    version='0.3.2',
     author='Arnav Jain',
     author_email='arnav@arnavjain.com',
     description='High-performance ML data loading library with SIMD optimizations',

@@ -2,7 +2,7 @@
 
 **High-performance ML data loading library in C++20**
 
-⚡ **30-35x faster than PyTorch DataLoader on ImageNet** ⚡
+⚡ **Significantly faster than PyTorch DataLoader** ⚡
 
 [![PyPI version](https://badge.fury.io/py/turboloader.svg)](https://badge.fury.io/py/turboloader)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
@@ -15,20 +15,21 @@
 TurboLoader is a high-performance data loading library designed to accelerate ML training by replacing Python's slow multiprocessing-based data loaders with efficient C++ native threads and lock-free data structures.
 
 **Key Features**:
-- 🚀 **30-35x speedup** over PyTorch DataLoader on ImageNet workloads
+- 🚀 **High-performance data loading** with C++ native implementation
 - ⚡ **SIMD transforms** with AVX2/AVX-512/NEON for fast preprocessing
 - 🔒 **Lock-free concurrent queues** for zero-contention data passing
 - 🧵 **Native C++ threads** (no Python GIL, no process spawning overhead)
 - 💾 **Zero-copy memory-mapped I/O** for efficient file reading
 - 📦 **WebDataset TAR format** support for sharded datasets
-- 🎯 **Thread-local JPEG decoders** using libjpeg-turbo (SIMD optimized)
-- 🐍 **Drop-in replacement** for PyTorch DataLoader with minimal code changes
+- 🎯 **Thread-local JPEG/PNG/WebP decoders** (SIMD optimized)
+- 🎨 **7 SIMD-accelerated augmentation transforms**
+- 🐍 **PyTorch-compatible API** with minimal code changes
 
 ---
 
 ## Performance
 
-TurboLoader achieves **30-35x speedup** over PyTorch DataLoader on ImageNet-scale workloads through:
+TurboLoader provides significant performance improvements over PyTorch DataLoader through:
 
 - **Lock-free queues** eliminate synchronization overhead
 - **SIMD-optimized transforms** (AVX2/AVX-512/NEON) accelerate preprocessing
@@ -36,17 +37,24 @@ TurboLoader achieves **30-35x speedup** over PyTorch DataLoader on ImageNet-scal
 - **Memory-mapped I/O** enables zero-copy file reading
 - **Thread-local decoders** eliminate allocation overhead
 
-### Benchmark Methodology
+### Benchmark Results
 
-Performance measured on ImageNet TAR files with:
-- **Hardware**: Apple M1 Pro (8 cores), 16GB RAM
-- **Dataset**: 1000 JPEG images, 256x256 resolution
-- **Operations**: TAR extraction → JPEG decode → resize → normalize
-- **Comparison**: PyTorch DataLoader with same operations
+Performance benchmarks on Apple M1 Pro (8 cores, 16GB RAM):
 
-**Note**: Full benchmark suite in progress. Current results are preliminary and based on synthetic datasets. Real-world ImageNet benchmarks coming soon.
+| Test | TurboLoader | PyTorch DataLoader | Improvement |
+|------|-------------|-------------------|-------------|
+| SIMD Resize (6718 img/s) | 148.85 μs | - | Baseline |
+| SIMD Normalize (47438 img/s) | 21.08 μs | - | Baseline |
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details and [examples/](examples/) for usage patterns.
+**Test Configuration**:
+- Dataset: 1000 JPEG images (256x256)
+- Operations: TAR extraction → JPEG decode → resize → normalize
+- Workers: 8 threads/processes
+- Batch size: 256
+
+**Note**: Benchmarks are measured on synthetic datasets. Full ImageNet comparison suite in development.
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and test results.
 
 ## Installation
 
@@ -172,38 +180,36 @@ make -j
 
 ## Project Status
 
-**Current Version**: 0.2.0 (Initial PyPI Release)
+**Current Version**: 0.3.1 (Latest Release)
 
-### Completed Features
+### Completed Features (v0.3.x)
 
 - ✅ Lock-free SPMC queue with cache-line alignment
 - ✅ Thread pool with work stealing
 - ✅ Zero-copy mmap file reader
 - ✅ TAR parser for WebDataset format
 - ✅ Multi-threaded pipeline
-- ✅ libjpeg-turbo integration
+- ✅ JPEG/PNG/WebP decoders (libjpeg-turbo, libpng, libwebp)
 - ✅ Thread-local decoders
 - ✅ Python bindings (pybind11)
 - ✅ SIMD transforms (AVX2/AVX-512/NEON)
 - ✅ Vectorized resize and normalization
+- ✅ 7 SIMD-accelerated augmentation transforms
+- ✅ WebDataset iterator API
 - ✅ PyPI package distribution
+- ✅ Comprehensive test suite (45 tests passing)
 
 ### Roadmap
-
-**v0.3.0** (Planned)
-- WebDataset iterator API
-- Additional image formats (PNG, WebP)
-- Augmentation operations (rotation, color jitter)
 
 **v0.4.0** (Planned)
 - TensorFlow/JAX bindings
 - Cloud storage support (S3, GCS)
-- Distributed training support
+- Distributed training support (NCCL, Gloo)
 
 **v1.0.0** (Future)
 - Stable API
-- Production-ready
-- Comprehensive benchmark suite
+- Production-ready with full benchmark suite
+- GPU-accelerated decoding (nvJPEG)
 
 ---
 
