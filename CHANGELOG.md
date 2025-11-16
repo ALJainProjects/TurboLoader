@@ -5,6 +5,18 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2025-01-15
+
+### Fixed
+- **CRITICAL**: Fixed memory corruption bug (double-free) in JPEG decoder
+- Added proper cleanup with `jpeg_abort_decompress()` in all error paths
+- JPEG decoder now properly handles reuse across multiple decode calls in thread-local storage
+- Eliminated crashes during multi-threaded JPEG decoding
+
+### Changed
+- Improved error handling in JPEG decoder to ensure cleanup on all failure paths
+- Enhanced thread safety for decoder reuse in worker threads
+
 ## [0.3.3] - 2025-01-15
 
 ### Changed
