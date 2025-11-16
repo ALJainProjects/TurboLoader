@@ -1,0 +1,39 @@
+# Include documentation
+include README.md
+include LICENSE
+include AUTHORS.md
+include CONTRIBUTING.md
+include ARCHITECTURE.md
+include LAUNCH_BLOG_POST.md
+
+# Include C++ source files
+recursive-include include *.hpp *.h
+recursive-include src *.cpp *.c
+
+# Include CMake files
+include CMakeLists.txt
+recursive-include cmake *.cmake
+
+# Include Python bindings
+recursive-include python *.cpp *.hpp
+
+# Include benchmarks
+recursive-include benchmarks *.py *.md
+
+# Include examples
+recursive-include examples *.py *.md
+
+# Include tests
+recursive-include tests *.cpp *.hpp
+
+# Exclude build artifacts
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude *.dylib
+global-exclude *.dll
+prune build
+prune dist
+prune *.egg-info

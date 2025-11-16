@@ -34,3 +34,4 @@ benchmark_results/
 # Cache
 .cache/
 *.cache
+.venv/

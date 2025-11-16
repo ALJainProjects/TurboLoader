@@ -1,0 +1,107 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "cmake>=3.15"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "turboloader"
+version = "0.2.0"
+description = "High-performance data loading for machine learning with 30x speedup over PyTorch DataLoader"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Arnav Jain", email = "arnav@example.com"}
+]
+maintainers = [
+    {name = "Arnav Jain", email = "arnav@example.com"}
+]
+keywords = [
+    "machine-learning",
+    "deep-learning",
+    "data-loading",
+    "pytorch",
+    "performance",
+    "simd",
+    "imagenet",
+    "computer-vision"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+
+dependencies = [
+    "numpy>=1.19.0",
+    "torch>=1.8.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "black>=21.0",
+    "flake8>=3.9",
+    "mypy>=0.900",
+    "build>=0.7.0",
+    "twine>=3.4.0"
+]
+benchmarks = [
+    "Pillow>=8.0.0",
+    "tqdm>=4.60.0",
+    "matplotlib>=3.3.0",
+    "psutil>=5.8.0"
+]
+all = [
+    "turboloader[dev,benchmarks]"
+]
+
+[project.urls]
+Homepage = "https://github.com/arnavjain/turboloader"
+Documentation = "https://github.com/arnavjain/turboloader/blob/main/README.md"
+Repository = "https://github.com/arnavjain/turboloader"
+"Bug Tracker" = "https://github.com/arnavjain/turboloader/issues"
+Changelog = "https://github.com/arnavjain/turboloader/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+packages = ["turboloader"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | build
+  | dist
+  | \.eggs
+  | \.mypy_cache
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
