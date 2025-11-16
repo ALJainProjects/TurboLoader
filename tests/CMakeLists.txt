@@ -101,19 +101,22 @@ target_link_libraries(test_unified_pipeline PRIVATE turboloader)
 add_test(NAME unified_pipeline COMMAND test_unified_pipeline)
 
 # Test executable for nvJPEG decoder (GPU-accelerated JPEG with CPU fallback)
-find_package(CUDA QUIET)
-if(CUDA_FOUND)
-    find_library(NVJPEG_LIBRARY nvjpeg HINTS ${CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CUDA_TOOLKIT_ROOT_DIR}/lib)
+# Use modern CMake CUDA language support instead of deprecated FindCUDA
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+    find_library(NVJPEG_LIBRARY nvjpeg HINTS ${CMAKE_CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CMAKE_CUDA_TOOLKIT_ROOT_DIR}/lib)
     if(NVJPEG_LIBRARY)
         add_executable(test_nvjpeg_decoder test_nvjpeg_decoder.cpp)
         target_include_directories(test_nvjpeg_decoder PRIVATE
             ${CMAKE_SOURCE_DIR}/src
-            ${CUDA_INCLUDE_DIRS}
+            ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
         )
         target_link_libraries(test_nvjpeg_decoder PRIVATE
             turboloader
             ${NVJPEG_LIBRARY}
-            ${CUDA_LIBRARIES}
+            CUDA::cudart
         )
         target_compile_definitions(test_nvjpeg_decoder PRIVATE HAVE_NVJPEG)
         add_test(NAME nvjpeg_decoder COMMAND test_nvjpeg_decoder)
