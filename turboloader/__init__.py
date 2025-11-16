@@ -1,6 +1,10 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v0.4.0 Features:
+v0.5.0 Features:
+- Multi-GPU pipeline support
+- TensorFlow/Keras integration
+- JAX/Flax integration with device sharding
+- Distributed training support (multi-node)
 - Remote TAR support (HTTP, S3, GCS)
 - GPU-accelerated JPEG decoding (nvJPEG)
 - Lock-free SPSC queues
@@ -8,7 +12,7 @@ v0.4.0 Features:
 - Multi-format pipeline (images, video, tabular data)
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # Import C++ extension module
 try:
