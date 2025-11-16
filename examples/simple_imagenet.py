@@ -6,9 +6,7 @@ Demonstrates basic usage of TurboLoader for ImageNet data loading.
 This is the minimal example showing how to replace PyTorch DataLoader.
 """
 
-import sys
 import time
-sys.path.insert(0, 'build/python')
 import turboloader
 import torch
 
@@ -24,25 +22,25 @@ def main():
 
     # Configure transforms (standard ImageNet preprocessing)
     transform_config = turboloader.TransformConfig()
-    transform_config.target_width = 224
-    transform_config.target_height = 224
-    transform_config.resize_mode = "bilinear"
-    transform_config.normalize = True
+    transform_config.enable_resize = True
+    transform_config.resize_width = 224
+    transform_config.resize_height = 224
+    transform_config.resize_method = turboloader.ResizeMethod.BILINEAR
+    transform_config.enable_normalize = True
     transform_config.mean = [0.485, 0.456, 0.406]  # ImageNet mean
     transform_config.std = [0.229, 0.224, 0.225]   # ImageNet std
-    transform_config.to_chw = True  # Convert to CHW format for PyTorch
-
-    # Configure TurboLoader
-    config = turboloader.Config()
-    config.num_workers = 16  # Adjust based on your CPU cores
-    config.queue_size = 512
-    config.decode_jpeg = True
-    config.enable_simd_transforms = True
-    config.transform_config = transform_config
+    transform_config.output_float = True
 
     # Create pipeline
     print("\nCreating TurboLoader pipeline...")
-    pipeline = turboloader.Pipeline([tar_path], config)
+    pipeline = turboloader.Pipeline(
+        tar_paths=[tar_path],
+        num_workers=16,  # Adjust based on your CPU cores
+        queue_size=512,
+        decode_jpeg=True,
+        enable_simd_transforms=True,
+        transform_config=transform_config
+    )
 
     # Start loading
     print("Starting pipeline...")
@@ -64,9 +62,11 @@ def main():
         # Convert to PyTorch tensors
         images = []
         for sample in batch:
-            # Get transformed image data (already normalized)
-            img_data = sample.get_transformed_data()  # Shape: (3, 224, 224)
-            images.append(torch.from_numpy(img_data))
+            # Get image data (already resized and normalized via SIMD transforms)
+            img_data = sample.get_image()  # NumPy array (H, W, C)
+            # Convert to CHW format for PyTorch
+            img_tensor = torch.from_numpy(img_data).permute(2, 0, 1)
+            images.append(img_tensor)
 
         # Stack into batch tensor
         batch_tensor = torch.stack(images)  # Shape: (batch_size, 3, 224, 224)

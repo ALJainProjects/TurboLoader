@@ -5,13 +5,50 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2025-01-16
+
+### Fixed
+- Updated all Python examples and scripts to use current simplified Pipeline API
+- Fixed version number inconsistencies across codebase
+- Updated documentation to accurately reflect thread-safe concurrency implementation
+
+### Changed
+- Removed deprecated Config object usage from all examples
+- Cleaned up documentation and removed duplicate files
+- Updated MANIFEST.in to reflect current file structure
+
+## [0.3.7] - 2025-01-15
+
+### Fixed
+- **CRITICAL**: Fixed all race conditions and memory corruption issues with high worker counts
+- Added mutex-protected TarReader access for thread safety
+- Replaced lock-free SPMC queue with ThreadSafeQueue for Sample objects to prevent race conditions
+- Changed vector data copying to use memcpy() instead of assign() for safer concurrent access
+- Improved thread synchronization throughout the pipeline
+- Verified stability with 8 workers using ThreadSanitizer
+
+### Changed
+- Sample queue now uses mutex-based synchronization instead of lock-free atomics
+- Each TarReader has dedicated mutex to prevent concurrent access issues
+- Pipeline is now fully stable with high worker counts (tested up to 8 workers)
+
+## [0.3.6] - 2025-01-15
+
+### Fixed
+- Improved memory allocation pattern in load_sample to reduce reallocation overhead
+- Changed vector allocation to use reserve() + assign() pattern for thread safety
+
+### Known Issues
+- Memory corruption can still occur under high concurrency with large datasets
+- Recommended to use ≤4 workers for production use until fully resolved
+
 ## [0.3.5] - 2025-01-15
 
 ### Fixed
 - **CRITICAL**: Fixed memory corruption bug (double-free) in JPEG decoder
 - Added proper cleanup with `jpeg_abort_decompress()` in all error paths
 - JPEG decoder now properly handles reuse across multiple decode calls in thread-local storage
-- Eliminated crashes during multi-threaded JPEG decoding
+- Eliminated JPEG decoder crashes during multi-threaded decoding
 
 ### Changed
 - Improved error handling in JPEG decoder to ensure cleanup on all failure paths

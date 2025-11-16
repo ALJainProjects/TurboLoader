@@ -1,6 +1,7 @@
 #pragma once
 
 #include "turboloader/core/lock_free_queue.hpp"
+#include "turboloader/core/thread_safe_queue.hpp"
 #include "turboloader/core/memory_pool.hpp"
 #include "turboloader/core/thread_pool.hpp"
 #include "turboloader/readers/tar_reader.hpp"
@@ -107,10 +108,11 @@ public:
 private:
     Config config_;
     std::vector<std::unique_ptr<TarReader>> readers_;
+    mutable std::vector<std::unique_ptr<std::mutex>> reader_mutexes_;  // One mutex per reader for thread-safe access
     size_t total_samples_{0};
 
     std::unique_ptr<ThreadPool> thread_pool_;
-    std::unique_ptr<LockFreeSPMCQueue<Sample>> output_queue_;
+    std::unique_ptr<ThreadSafeQueue<Sample>> output_queue_;
 
     std::atomic<bool> running_{false};
     std::atomic<size_t> current_sample_{0};

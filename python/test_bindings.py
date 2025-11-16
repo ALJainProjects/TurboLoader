@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Test TurboLoader Python bindings"""
 
-import sys
-sys.path.insert(0, '/Users/arnavjain/turboloader/build/python')
-
 import turboloader
 import time
 
@@ -27,7 +24,7 @@ def test_basic():
         decode_jpeg=True  # Enable JPEG decoding
     )
 
-    print(f"Total samples: {len(pipeline)}")
+    print(f"Total samples: {pipeline.total_samples()}")
     print()
 
     # Start pipeline
@@ -82,13 +79,13 @@ def test_basic():
 
     pipeline.stop()
     print()
-    print("✅ Test passed!")
+    print("Test passed!")
 
 def test_iterator():
-    """Test Python iterator interface"""
+    """Test batch iteration"""
     print()
     print("=" * 60)
-    print("Testing Iterator Interface")
+    print("Testing Batch Iteration")
     print("=" * 60)
     print()
 
@@ -102,18 +99,21 @@ def test_iterator():
 
     pipeline.start()
 
-    print("Iterating with for loop (batch_size=16)...")
+    print("Iterating with batch retrieval (batch_size=16)...")
     total = 0
-    for batch in pipeline.iter(batch_size=16):
+    while True:
+        batch = pipeline.next_batch(16)
+        if not batch:
+            break
         total += len(batch)
         if total >= 100:  # Just test first 100 samples
             break
 
-    print(f"  Processed {total} samples via iterator")
+    print(f"  Processed {total} samples")
 
     pipeline.stop()
     print()
-    print("✅ Iterator test passed!")
+    print("Batch iteration test passed!")
 
 if __name__ == "__main__":
     test_basic()

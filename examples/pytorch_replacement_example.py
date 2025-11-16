@@ -9,16 +9,12 @@ This shows side-by-side comparison of training with:
 Both produce identical results, but TurboLoader is much faster!
 """
 
-import sys
 import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import webdataset as wds
-
-# Add TurboLoader to path (after installation, just: import turboloader)
-sys.path.insert(0, 'build/python')
 import turboloader
 
 # ==============================================================================
@@ -139,9 +135,9 @@ def train_with_pytorch(tar_path, num_epochs=2, batch_size=64):
 # ==============================================================================
 
 def train_with_turboloader(tar_path, num_epochs=2, batch_size=64):
-    """Training with TurboLoader - 35x faster!"""
+    """Training with TurboLoader - much faster!"""
     print("\n" + "="*70)
-    print("AFTER: Training with TurboLoader (35x Faster!)")
+    print("AFTER: Training with TurboLoader (Much Faster!)")
     print("="*70)
 
     # Configure transforms (done in C++ with SIMD!)
@@ -159,6 +155,7 @@ def train_with_turboloader(tar_path, num_epochs=2, batch_size=64):
     pipeline = turboloader.Pipeline(
         tar_paths=[tar_path],
         num_workers=8,  # Can use more workers - it's faster!
+        queue_size=256,
         decode_jpeg=True,  # SIMD-accelerated JPEG decode
         enable_simd_transforms=True,  # SIMD resize + normalize
         transform_config=transform_config
@@ -281,10 +278,10 @@ class TurboLoaderDataset(torch.utils.data.IterableDataset):
         pipeline = turboloader.Pipeline(
             tar_paths=self.tar_paths,
             num_workers=self.num_workers,
+            queue_size=self.kwargs.get('queue_size', 256),
             decode_jpeg=True,
             enable_simd_transforms=True,
-            transform_config=transform_config,
-            **self.kwargs
+            transform_config=transform_config
         )
 
         pipeline.start()
@@ -315,10 +312,10 @@ def train_with_wrapper(tar_path, num_epochs=2, batch_size=64):
     print("="*70)
 
     # Create TurboLoader dataset (looks like PyTorch dataset!)
-    dataset = TurboLoaderDataset(tar_paths=[tar_path], num_workers=8)
+    dataset = TurboLoaderDataset(tar_paths=[tar_path], num_workers=8, queue_size=256)
 
     # Use standard PyTorch DataLoader API
-    # (but with TurboLoader's 35x speed under the hood!)
+    # (but with TurboLoader's speed under the hood!)
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -413,7 +410,7 @@ def main():
     print(f"\nSpeedup (direct):       {turboloader_throughput/pytorch_throughput:>6.2f}x")
     print(f"Speedup (wrapper):      {wrapper_throughput/pytorch_throughput:>6.2f}x")
     print()
-    print("🚀 TurboLoader is 10-35x faster than PyTorch DataLoader!")
+    print("TurboLoader is significantly faster than PyTorch DataLoader!")
     print()
 
 

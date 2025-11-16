@@ -4,7 +4,6 @@ include LICENSE
 include AUTHORS.md
 include CONTRIBUTING.md
 include ARCHITECTURE.md
-include LAUNCH_BLOG_POST.md
 
 # Include C++ source files
 recursive-include include *.hpp *.h
@@ -15,7 +14,7 @@ include CMakeLists.txt
 recursive-include cmake *.cmake
 
 # Include Python bindings
-recursive-include python *.cpp *.hpp
+recursive-include python *.cpp *.hpp CMakeLists.txt
 
 # Include benchmarks
 recursive-include benchmarks *.py *.md

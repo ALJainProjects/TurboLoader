@@ -10,12 +10,12 @@
 
 ## Overview
 
-TurboLoader is a high-performance data loading library designed to accelerate ML training by replacing Python's multiprocessing-based data loaders with efficient C++ native threads and lock-free data structures.
+TurboLoader is a high-performance data loading library designed to accelerate ML training by replacing Python's multiprocessing-based data loaders with efficient C++ native threads and thread-safe concurrent data structures.
 
 **Key Features**:
 - 🚀 **Native C++ Implementation** with Python bindings via pybind11
 - ⚡ **SIMD-Optimized Transforms** using AVX2/AVX-512/NEON
-- 🔒 **Lock-Free Concurrent Queues** for zero-contention data passing
+- 🔒 **Thread-Safe Concurrent Queues** for reliable multi-threaded data passing
 - 🧵 **C++ Native Threads** (no Python GIL, no multiprocessing overhead)
 - 💾 **Zero-Copy Memory-Mapped I/O** for efficient file reading
 - 📦 **WebDataset TAR Format** support for sharded datasets
@@ -29,7 +29,7 @@ TurboLoader is a high-performance data loading library designed to accelerate ML
 
 TurboLoader achieves high performance through several optimizations:
 
-- **Lock-free queues** eliminate synchronization overhead between threads
+- **Thread-safe concurrent queues** provide reliable multi-threaded data passing
 - **SIMD-optimized transforms** (AVX2/NEON) accelerate image preprocessing
 - **Native C++ threads** avoid Python GIL and multiprocessing overhead
 - **Memory-mapped I/O** enables zero-copy file reading
@@ -149,10 +149,10 @@ TurboLoader is built on several high-performance components:
 
 ### Core Components
 
-1. **Lock-Free Queues**
-   - SPSC (Single Producer Single Consumer) queues
-   - Atomic operations for thread-safe data passing
-   - Zero-copy transfer of decoded images
+1. **Thread-Safe Concurrent Queues**
+   - Mutex-based synchronization for reliable multi-threaded operation
+   - Thread-safe data passing between reader and worker threads
+   - Stable performance with high worker counts (8+ workers)
 
 2. **Memory-Mapped I/O**
    - `mmap()` for zero-copy file reading

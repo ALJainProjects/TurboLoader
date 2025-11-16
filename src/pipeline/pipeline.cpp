@@ -11,6 +11,7 @@ Pipeline::Pipeline(const std::vector<std::string>& tar_paths, const Config& conf
 
     // Open all TAR files
     readers_.reserve(tar_paths.size());
+    reader_mutexes_.reserve(tar_paths.size());
     for (const auto& path : tar_paths) {
         auto reader = std::make_unique<TarReader>(path);
         if (!reader->is_open()) {
@@ -18,13 +19,14 @@ Pipeline::Pipeline(const std::vector<std::string>& tar_paths, const Config& conf
         }
         total_samples_ += reader->num_samples();
         readers_.push_back(std::move(reader));
+        reader_mutexes_.push_back(std::make_unique<std::mutex>());
     }
 
     // Create thread pool
     thread_pool_ = std::make_unique<ThreadPool>(config_.num_workers);
 
-    // Create output queue
-    output_queue_ = std::make_unique<LockFreeSPMCQueue<Sample>>(config_.queue_size);
+    // Create output queue (using ThreadSafeQueue for Sample to avoid move-related races)
+    output_queue_ = std::make_unique<ThreadSafeQueue<Sample>>(config_.queue_size);
 
     // Initialize sample indices
     sample_indices_.resize(total_samples_);
@@ -96,24 +98,11 @@ std::vector<Sample> Pipeline::next_batch(size_t batch_size) {
     batch.reserve(batch_size);
 
     for (size_t i = 0; i < batch_size; ++i) {
-        // Fast path: try immediate pop
+        // Try non-blocking pop first
         auto sample = output_queue_->try_pop();
 
         if (!sample) {
-            // Slow path: spin briefly then yield
-            for (int spin = 0; spin < 100 && !sample; ++spin) {
-                sample = output_queue_->try_pop();
-                if (!sample) {
-                    // Yield to other threads after a few spins
-                    if (spin % 10 == 9) {
-                        std::this_thread::yield();
-                    }
-                }
-            }
-        }
-
-        if (!sample) {
-            // Still no data after spinning - queue is likely empty
+            // Queue is empty - no more data available
             break;
         }
 
@@ -136,7 +125,7 @@ void Pipeline::reader_loop() {
         size_t actual_idx = sample_indices_[idx];
 
         // Submit to thread pool for processing
-        thread_pool_->submit([this, actual_idx]() {
+        thread_pool_->submit([this, actual_idx, idx]() {
             // Each thread gets its own decoder and transforms
             static thread_local JpegDecoder decoder;
             static thread_local std::unique_ptr<ResizeTransform> resize_transform;
@@ -227,12 +216,17 @@ Sample Pipeline::load_sample(size_t global_index) {
     // Find which TAR file contains this sample
     size_t current_offset = 0;
 
-    for (const auto& reader : readers_) {
+    for (size_t reader_idx = 0; reader_idx < readers_.size(); ++reader_idx) {
+        const auto& reader = readers_[reader_idx];
         size_t num_samples = reader->num_samples();
 
         if (global_index < current_offset + num_samples) {
             // Found the right TAR file
             size_t local_index = global_index - current_offset;
+
+            // Lock this reader for thread-safe access
+            std::lock_guard<std::mutex> lock(*reader_mutexes_[reader_idx]);
+
             const auto& tar_sample = reader->get_sample(local_index);
 
             // Create output sample
@@ -243,7 +237,9 @@ Sample Pipeline::load_sample(size_t global_index) {
             for (const auto& [ext, entry] : tar_sample.files) {
                 auto data_span = reader->read_file(entry);
 
-                std::vector<uint8_t> data(data_span.begin(), data_span.end());
+                // Copy data while holding the lock to ensure mmap'd memory stays valid
+                std::vector<uint8_t> data(data_span.size());
+                std::memcpy(data.data(), data_span.data(), data_span.size());
                 sample.data[ext] = std::move(data);
             }
 

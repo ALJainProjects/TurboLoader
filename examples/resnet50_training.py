@@ -7,14 +7,10 @@ using TurboLoader for data loading. Demonstrates full training loop
 with validation, checkpointing, and logging.
 """
 
-import sys
 import time
 import argparse
 from pathlib import Path
-
-sys.path.insert(0, 'build/python')
 import turboloader
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -66,8 +62,11 @@ def train_epoch(model, pipeline, criterion, optimizer, scaler, device, epoch, ar
         images = []
         labels = []
         for sample in batch:
-            img_data = sample.get_transformed_data()
-            images.append(torch.from_numpy(img_data))
+            # Get image data (already resized and normalized via SIMD transforms)
+            img_data = sample.get_image()  # NumPy array (H, W, C)
+            # Convert to CHW format for PyTorch
+            img_tensor = torch.from_numpy(img_data).permute(2, 0, 1)
+            images.append(img_tensor)
             # Parse label from filename (e.g., "n01440764_10026.JPEG" -> class ID)
             # For this example, we'll use dummy labels
             labels.append(0)  # Replace with actual label parsing
@@ -205,22 +204,23 @@ def main():
     # Setup TurboLoader
     print("\nSetting up TurboLoader...")
     transform_config = turboloader.TransformConfig()
-    transform_config.target_width = 224
-    transform_config.target_height = 224
-    transform_config.resize_mode = "bilinear"
-    transform_config.normalize = True
+    transform_config.enable_resize = True
+    transform_config.resize_width = 224
+    transform_config.resize_height = 224
+    transform_config.resize_method = turboloader.ResizeMethod.BILINEAR
+    transform_config.enable_normalize = True
     transform_config.mean = [0.485, 0.456, 0.406]
     transform_config.std = [0.229, 0.224, 0.225]
-    transform_config.to_chw = True
+    transform_config.output_float = True
 
-    config = turboloader.Config()
-    config.num_workers = args.workers
-    config.queue_size = 512
-    config.decode_jpeg = True
-    config.enable_simd_transforms = True
-    config.transform_config = transform_config
-
-    pipeline = turboloader.Pipeline([args.train_tar], config)
+    pipeline = turboloader.Pipeline(
+        tar_paths=[args.train_tar],
+        num_workers=args.workers,
+        queue_size=512,
+        decode_jpeg=True,
+        enable_simd_transforms=True,
+        transform_config=transform_config
+    )
     pipeline.start()
 
     print(f"\nTurboLoader configured:")
