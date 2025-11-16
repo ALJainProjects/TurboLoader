@@ -48,7 +48,7 @@ TurboLoader is a high-performance data loading library designed to accelerate ML
 - **Memory efficient**: 848 MB peak memory usage
 
 **Test Configuration**:
-- Hardware: Apple M1 Pro (8 cores, 16GB RAM)
+- Hardware: Apple M4 Max (16 cores, 48 GB RAM)
 - Dataset: 2000 synthetic 256x256 JPEG images (117 MB TAR archive)
 - Configuration: 8 workers, batch size 32, 3 epochs
 - Backend: C++ multi-threaded pipeline with SIMD optimizations
