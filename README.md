@@ -289,17 +289,6 @@ See [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/Turb
 
 ---
 
-### v0.4.0 (Q2 2025)
-- [ ] Full ImageNet benchmark suite
-- [ ] TensorFlow/JAX integration
-- [ ] Additional image formats (TIFF, BMP)
-- [ ] Video decoding support
-
-### v0.5.0 (Q3 2025)
-- [ ] GPU-accelerated JPEG decoding (nvJPEG)
-- [ ] Distributed training support
-- [ ] S3/GCS remote dataset loading
-
 ### v1.0.0 (Q4 2025)
 - [ ] Production-ready API stability
 - [ ] Comprehensive documentation
