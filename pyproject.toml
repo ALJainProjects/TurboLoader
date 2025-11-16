@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboloader"
-version = "0.4.0"
-description = "High-performance data loading for machine learning with cloud storage support and GPU acceleration"
+version = "0.5.0"
+description = "High-performance multi-framework data loading with cloud storage, GPU acceleration, and distributed training support"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
