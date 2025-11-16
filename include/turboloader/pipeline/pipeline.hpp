@@ -4,6 +4,9 @@
 #include "turboloader/core/memory_pool.hpp"
 #include "turboloader/core/thread_pool.hpp"
 #include "turboloader/readers/tar_reader.hpp"
+#include "turboloader/decoders/jpeg_decoder.hpp"
+#include "turboloader/transforms/image_transform.hpp"
+#include "turboloader/transforms/simd_transforms.hpp"
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -16,6 +19,15 @@ namespace turboloader {
 struct Sample {
     std::unordered_map<std::string, std::vector<uint8_t>> data;
     size_t index{0};
+
+    // Decoded image data (if decode_jpeg is enabled)
+    int width{0};
+    int height{0};
+    int channels{0};
+
+    // Transformed image data (if SIMD transforms enabled)
+    std::vector<float> transformed_data;  // Float output from SIMD transforms
+    bool is_transformed{false};
 };
 
 /**
@@ -39,6 +51,17 @@ public:
         size_t prefetch_factor{2};
         bool shuffle{false};
         size_t shuffle_buffer_size{1000};
+        bool decode_jpeg{false};  // Enable JPEG decoding
+
+        // SIMD Transform options
+        bool enable_simd_transforms{false};
+        transforms::TransformConfig transform_config{};
+
+        // Legacy transform options (deprecated - use transform_config instead)
+        bool enable_resize{false};
+        int resize_width{224};
+        int resize_height{224};
+        bool enable_normalize{false};
     };
 
     /**
@@ -93,6 +116,9 @@ private:
     std::atomic<size_t> current_sample_{0};
 
     std::vector<size_t> sample_indices_;  // For shuffling
+
+    // SIMD transform pipeline
+    std::unique_ptr<transforms::TransformPipeline> transform_pipeline_;
 
     // Reader thread
     void reader_loop();

@@ -35,3 +35,18 @@ target_include_directories(turboloader_tests
 
 # Discover tests
 gtest_discover_tests(turboloader_tests)
+
+# HTTP Reader test (standalone, requires network)
+add_executable(test_http_reader test_http_reader.cpp)
+target_link_libraries(test_http_reader PRIVATE turboloader)
+target_include_directories(test_http_reader PRIVATE ${TURBOLOADER_INCLUDE_DIR})
+
+# Transforms test
+add_executable(test_transforms test_transforms.cpp)
+target_link_libraries(test_transforms PRIVATE turboloader)
+target_include_directories(test_transforms PRIVATE ${TURBOLOADER_INCLUDE_DIR})
+
+# SIMD Transforms test
+add_executable(test_simd_transforms test_simd_transforms.cpp)
+target_link_libraries(test_simd_transforms PRIVATE turboloader)
+target_include_directories(test_simd_transforms PRIVATE ${TURBOLOADER_INCLUDE_DIR})

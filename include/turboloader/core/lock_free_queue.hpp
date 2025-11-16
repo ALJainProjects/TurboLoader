@@ -59,6 +59,12 @@ public:
      */
     size_t capacity() const { return capacity_; }
 
+    /**
+     * Wait for queue to have data (blocking)
+     * Returns false if timeout
+     */
+    bool wait_for_data(std::chrono::milliseconds timeout = std::chrono::milliseconds(100));
+
 private:
     // Slot in the ring buffer
     struct alignas(64) Slot {  // Cache line alignment
