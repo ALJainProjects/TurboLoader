@@ -12,15 +12,8 @@ __version__ = "0.4.0"
 
 # Import C++ extension module
 try:
-    # The C++ extension is installed at package root
-    import turboloader as _turboloader_ext
-    if hasattr(_turboloader_ext, 'DataLoader'):
-        DataLoader = _turboloader_ext.DataLoader
-        version = _turboloader_ext.version
-        features = _turboloader_ext.features
-        __all__ = ['DataLoader', 'version', 'features', '__version__']
-    else:
-        __all__ = ['__version__']
-except (ImportError, AttributeError):
+    from _turboloader import DataLoader, version, features
+    __all__ = ['DataLoader', 'version', 'features', '__version__']
+except ImportError:
     # Fallback for development/documentation builds
     __all__ = ['__version__']

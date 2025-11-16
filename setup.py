@@ -118,7 +118,7 @@ print(f"  libcurl: {curl_include}")
 
 ext_modules = [
     Extension(
-        'turboloader',
+        '_turboloader',
         sources=['src/python/turboloader_bindings.cpp'],
         include_dirs=[
             get_pybind_include(),
