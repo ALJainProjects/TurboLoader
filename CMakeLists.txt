@@ -95,23 +95,26 @@ if(TURBOLOADER_WITH_GLOO)
 endif()
 
 # Main library sources
+# Note: core/ and pipeline/ are header-only (no .cpp files)
 set(TURBOLOADER_SOURCES
-    ${TURBOLOADER_SOURCE_DIR}/core/memory_pool.cpp
-    ${TURBOLOADER_SOURCE_DIR}/core/lock_free_queue.cpp
-    ${TURBOLOADER_SOURCE_DIR}/core/thread_pool.cpp
+    # Readers
     ${TURBOLOADER_SOURCE_DIR}/readers/mmap_reader.cpp
     ${TURBOLOADER_SOURCE_DIR}/readers/tar_reader.cpp
     ${TURBOLOADER_SOURCE_DIR}/readers/storage_reader.cpp
     ${TURBOLOADER_SOURCE_DIR}/readers/http_reader.cpp
     ${TURBOLOADER_SOURCE_DIR}/readers/cached_reader.cpp
+    # Note: S3/GCS readers are declared in storage_reader.hpp but not yet fully implemented
+    # ${TURBOLOADER_SOURCE_DIR}/readers/s3_reader.cpp
+    # Decoders
     ${TURBOLOADER_SOURCE_DIR}/decoders/jpeg_decoder.cpp
     ${TURBOLOADER_SOURCE_DIR}/decoders/image_decoder.cpp
     ${TURBOLOADER_SOURCE_DIR}/decoders/png_decoder.cpp
     ${TURBOLOADER_SOURCE_DIR}/decoders/webp_decoder.cpp
+    ${TURBOLOADER_SOURCE_DIR}/decoders/video_decoder.cpp
+    # Transforms
     ${TURBOLOADER_SOURCE_DIR}/transforms/image_transform.cpp
     ${TURBOLOADER_SOURCE_DIR}/transforms/simd_transforms.cpp
     ${TURBOLOADER_SOURCE_DIR}/transforms/augmentation_transforms.cpp
-    ${TURBOLOADER_SOURCE_DIR}/pipeline/pipeline.cpp
 )
 
 # Add GPU sources if CUDA enabled
