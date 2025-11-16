@@ -172,23 +172,22 @@ class KerasSequence(tf.keras.utils.Sequence):
             shuffle=shuffle
         )
 
-        # Pre-load to determine dataset size
-        self._num_batches = 0
+        # Give pipeline threads time to start processing
+        import time
+        time.sleep(0.2)
+
+        # Pre-load and cache all batches to determine dataset size
+        # This is necessary because Keras Sequence requires __len__()
+        self._cached_batches = []
         while not self._cpp_loader.is_finished():
             batch = self._cpp_loader.next_batch()
             if batch:
-                self._num_batches += 1
+                self._cached_batches.append(batch)
             else:
                 break
 
-        # Restart loader
-        self._cpp_loader.stop()
-        self._cpp_loader = _CppDataLoader(
-            data_path=data_path,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            shuffle=shuffle
-        )
+        self._num_batches = len(self._cached_batches)
+        self._current_index = 0
 
     def __len__(self):
         """Number of batches per epoch"""
@@ -196,18 +195,10 @@ class KerasSequence(tf.keras.utils.Sequence):
 
     def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
         """Get batch at index"""
-        batch = self._cpp_loader.next_batch()
+        if idx >= len(self._cached_batches):
+            raise IndexError(f"Index {idx} out of range for {len(self._cached_batches)} batches")
 
-        if not batch:
-            # End of epoch - restart
-            self._cpp_loader.stop()
-            self._cpp_loader = _CppDataLoader(
-                data_path=self.data_path,
-                batch_size=self.batch_size,
-                num_workers=self.num_workers,
-                shuffle=self.shuffle
-            )
-            batch = self._cpp_loader.next_batch()
+        batch = self._cached_batches[idx]
 
         # Convert to numpy arrays
         images = []
@@ -228,7 +219,7 @@ class KerasSequence(tf.keras.utils.Sequence):
     def on_epoch_end(self):
         """Called at the end of each epoch"""
         if self.shuffle:
-            # Restart with new shuffle
+            # Reload with new shuffle
             self._cpp_loader.stop()
             self._cpp_loader = _CppDataLoader(
                 data_path=self.data_path,
@@ -236,3 +227,12 @@ class KerasSequence(tf.keras.utils.Sequence):
                 num_workers=self.num_workers,
                 shuffle=True
             )
+
+            # Re-cache batches with new shuffle
+            self._cached_batches = []
+            while not self._cpp_loader.is_finished():
+                batch = self._cpp_loader.next_batch()
+                if batch:
+                    self._cached_batches.append(batch)
+                else:
+                    break

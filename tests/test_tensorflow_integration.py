@@ -17,6 +17,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'python'))
 
 def create_test_tar(num_images=20):
     """Create a small TAR file for testing"""
+    try:
+        from PIL import Image
+    except ImportError:
+        raise ImportError("PIL is required for creating test images. Install it with: pip install Pillow")
+
     tmpdir = tempfile.mkdtemp()
     tar_path = os.path.join(tmpdir, 'test.tar')
 
@@ -25,16 +30,17 @@ def create_test_tar(num_images=20):
     os.makedirs(images_dir, exist_ok=True)
 
     for i in range(num_images):
-        # Create a simple test image (random RGB)
+        # Create a simple test image (random RGB) as JPEG
         img_data = np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)
-        img_path = os.path.join(images_dir, f'img_{i:04d}.npy')
-        np.save(img_path, img_data)
+        img = Image.fromarray(img_data, mode='RGB')
+        img_path = os.path.join(images_dir, f'img_{i:04d}.jpg')
+        img.save(img_path, 'JPEG', quality=90)
 
     # Create TAR
     with tarfile.open(tar_path, 'w') as tar:
         for i in range(num_images):
-            img_path = os.path.join(images_dir, f'img_{i:04d}.npy')
-            tar.add(img_path, arcname=f'img_{i:04d}.npy')
+            img_path = os.path.join(images_dir, f'img_{i:04d}.jpg')
+            tar.add(img_path, arcname=f'img_{i:04d}.jpg')
 
     return tar_path
 
