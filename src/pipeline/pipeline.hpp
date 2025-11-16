@@ -60,6 +60,8 @@
 #include "../readers/tar_reader.hpp"
 #include "../readers/http_reader.hpp"
 #include "../readers/s3_reader.hpp"
+#include "../readers/gcs_reader.hpp"
+#include "../readers/reader_orchestrator.hpp"
 
 // Decoders
 #include "../decode/jpeg_decoder.hpp"
@@ -279,7 +281,8 @@ class TarWorker {
 public:
     TarWorker(const UnifiedPipelineConfig& config,
               size_t worker_id,
-              BufferPool* buffer_pool)
+              BufferPool* buffer_pool,
+              std::shared_ptr<std::vector<uint8_t>> remote_tar_data = nullptr)
         : config_(config),
           worker_id_(worker_id),
           buffer_pool_(buffer_pool),
@@ -288,11 +291,21 @@ public:
           queue_(std::make_unique<WorkerQueue>()) {
 
         // Per-worker TAR reader
-        tar_reader_ = std::make_unique<TarReader>(
-            config.data_path,
-            worker_id,
-            config.num_workers
-        );
+        // Check if using remote TAR data (already fetched)
+        if (remote_tar_data) {
+            tar_reader_ = std::make_unique<TarReader>(
+                remote_tar_data,
+                worker_id,
+                config.num_workers
+            );
+        } else {
+            // Local file path
+            tar_reader_ = std::make_unique<TarReader>(
+                config.data_path,
+                worker_id,
+                config.num_workers
+            );
+        }
 
         // Per-worker JPEG decoder
         decoder_ = std::make_unique<JPEGDecoder>(buffer_pool);
@@ -423,10 +436,18 @@ public:
         running_ = true;
 
         if (config_.format == DataFormat::TAR) {
-            // TAR mode: Create workers with per-worker lock-free queues
+            // TAR mode: Check if remote TAR (http://, https://, s3://, gs://)
+            std::shared_ptr<std::vector<uint8_t>> remote_tar_data = nullptr;
+
+            if (is_remote_path(config_.data_path)) {
+                // Fetch remote TAR data once, share across workers
+                remote_tar_data = fetch_remote_tar(config_.data_path);
+            }
+
+            // Create workers with per-worker lock-free queues
             for (size_t i = 0; i < config_.num_workers; ++i) {
                 tar_workers_.push_back(std::make_unique<TarWorker>(
-                    config_, i, buffer_pool_.get()
+                    config_, i, buffer_pool_.get(), remote_tar_data
                 ));
                 tar_workers_.back()->start();
             }
@@ -562,6 +583,30 @@ private:
             init_video_decoder();
         } else if (is_tabular_format(config_.format)) {
             init_tabular_decoder();
+        }
+    }
+
+    /**
+     * @brief Check if path is a remote TAR (http://, https://, s3://, gs://)
+     */
+    bool is_remote_path(const std::string& path) const {
+        return (path.substr(0, 7) == "http://" ||
+                path.substr(0, 8) == "https://" ||
+                path.substr(0, 5) == "s3://" ||
+                path.substr(0, 5) == "gs://");
+    }
+
+    /**
+     * @brief Fetch remote TAR data using ReaderOrchestrator
+     */
+    std::shared_ptr<std::vector<uint8_t>> fetch_remote_tar(const std::string& path) {
+        ReaderOrchestrator reader;
+
+        try {
+            auto data_vec = reader.read(path);
+            return std::make_shared<std::vector<uint8_t>>(std::move(data_vec));
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Failed to fetch remote TAR from " + path + ": " + e.what());
         }
     }
 
