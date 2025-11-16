@@ -94,7 +94,7 @@ public:
     /**
      * @brief Get GPU device IDs
      */
-    const std::vector<int>& gpu_ids() const { return config_.gpu_ids(); }
+    const std::vector<int>& gpu_ids() const { return config_.gpu_ids; }
 
 private:
     MultiGPUConfig config_;
