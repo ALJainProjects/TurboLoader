@@ -12,7 +12,7 @@ v0.5.0 Features:
 - Multi-format pipeline (images, video, tabular data)
 """
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 # Import C++ extension module
 try:
