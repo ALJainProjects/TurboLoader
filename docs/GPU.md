@@ -1,5 +1,12 @@
 # TurboLoader GPU Features
 
+
+> **Note**: Performance claims in this documentation are based on preliminary benchmarks on synthetic datasets. 
+> Actual performance will vary based on hardware, dataset characteristics, and workload. 
+> We recommend running benchmarks on your specific use case.
+
+
+
 Advanced GPU acceleration and distributed training support for maximum performance.
 
 ---
@@ -21,7 +28,7 @@ TurboLoader supports hardware-accelerated JPEG decoding using NVIDIA nvJPEG.
 
 ### Features
 
-- **5-10x faster** than CPU decoding for large batches
+- **5-significantly faster** than CPU decoding for large batches
 - **Zero-copy GPU memory** - decoded images stay on GPU
 - **Batch decoding** - decode multiple images in parallel
 - **CUDA streams** - overlap decode with data transfer
@@ -303,14 +310,14 @@ if (can_p2p) {
 
 | Framework | Throughput | Speedup vs CPU |
 |-----------|------------|----------------|
-| **TurboLoader (GPU)** | **45,000 img/s** | **8.5x** |
-| NVIDIA DALI | 48,000 img/s | 9.0x |
-| FFCV (CPU) | 31,000 img/s | 5.8x |
-| TurboLoader (CPU) | 11,628 img/s | 1.0x |
-| PyTorch (CPU) | 400 img/s | 0.07x |
+| **TurboLoader (GPU)** | **High throughput** | **8.5x** |
+| NVIDIA DALI | high throughput | 9.0x |
+| FFCV (CPU) | high throughput | 5.8x |
+| TurboLoader (CPU) | high throughput | 1.0x |
+| PyTorch (CPU) | high throughput | 0.07x |
 
 **Key Insights**:
-- GPU decoding provides **8.5x speedup** over CPU
+- GPU decoding provides **significant speedup** over CPU
 - TurboLoader GPU at **94%** of DALI performance
 - **Zero preprocessing** required (vs FFCV .beton conversion)
 
@@ -321,13 +328,13 @@ if (can_p2p) {
 
 | Framework | Throughput | Scaling Efficiency |
 |-----------|------------|-------------------|
-| **TurboLoader (4 GPUs)** | **180,000 img/s** | **97%** |
-| PyTorch DDP | 92,000 img/s | 58% |
-| FFCV (4 GPUs) | 210,000 img/s | 100% |
+| **TurboLoader (4 GPUs)** | **High throughput** | **97%** |
+| PyTorch DDP | high throughput | 58% |
+| FFCV (4 GPUs) | high throughput | 100% |
 
 **Key Insights**:
 - **97% scaling efficiency** (vs ideal 100%)
-- **2x faster** than PyTorch DDP
+- **Significantly faster** than PyTorch DDP
 - GPU Direct RDMA eliminates data transfer bottlenecks
 
 ---

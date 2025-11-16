@@ -71,7 +71,7 @@ if readme_path.exists():
 
 setup(
     name='turboloader',
-    version='0.3.2',
+    version='0.3.3',
     author='Arnav Jain',
     author_email='arnav@arnavjain.com',
     description='High-performance ML data loading library with SIMD optimizations',
@@ -112,7 +112,6 @@ setup(
         'Intended Audience :: Science/Research',
         'Topic :: Scientific/Engineering :: Artificial Intelligence',
         'Topic :: Software Development :: Libraries :: Python Modules',
-        'License :: OSI Approved :: MIT License',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
@@ -124,5 +123,6 @@ setup(
         'Operating System :: POSIX :: Linux',
         'Operating System :: MacOS',
     ],
+    license='MIT',
     keywords='machine-learning data-loading simd performance pytorch tensorflow',
 )

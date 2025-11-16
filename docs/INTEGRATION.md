@@ -1,5 +1,12 @@
 # TurboLoader Integration Guide
 
+
+> **Note**: Performance claims in this documentation are based on preliminary benchmarks on synthetic datasets. 
+> Actual performance will vary based on hardware, dataset characteristics, and workload. 
+> We recommend running benchmarks on your specific use case.
+
+
+
 How to integrate TurboLoader with PyTorch and TensorFlow training pipelines.
 
 ---

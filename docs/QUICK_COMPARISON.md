@@ -1,5 +1,12 @@
 # TurboLoader: Direct Replacement for PyTorch DataLoader
 
+
+> **Note**: Performance claims in this documentation are based on preliminary benchmarks on synthetic datasets. 
+> Actual performance will vary based on hardware, dataset characteristics, and workload. 
+> We recommend running benchmarks on your specific use case.
+
+
+
 ## Side-by-Side Comparison
 
 ### ❌ BEFORE: Standard PyTorch (Slow)
@@ -39,7 +46,7 @@ for epoch in range(num_epochs):
         optimizer.step()
 ```
 
-**Performance: ~17 img/s** 🐌
+**Performance: ~high throughput** 🐌
 
 ---
 
@@ -91,7 +98,7 @@ for epoch in range(num_epochs):
     pipeline.stop()
 ```
 
-**Performance: ~628 img/s** ⚡ (35x faster!)
+**Performance: ~high throughput** ⚡ (significantly faster!)
 
 ---
 
@@ -155,7 +162,7 @@ for epoch in range(num_epochs):
         optimizer.step()
 ```
 
-**Same API, 35x faster!** 🚀
+**Same API, significantly faster!** 🚀
 
 ---
 
@@ -203,7 +210,7 @@ for epoch in range(num_epochs):
 
 | Feature | PyTorch DataLoader | TurboLoader |
 |---------|-------------------|-------------|
-| **Throughput** | 17 img/s | 628 img/s |
+| **Throughput** | high throughput | high throughput |
 | **Speedup** | 1x | **35x** ⚡ |
 | **Resize** | PIL (Python) | SIMD C++ (NEON/AVX2) |
 | **Normalize** | NumPy | SIMD C++ |
@@ -225,7 +232,7 @@ pipeline = turboloader.Pipeline(
     decode_jpeg=True,
     enable_simd_transforms=True
 )
-# 35x faster than PyTorch DataLoader!
+# significantly faster than PyTorch DataLoader!
 ```
 
 ### COCO Object Detection
@@ -262,7 +269,7 @@ pipeline = turboloader.Pipeline(
 - [ ] Replace DataLoader with Pipeline
 - [ ] Configure transforms in TransformConfig
 - [ ] Update training loop to use `next_batch()`
-- [ ] Benchmark and enjoy 10-35x speedup!
+- [ ] Benchmark and enjoy 10-significant speedup!
 
 ---
 
@@ -281,7 +288,7 @@ pipeline = turboloader.Pipeline(
 **A:** Yes! TurboLoader is CPU-based and speeds up data loading, which helps GPU training.
 
 ### Q: How much faster is it really?
-**A:** 10-35x faster depending on:
+**A:** 10-significantly faster depending on:
 - Dataset size
 - Image resolution
 - Number of transforms

@@ -1,5 +1,12 @@
 # TurboLoader Architecture
 
+
+> **Note**: Performance claims in this documentation are based on preliminary benchmarks on synthetic datasets. 
+> Actual performance will vary based on hardware, dataset characteristics, and workload. 
+> We recommend running benchmarks on your specific use case.
+
+
+
 Deep dive into how TurboLoader achieves high-performance data loading.
 
 ---
@@ -27,9 +34,9 @@ TurboLoader is designed around three key principles:
 
 ### Performance Goals
 
-- **2.64x faster** than TensorFlow tf.data
-- **27.8x faster** than PyTorch DataLoader (naive TAR reading)
-- **11,628 img/s** throughput on Apple Silicon (1000 images, 256x256)
+- **Significantly faster** than TensorFlow tf.data
+- **Significantly faster** than PyTorch DataLoader (naive TAR reading)
+- **High throughput** throughput on Apple Silicon (1000 images, 256x256)
 
 ---
 
@@ -184,7 +191,7 @@ class Worker {
 - **x86_64**: AVX2 instructions
 - **ARM**: NEON
 
-**Performance**: 2-6x faster than standard libjpeg
+**Performance**: 2-significantly faster than standard libjpeg
 
 **Decode path**:
 ```cpp
@@ -304,7 +311,7 @@ Disk → Kernel page cache ←──────┐
 Application ─────────────────────┘
 ```
 
-**Benefit**: 2-3x faster file reading
+**Benefit**: 2-significantly faster file reading
 
 ---
 
@@ -354,7 +361,7 @@ libjpeg-turbo (NEON/AVX2):
   }
 ```
 
-**Benefit**: 2-6x faster JPEG decoding
+**Benefit**: 2-significantly faster JPEG decoding
 
 ---
 
@@ -492,7 +499,7 @@ Main Process
 | **Memory** | Shared | Duplicated per worker |
 | **Queue** | Lock-free SPMC | Python Queue (locks) |
 
-**Result**: 27.8x faster on TAR datasets
+**Result**: significantly faster on TAR datasets
 
 ---
 
@@ -505,7 +512,7 @@ Main Process
 | **JPEG decoding** | libjpeg-turbo | TF JPEG ops |
 | **Memory** | Shared | Shared |
 
-**Result**: 2.64x faster (streaming vs extraction)
+**Result**: significantly faster (streaming vs extraction)
 
 ---
 
