@@ -18,13 +18,32 @@ class get_pybind_include(object):
         return pybind11.get_include()
 
 
-def find_jpeg_turbo():
-    """Find libjpeg-turbo installation"""
-    # Try common locations
+def find_library(name, brew_name=None, pkg_config_name=None):
+    """Find a library installation (works on macOS and Linux)"""
+    if brew_name is None:
+        brew_name = name
+    if pkg_config_name is None:
+        pkg_config_name = name
+
+    # Try Homebrew first (macOS)
+    try:
+        brew_prefix = subprocess.check_output(
+            ['brew', '--prefix', brew_name],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+
+        include_path = os.path.join(brew_prefix, 'include')
+        lib_path = os.path.join(brew_prefix, 'lib')
+
+        if os.path.exists(include_path) and os.path.exists(lib_path):
+            return include_path, lib_path
+    except:
+        pass
+
+    # Try common system locations
     possible_paths = [
-        '/opt/homebrew/opt/jpeg-turbo',  # Homebrew on Apple Silicon
-        '/usr/local/opt/jpeg-turbo',      # Homebrew on Intel
-        '/usr',                           # System
+        '/usr/local',
+        '/usr',
     ]
 
     for base_path in possible_paths:
@@ -37,12 +56,12 @@ def find_jpeg_turbo():
     # Try pkg-config
     try:
         include_path = subprocess.check_output(
-            ['pkg-config', '--variable=includedir', 'libjpeg'],
+            ['pkg-config', '--variable=includedir', pkg_config_name],
             stderr=subprocess.DEVNULL
         ).decode().strip()
 
         lib_path = subprocess.check_output(
-            ['pkg-config', '--variable=libdir', 'libjpeg'],
+            ['pkg-config', '--variable=libdir', pkg_config_name],
             stderr=subprocess.DEVNULL
         ).decode().strip()
 
@@ -51,20 +70,51 @@ def find_jpeg_turbo():
     except:
         pass
 
+    return None, None
+
+
+# Find all required libraries
+print("Detecting dependencies...")
+
+jpeg_include, jpeg_lib = find_library('jpeg-turbo', 'jpeg-turbo', 'libjpeg')
+if not jpeg_include:
     raise RuntimeError(
         "Could not find libjpeg-turbo installation.\n"
         "Please install it:\n"
         "  macOS: brew install jpeg-turbo\n"
         "  Linux: sudo apt-get install libjpeg-turbo8-dev\n"
     )
+print(f"  libjpeg-turbo: {jpeg_include}")
 
+png_include, png_lib = find_library('libpng', 'libpng', 'libpng')
+if not png_include:
+    raise RuntimeError(
+        "Could not find libpng installation.\n"
+        "Please install it:\n"
+        "  macOS: brew install libpng\n"
+        "  Linux: sudo apt-get install libpng-dev\n"
+    )
+print(f"  libpng: {png_include}")
 
-# Find JPEG library
-jpeg_include, jpeg_lib = find_jpeg_turbo()
+webp_include, webp_lib = find_library('webp', 'webp', 'libwebp')
+if not webp_include:
+    raise RuntimeError(
+        "Could not find libwebp installation.\n"
+        "Please install it:\n"
+        "  macOS: brew install webp\n"
+        "  Linux: sudo apt-get install libwebp-dev\n"
+    )
+print(f"  libwebp: {webp_include}")
 
-print(f"Found libjpeg-turbo:")
-print(f"  Include: {jpeg_include}")
-print(f"  Library: {jpeg_lib}")
+curl_include, curl_lib = find_library('curl', 'curl', 'libcurl')
+if not curl_include:
+    raise RuntimeError(
+        "Could not find libcurl installation.\n"
+        "Please install it:\n"
+        "  macOS: brew install curl\n"
+        "  Linux: sudo apt-get install libcurl4-openssl-dev\n"
+    )
+print(f"  libcurl: {curl_include}")
 
 ext_modules = [
     Extension(
@@ -73,10 +123,24 @@ ext_modules = [
         include_dirs=[
             get_pybind_include(),
             jpeg_include,
-            'src',  # For pipeline_v2 headers
+            png_include,
+            webp_include,
+            curl_include,
+            'src',  # For pipeline headers
         ],
-        library_dirs=[jpeg_lib],
-        libraries=['jpeg'],
+        library_dirs=[
+            jpeg_lib,
+            png_lib,
+            webp_lib,
+            curl_lib,
+        ],
+        libraries=[
+            'jpeg',
+            'png',
+            'webp',
+            'webpdemux',
+            'curl',
+        ],
         language='c++',
         extra_compile_args=[
             '-std=c++20',
