@@ -173,9 +173,9 @@ class BuildExt(build_ext):
 
 setup(
     name='turboloader',
-    version='0.4.0',
+    version='0.5.0',
     author='TurboLoader Contributors',
-    description='High-performance data loading for PyTorch (TurboLoader)',
+    description='High-performance data loading for ML frameworks (TurboLoader)',
     long_description=open('README.md').read() if os.path.exists('README.md') else '',
     long_description_content_type='text/markdown',
     ext_modules=ext_modules,
