@@ -1,8 +1,6 @@
 # TurboLoader
 
-**High-performance ML data loading library in C++20**
-
-⚡ **Significantly faster than PyTorch DataLoader** ⚡
+**High-Performance ML Data Loading Library**
 
 [![PyPI version](https://badge.fury.io/py/turboloader.svg)](https://badge.fury.io/py/turboloader)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
@@ -12,55 +10,67 @@
 
 ## Overview
 
-TurboLoader is a high-performance data loading library designed to accelerate ML training by replacing Python's slow multiprocessing-based data loaders with efficient C++ native threads and lock-free data structures.
+TurboLoader is a high-performance data loading library designed to accelerate ML training by replacing Python's multiprocessing-based data loaders with efficient C++ native threads and lock-free data structures.
 
 **Key Features**:
-- 🚀 **High-performance data loading** with C++ native implementation
-- ⚡ **SIMD transforms** with AVX2/AVX-512/NEON for fast preprocessing
-- 🔒 **Lock-free concurrent queues** for zero-contention data passing
-- 🧵 **Native C++ threads** (no Python GIL, no process spawning overhead)
-- 💾 **Zero-copy memory-mapped I/O** for efficient file reading
-- 📦 **WebDataset TAR format** support for sharded datasets
-- 🎯 **Thread-local JPEG/PNG/WebP decoders** (SIMD optimized)
-- 🎨 **7 SIMD-accelerated augmentation transforms**
-- 🐍 **PyTorch-compatible API** with minimal code changes
+- 🚀 **Native C++ Implementation** with Python bindings via pybind11
+- ⚡ **SIMD-Optimized Transforms** using AVX2/AVX-512/NEON
+- 🔒 **Lock-Free Concurrent Queues** for zero-contention data passing
+- 🧵 **C++ Native Threads** (no Python GIL, no multiprocessing overhead)
+- 💾 **Zero-Copy Memory-Mapped I/O** for efficient file reading
+- 📦 **WebDataset TAR Format** support for sharded datasets
+- 🎯 **SIMD-Accelerated Image Decoders** (JPEG, PNG, WebP)
+- 🎨 **7 Data Augmentation Transforms** with SIMD optimization
+- 🐍 **PyTorch-Compatible API** drop-in replacement
 
 ---
 
 ## Performance
 
-TurboLoader provides significant performance improvements over PyTorch DataLoader through:
+TurboLoader achieves high performance through several optimizations:
 
-- **Lock-free queues** eliminate synchronization overhead
-- **SIMD-optimized transforms** (AVX2/AVX-512/NEON) accelerate preprocessing
+- **Lock-free queues** eliminate synchronization overhead between threads
+- **SIMD-optimized transforms** (AVX2/NEON) accelerate image preprocessing
 - **Native C++ threads** avoid Python GIL and multiprocessing overhead
 - **Memory-mapped I/O** enables zero-copy file reading
 - **Thread-local decoders** eliminate allocation overhead
 
 ### Benchmark Results
 
-Performance benchmarks on Apple M1 Pro (8 cores, 16GB RAM):
+**SIMD Transform Performance** (Apple M1 Pro, NEON backend):
 
-| Test | TurboLoader | PyTorch DataLoader | Improvement |
-|------|-------------|-------------------|-------------|
-| SIMD Resize (6718 img/s) | 148.85 μs | - | Baseline |
-| SIMD Normalize (47438 img/s) | 21.08 μs | - | Baseline |
+| Operation | Throughput | Time per Image |
+|-----------|------------|----------------|
+| Resize (256x256→224x224) | 6,718 img/s | 148.85 μs |
+| Normalize (RGB) | 47,438 img/s | 21.08 μs |
 
 **Test Configuration**:
-- Dataset: 1000 JPEG images (256x256)
-- Operations: TAR extraction → JPEG decode → resize → normalize
-- Workers: 8 threads/processes
-- Batch size: 256
+- Hardware: Apple M1 Pro (8 cores, 16GB RAM)
+- Input: 256x256 RGB images
+- Backend: NEON SIMD instructions
+- All tests run on synthetic datasets
 
-**Note**: Benchmarks are measured on synthetic datasets. Full ImageNet comparison suite in development.
+> **Note**: These are micro-benchmarks of individual SIMD operations. End-to-end data loading performance depends on dataset size, hardware, I/O bandwidth, and pipeline configuration. We recommend benchmarking on your specific use case.
 
-See [CHANGELOG.md](CHANGELOG.md) for version history and test results.
+---
 
 ## Installation
 
 ```bash
 pip install turboloader
 ```
+
+**Requirements**:
+- Python 3.8+
+- C++20 compiler (GCC 10+, Clang 12+, MSVC 19.29+)
+- CMake 3.15+
+
+**Optional Dependencies**:
+- libjpeg-turbo (JPEG decoding)
+- libpng (PNG decoding)
+- libwebp (WebP decoding)
+
+---
 
 ## Quick Start
 
@@ -69,23 +79,22 @@ pip install turboloader
 ```python
 import turboloader
 
-# Configure the data loader
-config = turboloader.Config(
+# Create pipeline
+pipeline = turboloader.Pipeline(
+    tar_paths=['imagenet.tar'],
     num_workers=8,
-    batch_size=256,
-    shuffle=True,
+    batch_size=32,
     decode_jpeg=True
 )
 
-# Create pipeline
-pipeline = turboloader.Pipeline(['imagenet.tar'], config)
 pipeline.start()
 
 # Get batches
-batch = pipeline.next_batch(256)
-for sample in batch:
-    img_data = sample.data['jpg']  # Raw JPEG bytes or decoded image
-    # Process your data...
+for _ in range(100):
+    batch = pipeline.next_batch(32)
+    for sample in batch:
+        img = sample.get_image()  # NumPy array (H, W, C)
+        # Your training code here...
 
 pipeline.stop()
 ```
@@ -96,154 +105,230 @@ pipeline.stop()
 import turboloader
 
 # Configure SIMD-accelerated transforms
-config = turboloader.Config(num_workers=8, batch_size=256)
-config.enable_simd_transforms = True
+config = turboloader.TransformConfig()
+config.enable_resize = True
+config.resize_width = 224
+config.resize_height = 224
+config.enable_normalize = True
+config.mean = [0.485, 0.456, 0.406]
+config.std = [0.229, 0.224, 0.225]
 
-transform_config = turboloader.TransformConfig()
-transform_config.target_width = 224
-transform_config.target_height = 224
-transform_config.enable_normalize = True
-transform_config.mean = [0.485, 0.456, 0.406]
-transform_config.std = [0.229, 0.224, 0.225]
+pipeline = turboloader.Pipeline(
+    tar_paths=['imagenet.tar'],
+    num_workers=8,
+    decode_jpeg=True,
+    enable_simd_transforms=True,
+    transform_config=config
+)
 
-config.transform_config = transform_config
-
-# Create pipeline
-pipeline = turboloader.Pipeline(['imagenet.tar'], config)
 pipeline.start()
-
 batch = pipeline.next_batch(256)
-for sample in batch:
-    # Get pre-transformed data (already resized + normalized)
-    transformed = sample.transformed_data  # Ready for model!
-
 pipeline.stop()
 ```
 
-See [examples/](examples/) for complete working examples including PyTorch integration.
+### With Data Augmentation
+
+```python
+import turboloader
+
+# Create augmentation pipeline
+aug_pipeline = turboloader.AugmentationPipeline()
+aug_pipeline.add_transform(turboloader.RandomHorizontalFlip(0.5))
+aug_pipeline.add_transform(turboloader.ColorJitter(brightness=0.2, contrast=0.2))
+aug_pipeline.add_transform(turboloader.RandomCrop(224, 224))
+
+# Use with data loader (planned feature)
+# pipeline = turboloader.Pipeline(tar_paths=['data.tar'], augmentations=aug_pipeline)
+```
 
 ---
 
 ## Architecture
 
-```
-[TAR Files] → [Reader Thread] → [Lock-Free Queue] → [Worker Threads] → [Output Queue] → [User]
-                                                            ↓
-                                                     [JPEG Decoder]
-                                                     (thread-local)
-```
+TurboLoader is built on several high-performance components:
 
-**Key Design Decisions**:
+### Core Components
 
-1. **Lock-Free SPMC Queue**:
-   - Cache-line aligned slots prevent false sharing
-   - Atomic operations for wait-free enqueue/dequeue
-   - No mutex contention
+1. **Lock-Free Queues**
+   - SPSC (Single Producer Single Consumer) queues
+   - Atomic operations for thread-safe data passing
+   - Zero-copy transfer of decoded images
 
-2. **Native Threading**:
-   - C++ threads avoid Python GIL
-   - No process spawning overhead
-   - Shared memory (no serialization)
+2. **Memory-Mapped I/O**
+   - `mmap()` for zero-copy file reading
+   - Efficient TAR archive parsing
+   - Minimizes memory allocations
 
-3. **Thread-Local Decoders**:
-   - Each worker has its own JPEG decoder
-   - No allocation overhead per image
-   - SIMD optimizations from libjpeg-turbo
+3. **SIMD Transforms**
+   - AVX2/AVX-512 on x86_64
+   - NEON on ARM (Apple Silicon, ARM servers)
+   - Vectorized resize, normalize, color conversion
 
-4. **Memory-Mapped I/O**:
-   - Zero-copy file reading
-   - OS handles page management
-   - Prefetch hints for sequential access
+4. **Thread-Local Decoders**
+   - Per-thread JPEG/PNG/WebP decoders
+   - Eliminates decoder allocation overhead
+   - Maximizes cache locality
 
-## Building from Source
+### Supported Transforms
 
-### Requirements
-- CMake 3.20+
-- C++20 compiler (GCC 11+, Clang 14+, or Apple Clang 14+)
-- libjpeg-turbo
-- Python 3.8+ (for Python bindings)
-- pybind11
+TurboLoader v0.3.x includes 7 SIMD-accelerated augmentation transforms:
 
-### Build Instructions
-
-```bash
-mkdir build && cd build
-cmake ..
-make -j
-```
-
-### Run Tests
-
-```bash
-./tests/turboloader_tests
-```
-
-## Project Status
-
-**Current Version**: 0.3.1 (Latest Release)
-
-### Completed Features (v0.3.x)
-
-- ✅ Lock-free SPMC queue with cache-line alignment
-- ✅ Thread pool with work stealing
-- ✅ Zero-copy mmap file reader
-- ✅ TAR parser for WebDataset format
-- ✅ Multi-threaded pipeline
-- ✅ JPEG/PNG/WebP decoders (libjpeg-turbo, libpng, libwebp)
-- ✅ Thread-local decoders
-- ✅ Python bindings (pybind11)
-- ✅ SIMD transforms (AVX2/AVX-512/NEON)
-- ✅ Vectorized resize and normalization
-- ✅ 7 SIMD-accelerated augmentation transforms
-- ✅ WebDataset iterator API
-- ✅ PyPI package distribution
-- ✅ Comprehensive test suite (45 tests passing)
-
-### Roadmap
-
-**v0.4.0** (Planned)
-- TensorFlow/JAX bindings
-- Cloud storage support (S3, GCS)
-- Distributed training support (NCCL, Gloo)
-
-**v1.0.0** (Future)
-- Stable API
-- Production-ready with full benchmark suite
-- GPU-accelerated decoding (nvJPEG)
+- **RandomHorizontalFlip**: SIMD-optimized horizontal flip
+- **RandomVerticalFlip**: SIMD-optimized vertical flip
+- **ColorJitter**: Brightness, contrast, saturation adjustments
+- **RandomRotation**: Bilinear interpolation rotation
+- **RandomCrop**: Random crop with padding
+- **RandomErasing**: Cutout augmentation
+- **GaussianBlur**: Separable Gaussian filter (SIMD)
 
 ---
 
-## Documentation
+## API Reference
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Technical deep dive into implementation
-- **[examples/](examples/)** - Complete working examples
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - How to contribute
+### Pipeline
+
+```python
+class Pipeline:
+    def __init__(
+        self,
+        tar_paths: List[str],
+        num_workers: int = 4,
+        queue_size: int = 256,
+        shuffle: bool = False,
+        decode_jpeg: bool = False,
+        enable_simd_transforms: bool = False,
+        transform_config: Optional[TransformConfig] = None
+    )
+
+    def start() -> None
+    def stop() -> None
+    def reset() -> None
+    def next_batch(batch_size: int) -> List[Sample]
+    def total_samples() -> int
+```
+
+### TransformConfig
+
+```python
+class TransformConfig:
+    enable_resize: bool = False
+    resize_width: int = 224
+    resize_height: int = 224
+    resize_method: ResizeMethod = ResizeMethod.BILINEAR
+
+    enable_normalize: bool = False
+    mean: List[float] = [0.0, 0.0, 0.0]
+    std: List[float] = [1.0, 1.0, 1.0]
+
+    enable_color_convert: bool = False
+    src_color: ColorSpace = ColorSpace.RGB
+    dst_color: ColorSpace = ColorSpace.RGB
+    output_float: bool = False
+```
+
+### Augmentation Transforms
+
+```python
+class AugmentationPipeline:
+    def __init__(seed: Optional[int] = None)
+    def add_transform(transform: AugmentationTransform) -> None
+    def clear() -> None
+    def num_transforms() -> int
+
+class RandomHorizontalFlip(AugmentationTransform):
+    def __init__(probability: float = 0.5)
+
+class ColorJitter(AugmentationTransform):
+    def __init__(
+        brightness: float = 0.0,
+        contrast: float = 0.0,
+        saturation: float = 0.0,
+        hue: float = 0.0
+    )
+```
+
+---
+
+## Roadmap
+
+### v0.4.0 (Q2 2025)
+- [ ] Full ImageNet benchmark suite
+- [ ] TensorFlow/JAX integration
+- [ ] Additional image formats (TIFF, BMP)
+- [ ] Video decoding support
+
+### v0.5.0 (Q3 2025)
+- [ ] GPU-accelerated JPEG decoding (nvJPEG)
+- [ ] Distributed training support
+- [ ] S3/GCS remote dataset loading
+
+### v1.0.0 (Q4 2025)
+- [ ] Production-ready API stability
+- [ ] Comprehensive documentation
+- [ ] Full test coverage
+- [ ] Performance optimization
+
+---
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-**Priority areas:**
-- Additional image formats (PNG, WebP)
-- Augmentation operations
-- Cloud storage backends (S3, GCS)
-- Performance optimizations
+### Development Setup
+
+```bash
+# Clone repository
+git clone https://github.com/ALJainProjects/TurboLoader.git
+cd TurboLoader
+
+# Install dependencies
+brew install cmake libjpeg-turbo libpng libwebp  # macOS
+# or
+apt-get install cmake libjpeg-turbo8-dev libpng-dev libwebp-dev  # Ubuntu
+
+# Build from source
+mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j8
+
+# Run tests
+./tests/turboloader_tests
+./tests/test_simd_transforms
+```
 
 ---
 
 ## License
 
-MIT License (see [LICENSE](LICENSE) file)
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## Citation
+
+If you use TurboLoader in your research, please cite:
+
+```bibtex
+@software{turboloader2025,
+  author = {Jain, Arnav},
+  title = {TurboLoader: High-Performance ML Data Loading},
+  year = {2025},
+  url = {https://github.com/ALJainProjects/TurboLoader}
+}
+```
 
 ---
 
 ## Acknowledgments
 
-- libjpeg-turbo for SIMD-optimized JPEG decoding
-- WebDataset format for inspiration on TAR-based datasets
-- PyTorch community for establishing data loading standards
-- pybind11 for excellent Python bindings
+- Inspired by [FFCV](https://github.com/libffcv/ffcv) and [NVIDIA DALI](https://github.com/NVIDIA/DALI)
+- Built with [pybind11](https://github.com/pybind/pybind11)
+- Uses [libjpeg-turbo](https://libjpeg-turbo.org/) for fast JPEG decoding
 
 ---
 
-**Built by Arnav Jain** | [GitHub](https://github.com/ALJainProjects/TurboLoader)
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/ALJainProjects/TurboLoader/issues)
+- **Documentation**: [docs/](docs/)
+- **PyPI**: [https://pypi.org/project/turboloader/](https://pypi.org/project/turboloader/)
