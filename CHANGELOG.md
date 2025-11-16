@@ -5,6 +5,21 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2025-01-15
+
+### Changed
+- Updated README with conservative, verified performance claims
+- Removed unsubstantiated "30-35x speedup" claims
+- Added actual SIMD benchmark results from test suite
+- Updated "Current Version" from 0.2.0 to 0.3.1 in README
+- Clarified roadmap - v0.3.0 is released, not planned
+
+### Documentation
+- README now states "Significantly faster" instead of specific multiples
+- Added verified SIMD benchmark data (6718 img/s resize, 47438 img/s normalize)
+- Clear disclaimer that benchmarks are on synthetic datasets
+- Accurate feature list for v0.3.x releases
+
 ## [0.3.1] - 2025-01-15
 
 ### Added

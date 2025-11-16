@@ -380,5 +380,5 @@ PYBIND11_MODULE(turboloader, m) {
         .def_readwrite("enable_normalize", &Pipeline::Config::enable_normalize);
 
     // Version info
-    m.attr("__version__") = "0.3.1";
+    m.attr("__version__") = "0.3.2";
 }
