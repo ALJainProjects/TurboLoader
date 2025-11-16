@@ -52,7 +52,8 @@ DecodedImage JpegDecoder::decode(std::span<const uint8_t> jpeg_data) {
 
     // Set up error handling
     if (setjmp(pimpl_->jerr.setjmp_buffer)) {
-        // JPEG error occurred
+        // JPEG error occurred - clean up before throwing
+        jpeg_abort_decompress(&pimpl_->cinfo);
         throw std::runtime_error(std::string("JPEG decode error: ") + pimpl_->jerr.message);
     }
 
@@ -63,6 +64,7 @@ DecodedImage JpegDecoder::decode(std::span<const uint8_t> jpeg_data) {
 
     // Read JPEG header
     if (jpeg_read_header(&pimpl_->cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_abort_decompress(&pimpl_->cinfo);
         throw std::runtime_error("Invalid JPEG header");
     }
 
@@ -97,7 +99,7 @@ DecodedImage JpegDecoder::decode(std::span<const uint8_t> jpeg_data) {
         jpeg_read_scanlines(&pimpl_->cinfo, row_pointer, 1);
     }
 
-    // Finish decompression
+    // Finish decompression - this properly cleans up internal state
     jpeg_finish_decompress(&pimpl_->cinfo);
 
     return result;
