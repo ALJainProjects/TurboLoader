@@ -22,6 +22,8 @@ option(TURBOLOADER_BUILD_TESTS "Build tests" ON)
 option(TURBOLOADER_BUILD_PYTHON "Build Python bindings" ON)
 option(TURBOLOADER_WITH_CUDA "Build with CUDA support (GPU decode)" OFF)
 option(TURBOLOADER_WITH_OPENCV "Build with OpenCV (video support)" OFF)
+option(ENABLE_CUDA "Enable CUDA support for multi-GPU pipeline" OFF)
+option(ENABLE_MPI "Enable MPI support for distributed training" OFF)
 
 # Find required dependencies
 find_package(Threads REQUIRED)
@@ -62,48 +64,119 @@ if(TURBOLOADER_WITH_CUDA)
     endif()
 endif()
 
-# TurboLoader is header-only - create INTERFACE library
-add_library(turboloader INTERFACE)
+# MPI support for distributed training (optional)
+if(ENABLE_MPI)
+    find_package(MPI REQUIRED)
+    message(STATUS "Building with MPI support")
+endif()
 
-target_include_directories(turboloader
-    INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-        $<INSTALL_INTERFACE:include>
-)
+# Additional CUDA for multi-GPU pipeline (optional)
+if(ENABLE_CUDA)
+    if(NOT TURBOLOADER_WITH_CUDA)
+        enable_language(CUDA)
+        find_package(CUDAToolkit REQUIRED)
+    endif()
+    message(STATUS "Building with CUDA multi-GPU support")
+endif()
 
-target_link_libraries(turboloader
-    INTERFACE
-        Threads::Threads
-        JPEG::JPEG
-        PNG::PNG
-        CURL::libcurl
-)
+# Collect source files for non-header-only components
+set(TURBOLOADER_SOURCES "")
+
+# Add multi-GPU pipeline if CUDA enabled
+if(ENABLE_CUDA)
+    list(APPEND TURBOLOADER_SOURCES
+        src/gpu/multi_gpu_pipeline.cpp
+    )
+endif()
+
+# Add distributed pipeline if MPI enabled
+if(ENABLE_MPI)
+    list(APPEND TURBOLOADER_SOURCES
+        src/distributed/distributed_pipeline.cpp
+    )
+endif()
+
+# Create library (header-only if no sources, otherwise normal library)
+if(TURBOLOADER_SOURCES)
+    add_library(turboloader ${TURBOLOADER_SOURCES})
+
+    target_include_directories(turboloader
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+            $<INSTALL_INTERFACE:include>
+    )
+
+    target_link_libraries(turboloader
+        PUBLIC
+            Threads::Threads
+            JPEG::JPEG
+            PNG::PNG
+            CURL::libcurl
+    )
+else()
+    # Header-only fallback
+    add_library(turboloader INTERFACE)
+
+    target_include_directories(turboloader
+        INTERFACE
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+            $<INSTALL_INTERFACE:include>
+    )
+
+    target_link_libraries(turboloader
+        INTERFACE
+            Threads::Threads
+            JPEG::JPEG
+            PNG::PNG
+            CURL::libcurl
+    )
+endif()
+
+# Determine link scope based on library type
+if(TURBOLOADER_SOURCES)
+    set(LINK_SCOPE PUBLIC)
+else()
+    set(LINK_SCOPE INTERFACE)
+endif()
 
 # WebP support
 if(WEBP_FOUND)
-    target_link_libraries(turboloader INTERFACE ${WEBP_LIBRARY})
-    target_include_directories(turboloader INTERFACE ${WEBP_INCLUDE_DIR})
-    target_compile_definitions(turboloader INTERFACE HAVE_WEBP)
+    target_link_libraries(turboloader ${LINK_SCOPE} ${WEBP_LIBRARY})
+    target_include_directories(turboloader ${LINK_SCOPE} ${WEBP_INCLUDE_DIR})
+    target_compile_definitions(turboloader ${LINK_SCOPE} HAVE_WEBP)
 endif()
 
 # OpenCV support
 if(TURBOLOADER_WITH_OPENCV)
-    target_link_libraries(turboloader INTERFACE ${OpenCV_LIBS})
-    target_include_directories(turboloader INTERFACE ${OpenCV_INCLUDE_DIRS})
-    target_compile_definitions(turboloader INTERFACE HAVE_OPENCV)
+    target_link_libraries(turboloader ${LINK_SCOPE} ${OpenCV_LIBS})
+    target_include_directories(turboloader ${LINK_SCOPE} ${OpenCV_INCLUDE_DIRS})
+    target_compile_definitions(turboloader ${LINK_SCOPE} HAVE_OPENCV)
 endif()
 
 # CUDA/nvJPEG support
 if(TURBOLOADER_WITH_CUDA)
-    target_link_libraries(turboloader INTERFACE
+    target_link_libraries(turboloader ${LINK_SCOPE}
         CUDA::cudart
         ${NVJPEG_LIBRARY}
     )
-    target_compile_definitions(turboloader INTERFACE TURBOLOADER_WITH_CUDA)
+    target_compile_definitions(turboloader ${LINK_SCOPE} TURBOLOADER_WITH_CUDA)
+endif()
+
+# Multi-GPU CUDA support
+if(ENABLE_CUDA)
+    target_link_libraries(turboloader ${LINK_SCOPE} CUDA::cudart)
+    target_compile_definitions(turboloader ${LINK_SCOPE} TURBOLOADER_ENABLE_CUDA)
+endif()
+
+# MPI support
+if(ENABLE_MPI)
+    target_link_libraries(turboloader ${LINK_SCOPE} MPI::MPI_CXX)
+    target_include_directories(turboloader ${LINK_SCOPE} ${MPI_CXX_INCLUDE_DIRS})
+    target_compile_definitions(turboloader ${LINK_SCOPE} TURBOLOADER_ENABLE_MPI)
 endif()
 
 # Enable CURL support
-target_compile_definitions(turboloader INTERFACE HAVE_CURL)
+target_compile_definitions(turboloader ${LINK_SCOPE} HAVE_CURL)
 
 # Tests
 if(TURBOLOADER_BUILD_TESTS)
