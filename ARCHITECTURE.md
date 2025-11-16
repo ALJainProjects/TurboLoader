@@ -29,7 +29,7 @@ Deep dive into how TurboLoader achieves high-performance data loading.
 TurboLoader is designed around three key principles:
 
 1. **Zero-copy I/O**: Memory-mapped files avoid unnecessary data copying
-2. **Lock-free concurrency**: SPMC queues eliminate thread contention
+2. **Thread-safe concurrency**: Mutex-based queues provide reliable multi-threaded operation
 3. **Native threading**: C++ threads bypass Python's GIL
 
 ### Performance Goals
@@ -67,8 +67,8 @@ TurboLoader is designed around three key principles:
 
 ### Key Components
 
-1. **Reader Thread**: Reads TAR files using memory-mapped I/O
-2. **Lock-Free Queue**: Distributes samples to workers without contention
+1. **Reader Thread**: Reads TAR files using memory-mapped I/O (with mutex protection)
+2. **Thread-Safe Queue**: Distributes samples to workers with reliable synchronization
 3. **Worker Pool**: Decodes JPEG images in parallel
 4. **Output Queue**: Buffers ready batches for user consumption
 
@@ -116,38 +116,37 @@ private:
 
 ---
 
-### 2. Lock-Free SPMC Queue
+### 2. Thread-Safe Queue
 
-**File**: `src/core/lock_free_queue.hpp`
+**File**: `include/turboloader/core/thread_safe_queue.hpp`
 
-**Type**: Single-Producer Multiple-Consumer (SPMC)
+**Type**: Mutex-based concurrent queue
 
-**Key Innovation**: Cache-line aligned slots prevent false sharing
+**Key Design**: Condition variables for efficient blocking operations
 
 **Implementation**:
 ```cpp
 template<typename T>
-class LockFreeQueue {
-    struct alignas(64) Slot {  // Cache-line aligned
-        std::atomic<uint64_t> sequence{0};
-        T data;
-    };
-
-    Slot* buffer_;
+class ThreadSafeQueue {
+    std::mutex mutex_;
+    std::condition_variable cv_not_empty_;
+    std::condition_variable cv_not_full_;
+    std::queue<T> queue_;
     size_t capacity_;
 
-    alignas(64) std::atomic<uint64_t> enqueue_pos_{0};  // Writer
-    alignas(64) std::atomic<uint64_t> dequeue_pos_{0};  // Readers
+    bool try_push(T&& item);
+    std::optional<T> try_pop();
+    T pop();  // Blocking
 };
 ```
 
-**Why lock-free?**
-- **No mutex contention**: Atomic operations only
-- **Wait-free enqueue**: Producer never blocks
-- **Cache-friendly**: Aligned slots prevent false sharing
-- **Scalable**: Performance doesn't degrade with more threads
+**Why mutex-based?**
+- **Reliable**: Proven synchronization for complex objects (Sample with nested containers)
+- **Safe**: Eliminates race conditions with proper locking
+- **Stable**: Verified with ThreadSanitizer for high worker counts (8+ workers)
+- **Predictable**: Well-defined memory ordering guarantees
 
-**Performance**: 100M ops/sec on Apple Silicon
+**Performance**: Stable high-throughput with 8 workers on Apple Silicon
 
 ---
 
@@ -497,7 +496,7 @@ Main Process
 | **TAR reading** | mmap (zero-copy) | Repeated open/read (slow) |
 | **JPEG decoding** | libjpeg-turbo (SIMD) | Pillow (standard libjpeg) |
 | **Memory** | Shared | Duplicated per worker |
-| **Queue** | Lock-free SPMC | Python Queue (locks) |
+| **Queue** | Thread-safe (mutex) | Python Queue (locks) |
 
 **Result**: significantly faster on TAR datasets
 

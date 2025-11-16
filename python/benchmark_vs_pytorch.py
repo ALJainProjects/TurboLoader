@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Benchmark TurboLoader vs PyTorch DataLoader"""
 
-import sys
-sys.path.insert(0, '/Users/arnavjain/turboloader/build/python')
-
 import turboloader
 import time
 import tarfile
@@ -23,7 +20,7 @@ def benchmark_turboloader(tar_files, num_workers=4):
         decode_jpeg=True
     )
 
-    print(f"Total samples: {len(pipeline)}")
+    print(f"Total samples: {pipeline.total_samples()}")
 
     pipeline.start()
 

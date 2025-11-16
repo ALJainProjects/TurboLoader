@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Simple benchmark of TurboLoader Python API"""
 
-import sys
-sys.path.insert(0, '/Users/arnavjain/turboloader/build/python')
-
 import turboloader
 import time
 

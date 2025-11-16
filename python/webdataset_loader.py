@@ -22,13 +22,7 @@ from typing import List, Optional, Callable, Iterator, Dict, Any, Union
 import warnings
 
 # Import the C++ extension
-try:
-    # Try to import from installed package
-    import turboloader as _tl
-except ImportError:
-    # Fallback to build directory during development
-    sys.path.insert(0, 'build/python')
-    import turboloader as _tl
+import turboloader as _tl
 
 
 def default_collate(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -140,20 +134,22 @@ class WebDatasetLoader:
         self.collate_fn = collate_fn or default_collate
         self.drop_last = drop_last
 
-        # Create TurboLoader config
-        self.config = _tl.Config()
-        self.config.num_workers = num_workers
-        self.config.batch_size = batch_size
-        self.config.shuffle = shuffle
-        self.config.decode_jpeg = decode_jpeg
-        self.config.queue_size = queue_size
-        self.config.enable_simd_transforms = enable_simd_transforms
-
-        if transform_config is not None:
-            self.config.transform_config = transform_config
+        # Store configuration
+        self.decode_jpeg = decode_jpeg
+        self.enable_simd_transforms = enable_simd_transforms
+        self.transform_config = transform_config
+        self.queue_size = queue_size
 
         # Create the pipeline
-        self.pipeline = _tl.Pipeline(self.urls, self.config)
+        self.pipeline = _tl.Pipeline(
+            tar_paths=self.urls,
+            num_workers=num_workers,
+            queue_size=queue_size,
+            shuffle=shuffle,
+            decode_jpeg=decode_jpeg,
+            enable_simd_transforms=enable_simd_transforms,
+            transform_config=transform_config
+        )
 
         # Track state
         self.epoch = 0

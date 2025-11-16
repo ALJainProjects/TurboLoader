@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TurboLoader VERSION 0.1.0 LANGUAGES CXX)
+project(TurboLoader VERSION 0.3.8 LANGUAGES CXX)
 
 # C++20 required for modern features
 set(CMAKE_CXX_STANDARD 20)
@@ -15,9 +15,8 @@ endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
     set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -Wall -Wextra -Wpedantic")
-    # Enable sanitizers in debug mode
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined")
-    set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined")
+    # Sanitizers are now controlled via CMAKE_CXX_FLAGS from command line
+    # Removed automatic sanitizer addition to avoid conflicts
 endif()
 
 # Project structure

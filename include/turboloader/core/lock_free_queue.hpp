@@ -10,12 +10,18 @@ namespace turboloader {
 /**
  * Lock-free Single-Producer Multiple-Consumer (SPMC) queue
  *
+ * NOTE: For complex objects with nested containers (like Sample), use ThreadSafeQueue
+ * instead to prevent race conditions. This lock-free queue is best suited for simple
+ * POD types or trivially movable objects.
+ *
  * Optimized for ML data loading where:
  * - One producer thread reads/decodes data
  * - Multiple consumer threads (training workers) fetch batches
  *
  * Based on ring buffer with atomic operations for synchronization.
  * Cache-line padding prevents false sharing between producer/consumer.
+ *
+ * See also: ThreadSafeQueue for mutex-based alternative for complex types.
  */
 template <typename T>
 class LockFreeSPMCQueue {

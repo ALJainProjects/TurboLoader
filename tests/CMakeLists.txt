@@ -50,3 +50,8 @@ target_include_directories(test_transforms PRIVATE ${TURBOLOADER_INCLUDE_DIR})
 add_executable(test_simd_transforms test_simd_transforms.cpp)
 target_link_libraries(test_simd_transforms PRIVATE turboloader)
 target_include_directories(test_simd_transforms PRIVATE ${TURBOLOADER_INCLUDE_DIR})
+
+# Concurrency test (for ThreadSanitizer)
+add_executable(test_concurrency test_concurrency.cpp)
+target_link_libraries(test_concurrency PRIVATE turboloader)
+target_include_directories(test_concurrency PRIVATE ${TURBOLOADER_INCLUDE_DIR})
