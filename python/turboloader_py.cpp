@@ -3,6 +3,7 @@
 #include <pybind11/numpy.h>
 #include "turboloader/pipeline/pipeline.hpp"
 #include "turboloader/transforms/simd_transforms.hpp"
+#include "turboloader/transforms/augmentation_transforms.hpp"
 #include <thread>
 #include <chrono>
 
@@ -273,6 +274,111 @@ PYBIND11_MODULE(turboloader, m) {
             return "<Pipeline samples=" + std::to_string(p.total_samples()) + ">";
         });
 
+    // Augmentation Transforms
+    py::class_<AugmentationTransform, std::shared_ptr<AugmentationTransform>>(m, "AugmentationTransform")
+        .def("set_probability", &AugmentationTransform::set_probability)
+        .def("get_probability", &AugmentationTransform::get_probability);
+
+    py::class_<RandomHorizontalFlip, AugmentationTransform, std::shared_ptr<RandomHorizontalFlip>>(m, "RandomHorizontalFlip")
+        .def(py::init<float>(), py::arg("probability") = 0.5f,
+             "Random horizontal flip augmentation\n\n"
+             "Args:\n"
+             "    probability: Probability of applying the flip (default: 0.5)");
+
+    py::class_<RandomVerticalFlip, AugmentationTransform, std::shared_ptr<RandomVerticalFlip>>(m, "RandomVerticalFlip")
+        .def(py::init<float>(), py::arg("probability") = 0.5f,
+             "Random vertical flip augmentation\n\n"
+             "Args:\n"
+             "    probability: Probability of applying the flip (default: 0.5)");
+
+    py::class_<ColorJitter, AugmentationTransform, std::shared_ptr<ColorJitter>>(m, "ColorJitter")
+        .def(py::init<float, float, float, float>(),
+             py::arg("brightness") = 0.0f,
+             py::arg("contrast") = 0.0f,
+             py::arg("saturation") = 0.0f,
+             py::arg("hue") = 0.0f,
+             "Color jitter augmentation (SIMD optimized)\n\n"
+             "Args:\n"
+             "    brightness: Brightness adjustment range (default: 0.0)\n"
+             "    contrast: Contrast adjustment range (default: 0.0)\n"
+             "    saturation: Saturation adjustment range (default: 0.0)\n"
+             "    hue: Hue adjustment range (default: 0.0)")
+        .def("set_brightness_range", &ColorJitter::set_brightness_range)
+        .def("set_contrast_range", &ColorJitter::set_contrast_range)
+        .def("set_saturation_range", &ColorJitter::set_saturation_range)
+        .def("set_hue_range", &ColorJitter::set_hue_range);
+
+    py::class_<RandomRotation, AugmentationTransform, std::shared_ptr<RandomRotation>>(m, "RandomRotation")
+        .def(py::init<float>(), py::arg("degrees") = 0.0f,
+             "Random rotation augmentation with bilinear interpolation\n\n"
+             "Args:\n"
+             "    degrees: Maximum rotation angle in degrees (default: 0.0)")
+        .def("set_degrees", &RandomRotation::set_degrees)
+        .def("set_fill_color", &RandomRotation::set_fill_color,
+             py::arg("r"), py::arg("g"), py::arg("b"));
+
+    py::class_<RandomCrop, AugmentationTransform, std::shared_ptr<RandomCrop>>(m, "RandomCrop")
+        .def(py::init<int, int>(),
+             py::arg("crop_width"),
+             py::arg("crop_height"),
+             "Random crop augmentation\n\n"
+             "Args:\n"
+             "    crop_width: Width of the crop\n"
+             "    crop_height: Height of the crop");
+
+    py::class_<RandomErasing, AugmentationTransform, std::shared_ptr<RandomErasing>>(m, "RandomErasing")
+        .def(py::init<float, float, float, float, float>(),
+             py::arg("probability") = 0.5f,
+             py::arg("scale_min") = 0.02f,
+             py::arg("scale_max") = 0.33f,
+             py::arg("ratio_min") = 0.3f,
+             py::arg("ratio_max") = 3.3f,
+             "Random erasing augmentation (Cutout)\n\n"
+             "Args:\n"
+             "    probability: Probability of applying erasing (default: 0.5)\n"
+             "    scale_min: Minimum area scale (default: 0.02)\n"
+             "    scale_max: Maximum area scale (default: 0.33)\n"
+             "    ratio_min: Minimum aspect ratio (default: 0.3)\n"
+             "    ratio_max: Maximum aspect ratio (default: 3.3)");
+
+    py::class_<GaussianBlur, AugmentationTransform, std::shared_ptr<GaussianBlur>>(m, "GaussianBlur")
+        .def(py::init<float, int>(),
+             py::arg("sigma") = 1.0f,
+             py::arg("kernel_size") = 5,
+             "Gaussian blur augmentation (SIMD optimized)\n\n"
+             "Args:\n"
+             "    sigma: Gaussian kernel sigma (default: 1.0)\n"
+             "    kernel_size: Kernel size (default: 5)")
+        .def("set_sigma_range", &GaussianBlur::set_sigma_range,
+             py::arg("min_sigma"), py::arg("max_sigma"));
+
+    py::class_<AugmentationPipeline>(m, "AugmentationPipeline")
+        .def(py::init<>(), "Create an augmentation pipeline")
+        .def(py::init<uint64_t>(), py::arg("seed"), "Create pipeline with random seed")
+        .def("add_transform", &AugmentationPipeline::add_transform,
+             "Add a transform to the pipeline")
+        .def("set_seed", &AugmentationPipeline::set_seed, "Set random seed")
+        .def("num_transforms", &AugmentationPipeline::num_transforms,
+             "Get number of transforms in pipeline")
+        .def("clear", &AugmentationPipeline::clear,
+             "Clear all transforms from pipeline");
+
+    // Config class - add augmentation pipeline support
+    py::class_<Pipeline::Config>(m, "Config")
+        .def(py::init<>())
+        .def_readwrite("num_workers", &Pipeline::Config::num_workers)
+        .def_readwrite("queue_size", &Pipeline::Config::queue_size)
+        .def_readwrite("prefetch_factor", &Pipeline::Config::prefetch_factor)
+        .def_readwrite("shuffle", &Pipeline::Config::shuffle)
+        .def_readwrite("shuffle_buffer_size", &Pipeline::Config::shuffle_buffer_size)
+        .def_readwrite("decode_jpeg", &Pipeline::Config::decode_jpeg)
+        .def_readwrite("enable_simd_transforms", &Pipeline::Config::enable_simd_transforms)
+        .def_readwrite("transform_config", &Pipeline::Config::transform_config)
+        .def_readwrite("enable_resize", &Pipeline::Config::enable_resize)
+        .def_readwrite("resize_width", &Pipeline::Config::resize_width)
+        .def_readwrite("resize_height", &Pipeline::Config::resize_height)
+        .def_readwrite("enable_normalize", &Pipeline::Config::enable_normalize);
+
     // Version info
-    m.attr("__version__") = "0.2.0";
+    m.attr("__version__") = "0.3.0";
 }

@@ -35,8 +35,11 @@ class CMakeBuild(build_ext):
         if not extdir.endswith(os.path.sep):
             extdir += os.path.sep
 
+        # Place the .so file inside the turboloader/ package directory
+        library_output_dir = os.path.join(extdir, 'turboloader')
+
         cmake_args = [
-            f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}',
+            f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={library_output_dir}',
             f'-DPYTHON_EXECUTABLE={sys.executable}',
             '-DTURBOLOADER_BUILD_TESTS=OFF',
             '-DTURBOLOADER_BUILD_BENCHMARKS=OFF',
@@ -68,7 +71,7 @@ if readme_path.exists():
 
 setup(
     name='turboloader',
-    version='0.2.1',
+    version='0.3.0',
     author='Arnav Jain',
     author_email='arnav@arnavjain.com',
     description='High-performance ML data loading library with SIMD optimizations',
