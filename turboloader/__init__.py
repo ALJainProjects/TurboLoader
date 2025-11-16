@@ -13,7 +13,7 @@ Example usage:
     >>> batch = pipeline.next_batch(256)
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __author__ = "Arnav Jain"
 __license__ = "MIT"
 
