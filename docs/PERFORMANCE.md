@@ -1,5 +1,12 @@
 # Performance Tuning Guide
 
+
+> **Note**: Performance claims in this documentation are based on preliminary benchmarks on synthetic datasets. 
+> Actual performance will vary based on hardware, dataset characteristics, and workload. 
+> We recommend running benchmarks on your specific use case.
+
+
+
 Optimization tips for maximum TurboLoader performance.
 
 ---
@@ -29,9 +36,9 @@ python benchmarks/scaling_benchmark.py /tmp/benchmark_10k.tar
 ```
 
 Expected results:
-- 1 → 2 workers: ~1.9x speedup
-- 1 → 4 workers: ~3.6x speedup
-- 1 → 8 workers: ~4.0x speedup (diminishing returns)
+- 1 → 2 workers: ~significant speedup
+- 1 → 4 workers: ~significant speedup
+- 1 → 8 workers: ~significant speedup (diminishing returns)
 
 ---
 
@@ -41,10 +48,10 @@ Larger batches = higher throughput (up to a point)
 
 | Batch Size | Throughput | Notes |
 |------------|------------|-------|
-| 8 | 9,000 img/s | Underutilized |
-| 32 | 11,500 img/s | Good ✅ |
-| 64 | 11,800 img/s | Optimal |
-| 128 | 12,000 img/s | Marginal gains |
+| 8 | high throughput | Underutilized |
+| 32 | high throughput | Good ✅ |
+| 64 | high throughput | Optimal |
+| 128 | high throughput | Marginal gains |
 
 **Recommendation**: 32-64 for balanced throughput/latency
 

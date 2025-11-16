@@ -5,6 +5,21 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2025-01-15
+
+### Changed
+- Fixed setuptools deprecation warnings (license format in pyproject.toml)
+- Removed MIT License classifier to avoid duplicate license declarations
+- Updated all documentation files (docs/) to use conservative performance claims
+- Replaced specific unverified benchmark numbers with qualitative descriptions
+- Added performance disclaimers to all documentation files
+
+### Documentation
+- All docs now use "significantly faster" instead of specific unverified multiples
+- Removed unverified throughput claims throughout docs/
+- Added disclaimer: "Performance claims based on preliminary benchmarks on synthetic datasets"
+- Consistent conservative language across all 9 documentation files
+
 ## [0.3.2] - 2025-01-15
 
 ### Changed

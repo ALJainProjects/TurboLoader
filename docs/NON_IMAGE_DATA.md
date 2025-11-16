@@ -1,5 +1,12 @@
 # TurboLoader: Non-Image Data Support
 
+
+> **Note**: Performance claims in this documentation are based on preliminary benchmarks on synthetic datasets. 
+> Actual performance will vary based on hardware, dataset characteristics, and workload. 
+> We recommend running benchmarks on your specific use case.
+
+
+
 ## Current Status: What TurboLoader Supports
 
 ### ✅ Currently Supported (v0.2.0)
@@ -440,7 +447,7 @@ sample_000.npy    # NumPy array
 ```
 
 ### Q: Will non-image data be faster than PyTorch DataLoader?
-**A**: Yes, typically 5-10x faster due to:
+**A**: Yes, typically 5-significantly faster due to:
 - C++ multi-threading
 - Zero-copy mmap
 - Efficient prefetching
@@ -451,7 +458,7 @@ But not as fast as images (35x) since there's no SIMD-optimized decode yet.
 **A**: Currently you decode in Python. In the future, we'll add C++ extension API for custom SIMD-optimized decoders.
 
 ### Q: What about video?
-**A**: Works today (decode frames in Python), but native video support coming in v0.3.0 with 25-35x speedup.
+**A**: Works today (decode frames in Python), but native video support coming in v0.3.0 with 25-significant speedup.
 
 ### Q: What about large language model (LLM) pre-training data?
 **A**: Perfect use case! TurboLoader can stream text data much faster than PyTorch DataLoader. Use with HuggingFace tokenizers.
@@ -461,18 +468,18 @@ But not as fast as images (35x) since there's no SIMD-optimized decode yet.
 ## Summary
 
 **Current Support:**
-- ✅ Images (35x faster with SIMD)
-- ✅ Text (5-10x faster with multi-threading)
-- ✅ Audio (5-10x faster with multi-threading)
-- ✅ Any binary format (5-10x faster)
+- ✅ Images (significantly faster with SIMD)
+- ✅ Text (5-significantly faster with multi-threading)
+- ✅ Audio (5-significantly faster with multi-threading)
+- ✅ Any binary format (5-significantly faster)
 
 **Future Support:**
-- 🎯 Native audio decode (15-20x faster)
-- 🎯 Native tokenization (10-15x faster)
-- 🎯 Native video decode (25-35x faster)
-- 🎯 NumPy/Arrow (20-30x faster)
+- 🎯 Native audio decode (15-significantly faster)
+- 🎯 Native tokenization (10-significantly faster)
+- 🎯 Native video decode (25-significantly faster)
+- 🎯 NumPy/Arrow (20-significantly faster)
 
 **Bottom Line:**
-TurboLoader works with **any data type** today and is already 5-10x faster than PyTorch DataLoader for non-image data. With upcoming features, non-image data will be 15-30x faster!
+TurboLoader works with **any data type** today and is already 5-significantly faster than PyTorch DataLoader for non-image data. With upcoming features, non-image data will be 15-significantly faster!
 
 Try it now: `pip install turboloader`

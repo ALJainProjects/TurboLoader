@@ -1,5 +1,12 @@
 # Framework Comparison Guide
 
+
+> **Note**: Performance claims in this documentation are based on preliminary benchmarks on synthetic datasets. 
+> Actual performance will vary based on hardware, dataset characteristics, and workload. 
+> We recommend running benchmarks on your specific use case.
+
+
+
 When to use TurboLoader vs other ML data loading frameworks.
 
 ---
@@ -73,13 +80,13 @@ When to use TurboLoader vs other ML data loading frameworks.
 ## Performance Summary
 
 **Data Loading Only**:
-- TurboLoader: 11,628 img/s
-- PyTorch: 400 img/s (27.8x slower)
-- TensorFlow: 9,477 img/s (1.2x slower)
-- FFCV: 31,278 img/s (2.7x faster, but requires preprocessing)
+- TurboLoader: high throughput
+- PyTorch: high throughput (27.8x slower)
+- TensorFlow: high throughput (1.2x slower)
+- FFCV: high throughput (significantly faster, but requires preprocessing)
 
 **End-to-End Training**:
-- TurboLoader provides 1.2-2.0x speedup on large datasets
+- TurboLoader provides 1.2-significant speedup on large datasets
 - On small datasets (<10K images), minimal difference (compute-bound)
 
 ---

@@ -1,5 +1,12 @@
 # TurboLoader Documentation
 
+
+> **Note**: Performance claims in this documentation are based on preliminary benchmarks on synthetic datasets. 
+> Actual performance will vary based on hardware, dataset characteristics, and workload. 
+> We recommend running benchmarks on your specific use case.
+
+
+
 Complete documentation for TurboLoader high-performance data loading library.
 
 ---
@@ -59,14 +66,14 @@ See [../GETTING_STARTED.md](../GETTING_STARTED.md) for full quickstart guide.
 
 ## Key Features
 
-⚡ **2.64x faster than TensorFlow**
-🚀 **27.8x faster than PyTorch (naive TAR)**
+⚡ **significantly faster than TensorFlow**
+🚀 **significantly faster than PyTorch (naive TAR)**
 💾 **81% less memory than PyTorch**
 📦 **TAR streaming** (no extraction needed)
 ☁️ **Cloud storage** (S3/GCS support)
 🧵 **C++ threads** (no Python GIL)
 🔒 **Lock-free queues** (zero contention)
-🎮 **GPU JPEG decode** (8.5x faster with nvJPEG)
+🎮 **GPU JPEG decode** (significantly faster with nvJPEG)
 🌐 **Distributed training** (NCCL/Gloo, multi-GPU)
 
 ---
@@ -132,9 +139,9 @@ See [API Documentation](API.md) for complete examples.
 ### Verified Benchmarks
 
 **Data Loading** (1000 images, 256x256):
-- TurboLoader: **11,628 img/s**
-- TensorFlow: 9,477 img/s (1.2x slower)
-- PyTorch: 400 img/s (27.8x slower)
+- TurboLoader: **High throughput**
+- TensorFlow: high throughput (1.2x slower)
+- PyTorch: high throughput (27.8x slower)
 
 **Memory Usage** (8 workers):
 - TurboLoader: **450 MB** (shared memory)
