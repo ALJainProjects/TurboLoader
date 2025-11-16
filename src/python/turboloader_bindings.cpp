@@ -172,8 +172,11 @@ private:
 
 /**
  * @brief pybind11 module definition
+ *
+ * Module is named _turboloader (with underscore) to avoid conflicts
+ * with the turboloader package. The Python __init__.py re-exports the API.
  */
-PYBIND11_MODULE(turboloader, m) {
+PYBIND11_MODULE(_turboloader, m) {
     m.doc() = "TurboLoader v0.4.0 - High-performance data loading\n\n"
               "Drop-in replacement for PyTorch DataLoader with 10-100x speedup.\n\n"
               "Features:\n"
