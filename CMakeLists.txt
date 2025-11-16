@@ -111,6 +111,7 @@ set(TURBOLOADER_SOURCES
     ${TURBOLOADER_SOURCE_DIR}/decoders/webp_decoder.cpp
     ${TURBOLOADER_SOURCE_DIR}/transforms/image_transform.cpp
     ${TURBOLOADER_SOURCE_DIR}/transforms/simd_transforms.cpp
+    ${TURBOLOADER_SOURCE_DIR}/transforms/augmentation_transforms.cpp
     ${TURBOLOADER_SOURCE_DIR}/pipeline/pipeline.cpp
 )
 

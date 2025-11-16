@@ -1,5 +1,6 @@
 #include "turboloader/core/thread_pool.hpp"
 #include <algorithm>
+#include <iostream>
 
 #ifdef __linux__
 #include <pthread.h>
