@@ -27,43 +27,33 @@ TurboLoader is a high-performance data loading library designed to accelerate ML
 
 ## Performance
 
-### Current Status (v0.3.8)
+### Current Status (v0.6.0)
 
-> **IMPORTANT**: TurboLoader v0.3.8 has a critical performance issue and is currently **2.7x slower** than PyTorch DataLoader. We have identified the root causes and are implementing a complete rewrite in TurboLoader (see roadmap below).
+**Comprehensive Benchmark Results** (2000 images, 8 workers, batch_size=32, 3 epochs):
 
-**End-to-End Data Loading Benchmark** (1000 images, 4 workers, batch_size=32):
+| Rank | Framework | Throughput | vs TurboLoader | Avg Epoch Time |
+|------|-----------|------------|----------------|----------------|
+| 1 | **TurboLoader** | **10,146 img/s** | **1.00x** | **0.18s** |
+| 2 | TensorFlow tf.data | 7,569 img/s | 0.75x | 0.26s |
+| 3 | PyTorch Cached | 3,123 img/s | 0.31x | 0.64s |
+| 4 | PyTorch Optimized | 835 img/s | 0.08x | 2.40s |
+| 5 | PIL Baseline | 277 img/s | 0.03x | 7.22s |
+| 6 | PyTorch Naive | 85 img/s | 0.01x | 23.67s |
 
-| Library | Throughput | Status |
-|---------|------------|--------|
-| PyTorch DataLoader | 48.07 img/s | ✅ Baseline |
-| TurboLoader v0.3.8 | 17.56 img/s | ❌ 63% slower |
-| TurboLoader TurboLoader (target) | 150-200 img/s | 🚧 In development |
-
-**Identified Root Causes**:
-1. TAR mutex contention (75% impact) - all workers serialize on shared file handle
-2. Memory allocation/copy overhead (20% impact)
-3. Busy-wait spinning (10% impact)
-4. Thread pool contention (10% impact)
-5. JPEG decoder inefficiency (5% impact)
-
-See [GitHub Issue](https://github.com/ALJainProjects/TurboLoader/issues) and [ARCHITECTURE_V2.md](https://github.com/ALJainProjects/TurboLoader/blob/TurboLoader-rewrite/ARCHITECTURE_V2.md) for detailed analysis.
-
-### SIMD Transform Performance (Micro-benchmarks)
-
-**SIMD Transform Performance** (Apple M1 Pro, NEON backend):
-
-| Operation | Throughput | Time per Image |
-|-----------|------------|----------------|
-| Resize (256x256→224x224) | 6,718 img/s | 148.85 μs |
-| Normalize (RGB) | 47,438 img/s | 21.08 μs |
+**Key Highlights**:
+- **12x faster** than PyTorch Optimized DataLoader
+- **3.2x faster** than PyTorch with local file caching
+- **1.3x faster** than TensorFlow tf.data
+- **Extremely stable**: ±0.005s standard deviation across epochs
+- **Memory efficient**: 848 MB peak memory usage
 
 **Test Configuration**:
 - Hardware: Apple M1 Pro (8 cores, 16GB RAM)
-- Input: 256x256 RGB images
-- Backend: NEON SIMD instructions
-- All tests run on synthetic datasets
+- Dataset: 2000 synthetic 256x256 JPEG images (117 MB TAR archive)
+- Configuration: 8 workers, batch size 32, 3 epochs
+- Backend: C++ multi-threaded pipeline with SIMD optimizations
 
-> **Note**: These are micro-benchmarks of individual SIMD operations. End-to-end data loading performance is affected by the architectural issues described above.
+See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for detailed analysis and interactive [benchmark report](BENCHMARK_REPORT.html).
 
 ---
 
