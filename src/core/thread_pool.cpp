@@ -92,9 +92,13 @@ void ThreadPool::worker_loop(size_t thread_id) {
         active_tasks_++;
         try {
             task.task();
+        } catch (const std::exception& e) {
+            // Catch and silently swallow exceptions to prevent thread termination
+            // In production, this would log to stderr or a logging system
+            std::cerr << "Thread pool task exception: " << e.what() << std::endl;
         } catch (...) {
-            // Catch exceptions to prevent thread termination
-            // TODO: Add logging/error handling
+            // Catch all other exceptions
+            std::cerr << "Thread pool task exception: unknown error" << std::endl;
         }
         active_tasks_--;
 
