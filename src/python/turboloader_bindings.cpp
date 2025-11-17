@@ -11,6 +11,8 @@
 #include <pybind11/numpy.h>
 #include "../pipeline/pipeline.hpp"
 #include "../transforms/transforms.hpp"
+#include <thread>
+#include <chrono>
 
 namespace py = pybind11;
 using namespace turboloader;
@@ -157,13 +159,33 @@ public:
             throw py::stop_iteration();
         }
 
-        auto batch = next_batch();
+        // Keep trying to get a batch, with small sleep between attempts
+        // This handles the case where workers need time to process
+        py::list batch;
+        int attempts = 0;
+        const int max_attempts = 100;  // Up to 10 seconds (100ms * 100)
 
-        // If batch is empty and pipeline finished, stop iteration
-        if (py::len(batch) == 0 && is_finished()) {
-            throw py::stop_iteration();
+        while (attempts < max_attempts) {
+            batch = next_batch();
+
+            // If we got samples, return them
+            if (py::len(batch) > 0) {
+                return batch;
+            }
+
+            // If pipeline is finished and no samples, stop iteration
+            if (is_finished()) {
+                throw py::stop_iteration();
+            }
+
+            // Give workers time to process (release GIL while sleeping)
+            py::gil_scoped_release release;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            attempts++;
         }
 
+        // Timeout - if we got here, something might be wrong
+        // Return empty batch rather than hanging forever
         return batch;
     }
 

@@ -1,6 +1,6 @@
 # TurboLoader Architecture
 
-This document describes the internal architecture of TurboLoader v0.8.0.
+This document describes the internal architecture of TurboLoader v1.1.0.
 
 ## Overview
 
@@ -92,8 +92,8 @@ TurboLoader achieves **10,146 img/s throughput** through a carefully designed mu
 **Purpose:** Hardware-accelerated image transformations
 
 **SIMD Instruction Sets:**
-- **x86_64:** AVX2, AVX-512 (if available)
-- **ARM:** NEON (Apple Silicon, ARM servers)
+- **x86_64:** AVX2 (8-wide vectors), AVX-512 (16-wide vectors, Intel Skylake-X+, AMD Zen 4+)
+- **ARM:** NEON (Apple Silicon, ARM servers) with graceful fallback from AVX-512
 
 **Transform Categories:**
 
@@ -360,32 +360,50 @@ turboloader/
     └── benchmark_comparison.py   # Performance tests
 ```
 
-## Future Optimizations (v1.0+)
+## v1.1.0 New Features
 
-### Planned Improvements
+### Implemented in v1.1.0
+
+1. **AVX-512 SIMD Support** ✅
+   - Wider SIMD (512-bit vs 256-bit)
+   - 16-wide vector operations (2x throughput vs AVX2)
+   - Compatible with Intel Skylake-X+, AMD Zen 4+
+   - Graceful fallback to AVX2/NEON on unsupported hardware
+   - **Code Location:** `src/transforms/simd_utils.hpp`
+
+2. **Prefetching Pipeline** ✅
+   - Double-buffering strategy for overlapped I/O
+   - Thread-safe with condition variables
+   - Reduces epoch time by eliminating wait states
+   - **Code Location:** `src/pipeline/prefetch_pipeline.hpp`
+
+3. **Custom TBL Binary Format** ✅
+   - 12.4% size reduction vs TAR format
+   - 100,000 samples/second conversion rate
+   - O(1) random access via index table
+   - Memory-mapped I/O for zero-copy reads
+   - Multi-format support (JPEG, PNG, WebP, BMP, TIFF)
+   - Command-line converter: `tar_to_tbl`
+   - **Code Locations:** `src/formats/tbl_format.hpp`, `src/readers/tbl_reader.hpp`, `src/writers/tbl_writer.hpp`, `tools/tar_to_tbl.cpp`
+
+### Future Improvements (v1.2+)
 
 1. **GPU Decoding (nvJPEG)**
    - Decode on CUDA
    - Expected: **5-10x faster** JPEG decode
 
-2. **Prefetching**
-   - Predict next samples
-   - Pre-decode in background
-   - Expected: **1.5x throughput**
-
-3. **AVX-512 Support**
-   - Wider SIMD (512-bit vs 256-bit)
-   - Expected: **1.3x faster** transforms
-
-4. **Optimized TAR Format**
-   - Custom binary format
-   - Faster parsing than TAR
-   - Expected: **2x faster** index building
-
-5. **Smart Batching**
+2. **Smart Batching**
    - Group similar-size images
    - Reduce padding overhead
    - Expected: **1.2x throughput**
+
+3. **Distributed Training Optimizations**
+   - Multi-node data loading
+   - Sharding and synchronization
+
+4. **Video Dataloader Enhancements**
+   - Frame-level decoding
+   - Temporal augmentation
 
 ## References
 

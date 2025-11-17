@@ -190,5 +190,26 @@ target_link_libraries(test_advanced_transforms PRIVATE turboloader gtest gtest_m
 add_test(NAME advanced_transforms COMMAND test_advanced_transforms)
 message(STATUS "Building advanced transform tests (v0.7.0)")
 
+# Test executable for AVX-512 SIMD optimizations (v1.1.0)
+add_executable(test_avx512_simd test_avx512_simd.cpp)
+target_include_directories(test_avx512_simd PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_avx512_simd PRIVATE turboloader)
+add_test(NAME avx512_simd COMMAND test_avx512_simd)
+message(STATUS "Building AVX-512 SIMD tests (v1.1.0)")
+
+# Test executable for prefetch pipeline (v1.1.0)
+add_executable(test_prefetch_pipeline test_prefetch_pipeline.cpp)
+target_include_directories(test_prefetch_pipeline PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_prefetch_pipeline PRIVATE turboloader)
+add_test(NAME prefetch_pipeline COMMAND test_prefetch_pipeline)
+message(STATUS "Building prefetch pipeline tests (v1.1.0)")
+
+# Test executable for TBL format (v1.1.0)
+add_executable(test_tbl_format test_tbl_format.cpp)
+target_include_directories(test_tbl_format PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_tbl_format PRIVATE turboloader)
+add_test(NAME tbl_format COMMAND test_tbl_format)
+message(STATUS "Building TBL format tests (v1.1.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)

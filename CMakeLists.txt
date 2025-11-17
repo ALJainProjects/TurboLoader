@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TurboLoader VERSION 1.0.0 LANGUAGES CXX)
+project(TurboLoader VERSION 1.1.0 LANGUAGES CXX)
 
 # C++20 required for modern features (std::span, concepts, etc.)
 set(CMAKE_CXX_STANDARD 20)
@@ -177,6 +177,13 @@ endif()
 
 # Enable CURL support
 target_compile_definitions(turboloader ${LINK_SCOPE} HAVE_CURL)
+
+# Command-line tools (v1.1.0)
+# TAR to TBL converter tool
+add_executable(tar_to_tbl tools/tar_to_tbl.cpp)
+target_include_directories(tar_to_tbl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(tar_to_tbl PRIVATE turboloader)
+install(TARGETS tar_to_tbl DESTINATION bin)
 
 # Tests
 if(TURBOLOADER_BUILD_TESTS)

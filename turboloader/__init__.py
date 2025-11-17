@@ -1,6 +1,6 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v1.0.0 - First Stable Release
+v1.1.0 - Enhanced Performance Release
 
 Production-Ready Features:
 - 10,146 img/s throughput (12x faster than PyTorch Optimized, 1.3x faster than TensorFlow)
