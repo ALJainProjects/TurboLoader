@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboloader"
-version = "1.1.0"
+version = "1.2.0"
 description = "High-performance ML data loading library (10,146 img/s, 12x faster than PyTorch). Features: 19 SIMD-accelerated transforms (AVX2/NEON), AutoAugment policies, PyTorch/TensorFlow tensor conversion, lock-free concurrent queues, memory-mapped I/O, WebDataset TAR format, professional documentation, and interactive benchmark web app. C++20 implementation with Python bindings."
 readme = "README.md"
 requires-python = ">=3.8"
