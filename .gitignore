@@ -35,3 +35,5 @@ benchmark_results/
 .cache/
 *.cache
 .venv/
+/build_test/
+/build_debug/
