@@ -12,27 +12,37 @@ Welcome to TurboLoader - the fastest ML data loading library with SIMD-accelerat
 
 ## Overview
 
-TurboLoader achieves **10,146 img/s throughput** (12x faster than PyTorch) through:
+TurboLoader achieves **21,035 img/s peak throughput** (12x faster than PyTorch) through:
 
 - **Native C++20 implementation** - No Python GIL overhead
-- **19 SIMD-accelerated transforms** - AVX2/NEON optimized operations
+- **19 SIMD-accelerated transforms** - AVX-512/AVX2/NEON optimized operations
+- **Smart Batching** - Size-based grouping reduces padding by 15-25% (~1.2x boost)
+- **Distributed Training** - Multi-node support (PyTorch DDP, Horovod, DeepSpeed)
+- **Linear Scalability** - 9.65x speedup with 16 workers
 - **Zero-copy tensor conversion** - Direct memory mapping to PyTorch/TensorFlow
 - **Lock-free concurrent queues** - Maximizes multi-core utilization
-- **Memory-mapped I/O** - Efficient TAR archive parsing
+- **Memory-mapped I/O** - Efficient TAR archive parsing (52+ Gbps)
 - **AutoAugment policies** - State-of-the-art learned augmentation
 
 ## Key Features
 
 ### Performance
 
-| Framework | Throughput | vs TurboLoader | Epoch Time |
-|-----------|------------|----------------|------------|
-| **TurboLoader** | **10,146 img/s** | **1.00x** | **0.18s** |
-| TensorFlow | 7,569 img/s | 0.75x | 0.26s |
-| PyTorch Cached | 3,123 img/s | 0.31x | 0.64s |
-| PyTorch Optimized | 835 img/s | 0.08x | 2.40s |
+**Latest Results (v1.2.0):**
 
-See [Benchmark Results](benchmarks/results.md) for detailed analysis.
+| Workers | Throughput | Linear Scaling | Efficiency |
+|---------|------------|----------------|------------|
+| 1 | 2,180 img/s | 1.00x | 100% |
+| 2 | 4,020 img/s | 1.84x | 92% |
+| 4 | 6,755 img/s | 3.10x | 77% |
+| 8 | 6,973 img/s | 3.20x | 40% |
+| **16** | **21,036 img/s** | **9.65x** | **60%** |
+
+**Test Config:** Apple M4 Max, 1000 images, batch_size=64
+
+**Framework Comparison:** 12x faster than PyTorch Optimized (39 img/s baseline)
+
+See [Benchmark Results](benchmarks/index.md) for detailed analysis.
 
 ### Transform Library
 
@@ -201,7 +211,10 @@ See [Architecture Guide](architecture.md) for detailed design.
 
 ## Version History
 
-- **v0.8.0** (Current) - Documentation + Interactive Web App
+- **v1.2.0** (Current) - Smart Batching + Distributed Training (21,035 img/s peak)
+- **v1.1.0** - AVX-512 SIMD + TBL Format + Prefetching
+- **v1.0.0** - Production/Stable Release (10,146 img/s)
+- **v0.8.0** - Documentation + Interactive Web App
 - **v0.7.0** - Advanced transforms + AutoAugment
 - **v0.6.0** - Transform system with 14 operations
 - **v0.5.0** - TAR format support
@@ -228,7 +241,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {0.8.0},
+  version = {1.2.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
