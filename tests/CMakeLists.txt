@@ -211,5 +211,12 @@ target_link_libraries(test_tbl_format PRIVATE turboloader)
 add_test(NAME tbl_format COMMAND test_tbl_format)
 message(STATUS "Building TBL format tests (v1.1.0)")
 
+# Test executable for Smart Batching (v1.2.0)
+add_executable(test_smart_batching test_smart_batching.cpp)
+target_include_directories(test_smart_batching PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_smart_batching PRIVATE turboloader)
+add_test(NAME smart_batching COMMAND test_smart_batching)
+message(STATUS "Building Smart Batching tests (v1.2.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
