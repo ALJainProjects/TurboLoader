@@ -286,9 +286,9 @@ public:
         : config_(config),
           worker_id_(worker_id),
           buffer_pool_(buffer_pool),
+          queue_(std::make_unique<WorkerQueue>()),
           running_(false),
-          samples_processed_(0),
-          queue_(std::make_unique<WorkerQueue>()) {
+          samples_processed_(0) {
 
         // Per-worker TAR reader
         // Check if using remote TAR data (already fetched)
@@ -384,8 +384,8 @@ private:
     }
 
     UnifiedPipelineConfig config_;
-    size_t worker_id_;
-    BufferPool* buffer_pool_;
+    [[maybe_unused]] size_t worker_id_;
+    [[maybe_unused]] BufferPool* buffer_pool_;
 
     std::unique_ptr<TarReader> tar_reader_;
     std::unique_ptr<JPEGDecoder> decoder_;
@@ -410,8 +410,8 @@ public:
     explicit UnifiedPipeline(const UnifiedPipelineConfig& config)
         : config_(config),
           running_(false),
-          batches_produced_(0),
-          samples_processed_(0) {
+          samples_processed_(0),
+          batches_produced_(0) {
 
         // Auto-detect format
         if (config_.format == DataFormat::UNKNOWN) {

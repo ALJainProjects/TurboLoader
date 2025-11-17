@@ -26,7 +26,7 @@ public:
                 uint8_t value = 0)
         : pad_left_(pad_left), pad_top_(pad_top),
           pad_right_(pad_right), pad_bottom_(pad_bottom),
-          mode_(mode), value_(value), padding_(0) {}
+          padding_(0), mode_(mode), value_(value) {}
 
     std::unique_ptr<ImageData> apply(const ImageData& input) override {
         int left = (padding_ > 0) ? padding_ : pad_left_;

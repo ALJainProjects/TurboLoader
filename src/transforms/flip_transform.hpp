@@ -32,8 +32,6 @@ public:
         }
 
         // Horizontal flip: reverse each row
-        int row_bytes = input.width * input.channels;
-
         for (int y = 0; y < input.height; ++y) {
             const uint8_t* src_row = input.data + y * input.stride;
             uint8_t* dst_row = output->data + y * output->stride;
