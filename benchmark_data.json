@@ -1,0 +1,163 @@
+{
+  "metadata": {
+    "generated_at": "2025-11-16 19:36:24",
+    "dataset_size": 5000,
+    "image_size": "256x256",
+    "version": "0.8.1",
+    "note": "Mock data for demonstration"
+  },
+  "frameworks": [
+    {
+      "name": "TurboLoader",
+      "throughput": 10146,
+      "memory": 245,
+      "cpu": 85,
+      "description": "C++20 with SIMD acceleration"
+    },
+    {
+      "name": "PyTorch Optimized",
+      "throughput": 842,
+      "memory": 1890,
+      "cpu": 92,
+      "description": "PyTorch with persistent workers"
+    },
+    {
+      "name": "PyTorch Naive",
+      "throughput": 215,
+      "memory": 2340,
+      "cpu": 78,
+      "description": "Basic PyTorch DataLoader"
+    },
+    {
+      "name": "TensorFlow",
+      "throughput": 7680,
+      "memory": 892,
+      "cpu": 88,
+      "description": "TensorFlow tf.data pipeline"
+    },
+    {
+      "name": "FFCV",
+      "throughput": 8920,
+      "memory": 512,
+      "cpu": 90,
+      "description": "Fast Forward Computer Vision"
+    },
+    {
+      "name": "DALI",
+      "throughput": 6840,
+      "memory": 678,
+      "cpu": 87,
+      "description": "NVIDIA DALI"
+    },
+    {
+      "name": "PIL Baseline",
+      "throughput": 128,
+      "memory": 3200,
+      "cpu": 65,
+      "description": "Pure Python PIL"
+    },
+    {
+      "name": "Torchvision",
+      "throughput": 456,
+      "memory": 1560,
+      "cpu": 72,
+      "description": "Torchvision transforms"
+    }
+  ],
+  "workers": {
+    "workers": [
+      1,
+      2,
+      4,
+      8,
+      16
+    ],
+    "turboloader": [
+      3421,
+      6234,
+      10146,
+      12340,
+      13120
+    ],
+    "pytorch": [
+      198,
+      356,
+      842,
+      1120,
+      1240
+    ],
+    "tensorflow": [
+      2145,
+      4280,
+      7680,
+      8920,
+      9340
+    ]
+  },
+  "batchSize": {
+    "sizes": [
+      8,
+      16,
+      32,
+      64,
+      128,
+      256
+    ],
+    "turboloader": [
+      8234,
+      9456,
+      10146,
+      10890,
+      11120,
+      10980
+    ],
+    "pytorch": [
+      456,
+      678,
+      842,
+      920,
+      945,
+      890
+    ],
+    "tensorflow": [
+      5234,
+      6789,
+      7680,
+      8234,
+      8456,
+      8120
+    ]
+  },
+  "transforms": [
+    {
+      "name": "RandomCrop",
+      "simd": true,
+      "speedup": "3.2x"
+    },
+    {
+      "name": "RandomHorizontalFlip",
+      "simd": true,
+      "speedup": "2.8x"
+    },
+    {
+      "name": "ColorJitter",
+      "simd": true,
+      "speedup": "4.1x"
+    },
+    {
+      "name": "Normalize",
+      "simd": true,
+      "speedup": "5.6x"
+    },
+    {
+      "name": "RandomRotation",
+      "simd": true,
+      "speedup": "2.9x"
+    },
+    {
+      "name": "AutoAugment",
+      "simd": true,
+      "speedup": "3.7x"
+    }
+  ]
+}
