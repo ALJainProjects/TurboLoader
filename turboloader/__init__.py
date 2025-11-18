@@ -1,6 +1,6 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v1.3.0 - Performance and Stability Release
+v1.4.0 - Format Converter Benchmarks and Documentation
 
 Production-Ready Features:
 - 21,035 img/s throughput with 16 workers (12x faster than PyTorch, 1.3x faster than TensorFlow)
@@ -24,7 +24,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # Import C++ extension module
 try:
