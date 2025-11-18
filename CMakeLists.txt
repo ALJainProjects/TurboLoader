@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TurboLoader VERSION 1.1.0 LANGUAGES CXX)
+project(TurboLoader VERSION 1.5.0 LANGUAGES CXX)
 
 # C++20 required for modern features (std::span, concepts, etc.)
 set(CMAKE_CXX_STANDARD 20)
@@ -30,6 +30,17 @@ find_package(Threads REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(PNG REQUIRED)
 find_package(CURL REQUIRED)
+
+# Find LZ4 for TBL v2 compression
+find_library(LZ4_LIBRARY NAMES lz4)
+find_path(LZ4_INCLUDE_DIR NAMES lz4.h)
+
+if(LZ4_LIBRARY AND LZ4_INCLUDE_DIR)
+    set(LZ4_FOUND TRUE)
+    message(STATUS "Found LZ4: ${LZ4_LIBRARY}")
+else()
+    message(FATAL_ERROR "LZ4 not found - required for TBL v2 format")
+endif()
 
 # Try to find WebP (optional)
 find_library(WEBP_LIBRARY NAMES webp)
@@ -112,6 +123,12 @@ if(TURBOLOADER_SOURCES)
             JPEG::JPEG
             PNG::PNG
             CURL::libcurl
+            ${LZ4_LIBRARY}
+    )
+
+    target_include_directories(turboloader
+        PUBLIC
+            ${LZ4_INCLUDE_DIR}
     )
 else()
     # Header-only fallback
@@ -129,6 +146,12 @@ else()
             JPEG::JPEG
             PNG::PNG
             CURL::libcurl
+            ${LZ4_LIBRARY}
+    )
+
+    target_include_directories(turboloader
+        INTERFACE
+            ${LZ4_INCLUDE_DIR}
     )
 endif()
 
@@ -178,11 +201,11 @@ endif()
 # Enable CURL support
 target_compile_definitions(turboloader ${LINK_SCOPE} HAVE_CURL)
 
-# Command-line tools (v1.1.0)
-# TAR to TBL converter tool
-add_executable(tar_to_tbl tools/tar_to_tbl.cpp)
-target_include_directories(tar_to_tbl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(tar_to_tbl PRIVATE turboloader)
+# Command-line tools (v1.5.0)
+# TAR to TBL v2 converter tool (with LZ4 compression)
+add_executable(tar_to_tbl tools/tar_to_tbl_v2.cpp)
+target_include_directories(tar_to_tbl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${LZ4_INCLUDE_DIR})
+target_link_libraries(tar_to_tbl PRIVATE turboloader ${LZ4_LIBRARY})
 install(TARGETS tar_to_tbl DESTINATION bin)
 
 # Tests
