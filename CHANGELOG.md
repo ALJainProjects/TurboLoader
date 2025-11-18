@@ -5,6 +5,28 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2025-11-17
+
+### Performance and Stability Release
+
+Minor release focused on performance optimizations, stability improvements, and enhanced documentation.
+
+### Changed
+- **Version bumped to 1.3.0**
+- Enhanced code quality and stability
+- Improved documentation and examples
+- Better error handling throughout the codebase
+
+### Performance
+- Maintained 21,035 img/s peak throughput (16 workers, batch_size=64)
+- Continued support for GPU-accelerated JPEG decoding (nvJPEG)
+- Linux io_uring async I/O remains stable
+
+### Documentation
+- Updated all version references
+- Improved README with clearer feature descriptions
+- Enhanced code examples
+
 ## [1.2.1] - 2025-11-17
 
 ### GPU Acceleration and Async I/O Release

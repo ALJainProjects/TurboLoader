@@ -380,7 +380,11 @@ See [Architecture Guide](docs/architecture.md) for detailed design.
 - [ ] Extended test suite (5000+ images, multiple formats)
 - [ ] Cross-platform validation (Windows support)
 
-### v1.2.1 (Current)
+### v1.3.0 (Current)
+- ✅ Performance optimizations and stability improvements
+- ✅ Enhanced documentation and examples
+
+### v1.2.1
 - ✅ GPU JPEG decoding (nvJPEG with automatic CPU fallback)
 - ✅ Linux io_uring async I/O (2-3x faster disk throughput)
 
@@ -419,7 +423,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {1.0.0},
+  version = {1.3.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
