@@ -65,6 +65,9 @@
 
 // Decoders
 #include "../decode/jpeg_decoder.hpp"
+#ifdef HAVE_NVJPEG
+#include "../decode/nvjpeg_decoder.hpp"
+#endif
 #include "../decode/png_decoder.hpp"
 #ifdef HAVE_WEBP
 #include "../decode/webp_decoder.hpp"
@@ -147,6 +150,7 @@ struct UnifiedPipelineConfig {
     int target_width = 256;                     // Target width
     int target_height = 256;                    // Target height
     bool normalize = false;                     // Normalize to [0,1]
+    bool use_gpu_decode = true;                 // GPU-accelerated JPEG (nvJPEG)
 
     // ===== Video processing =====
     int video_fps = 30;                         // Target FPS for extraction
@@ -307,8 +311,26 @@ public:
             );
         }
 
-        // Per-worker JPEG decoder
+        // Per-worker JPEG decoder (GPU-accelerated if available and enabled)
+#ifdef HAVE_NVJPEG
+        if (config.use_gpu_decode) {
+            nvjpeg_decoder_ = std::make_unique<NvJpegDecoder>();
+            if (nvjpeg_decoder_->is_available()) {
+                use_gpu_ = true;
+            } else {
+                // Fall back to CPU if GPU unavailable
+                nvjpeg_decoder_.reset();
+                decoder_ = std::make_unique<JPEGDecoder>(buffer_pool);
+                use_gpu_ = false;
+            }
+        } else {
+            decoder_ = std::make_unique<JPEGDecoder>(buffer_pool);
+            use_gpu_ = false;
+        }
+#else
+        // No nvJPEG: CPU-only decode
         decoder_ = std::make_unique<JPEGDecoder>(buffer_pool);
+#endif
     }
 
     void start() {
@@ -348,25 +370,43 @@ private:
             auto jpeg_data = tar_reader_->get_sample(i);
             const auto& entry = tar_reader_->get_entry(i);
 
-            // Create Sample for decoding
-            Sample sample(entry.index, jpeg_data);
-
-            // SIMD-accelerated JPEG decoding
-            try {
-                decoder_->decode_sample(sample);
-            } catch (const std::exception& e) {
-                continue;  // Skip corrupted
-            }
-
-            // Convert to UnifiedSample
+            // Create UnifiedSample
             UnifiedSample usample;
-            usample.index = sample.index;
+            usample.index = entry.index;
             usample.format = DataFormat::JPEG;
             usample.filename = entry.name;
-            usample.image_data = std::move(sample.decoded_rgb);
-            usample.width = sample.width;
-            usample.height = sample.height;
-            usample.channels = sample.channels;
+
+#ifdef HAVE_NVJPEG
+            // GPU-accelerated JPEG decoding (if enabled and available)
+            if (use_gpu_ && nvjpeg_decoder_) {
+                NvJpegResult gpu_result;
+                if (nvjpeg_decoder_->decode(
+                    reinterpret_cast<const uint8_t*>(jpeg_data.data()),
+                    jpeg_data.size(),
+                    gpu_result)) {
+                    // Successful GPU decode
+                    usample.image_data = std::move(gpu_result.rgb_data);
+                    usample.width = gpu_result.width;
+                    usample.height = gpu_result.height;
+                    usample.channels = gpu_result.channels;
+                } else {
+                    continue;  // Skip corrupted
+                }
+            } else
+#endif
+            {
+                // CPU SIMD-accelerated JPEG decoding (fallback)
+                Sample sample(entry.index, jpeg_data);
+                try {
+                    decoder_->decode_sample(sample);
+                } catch (const std::exception& e) {
+                    continue;  // Skip corrupted
+                }
+                usample.image_data = std::move(sample.decoded_rgb);
+                usample.width = sample.width;
+                usample.height = sample.height;
+                usample.channels = sample.channels;
+            }
 
             // Push to lock-free SPSC queue (busy-wait if full)
             while (running_ && !queue_->try_push(std::move(usample))) {
@@ -389,6 +429,10 @@ private:
 
     std::unique_ptr<TarReader> tar_reader_;
     std::unique_ptr<JPEGDecoder> decoder_;
+#ifdef HAVE_NVJPEG
+    std::unique_ptr<NvJpegDecoder> nvjpeg_decoder_;
+    bool use_gpu_ = false;
+#endif
     std::unique_ptr<WorkerQueue> queue_;
 
     std::thread thread_;
