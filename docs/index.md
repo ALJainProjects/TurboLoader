@@ -15,13 +15,16 @@ Welcome to TurboLoader - the fastest ML data loading library with SIMD-accelerat
 TurboLoader achieves **21,035 img/s peak throughput** (12x faster than PyTorch) through:
 
 - **Native C++20 implementation** - No Python GIL overhead
+- **TBL v2 Binary Format** - LZ4 compression (40-60% space savings), O(1) streaming writer, 4,875 img/s conversion **NEW in v1.5.0**
+- **Data Integrity** - CRC32/CRC16 checksums for reliable data loading **NEW in v1.5.0**
+- **Cached Dimensions** - Width/height in index for fast filtering without decoding **NEW in v1.5.0**
 - **19 SIMD-accelerated transforms** - AVX-512/AVX2/NEON optimized operations
 - **Smart Batching** - Size-based grouping reduces padding by 15-25% (~1.2x boost)
 - **Distributed Training** - Multi-node support (PyTorch DDP, Horovod, DeepSpeed)
 - **Linear Scalability** - 9.65x speedup with 16 workers
 - **Zero-copy tensor conversion** - Direct memory mapping to PyTorch/TensorFlow
 - **Lock-free concurrent queues** - Maximizes multi-core utilization
-- **Memory-mapped I/O** - Efficient TAR archive parsing (52+ Gbps)
+- **Memory-mapped I/O** - Efficient TAR/TBL parsing (52+ Gbps)
 - **AutoAugment policies** - State-of-the-art learned augmentation
 
 ## Key Features
@@ -211,8 +214,12 @@ See [Architecture Guide](architecture.md) for detailed design.
 
 ## Version History
 
-- **v1.2.0** (Current) - Smart Batching + Distributed Training (21,035 img/s peak)
-- **v1.1.0** - AVX-512 SIMD + TBL Format + Prefetching
+- **v1.5.0** (Current) - TBL v2 Format with LZ4 compression (40-60% space savings)
+- **v1.4.0** - Format converter benchmarks and documentation
+- **v1.3.0** - Performance optimizations and stability improvements
+- **v1.2.1** - GPU JPEG decoding (nvJPEG) + Linux io_uring async I/O
+- **v1.2.0** - Smart Batching + Distributed Training (21,035 img/s peak)
+- **v1.1.0** - AVX-512 SIMD + TBL v1 Format + Prefetching
 - **v1.0.0** - Production/Stable Release (10,146 img/s)
 - **v0.8.0** - Documentation + Interactive Web App
 - **v0.7.0** - Advanced transforms + AutoAugment
@@ -241,7 +248,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {1.2.0},
+  version = {1.5.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TurboLoader VERSION 1.5.0 LANGUAGES CXX)
+project(TurboLoader VERSION 1.5.1 LANGUAGES CXX)
 
 # C++20 required for modern features (std::span, concepts, etc.)
 set(CMAKE_CXX_STANDARD 20)
