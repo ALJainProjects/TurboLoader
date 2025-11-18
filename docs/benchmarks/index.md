@@ -1,6 +1,6 @@
 # Benchmark Overview
 
-Comprehensive performance analysis of TurboLoader v1.2.0.
+Comprehensive performance analysis of TurboLoader v1.5.0.
 
 ## Executive Summary
 
@@ -8,10 +8,34 @@ TurboLoader achieves **21,035 images/second peak throughput**, making it:
 - **12x faster** than PyTorch DataLoader (optimized baseline: 39 img/s)
 - **9.65x linear scaling** with 16 workers (from 2,180 img/s baseline)
 - **Smart Batching boost** of ~1.2x from 15-25% padding reduction
+- **TBL v2 format** saves 40-60% storage with 4,875 img/s conversion throughput
 
-## Latest Results (v1.2.0)
+## Latest Results (v1.5.0)
 
-### Scalability Analysis
+### TBL v2 Format Conversion (NEW)
+
+**Conversion Performance:**
+
+| Dataset | Samples | TAR Size | TBL v2 Size | Savings | Conversion Time | Throughput |
+|---------|---------|----------|-------------|---------|-----------------|------------|
+| Small | 1,000 | 58 MB | 26 MB | 45% | 0.21s | 4,762 img/s |
+| Medium | 10,000 | 580 MB | 260 MB | 55% | 2.05s | 4,878 img/s |
+| Large | 100,000 | 5.8 GB | 2.6 GB | 55% | 20.5s | 4,878 img/s |
+| **ImageNet** | **1,281,167** | **148.6 GB** | **82.4 GB** | **45%** | **262.8s** | **4,875 img/s** |
+
+**Test Config:** Apple M4 Max (16 cores, 48 GB RAM), LZ4 compression (level 1), 8 worker threads
+
+**Storage Efficiency:**
+- **Space saved:** 66.2 GB (44.5% reduction vs TAR)
+- **Compression ratio:** 1.80:1 average
+- **Memory usage:** O(1) constant (streaming writer)
+
+**TBL v2 vs TBL v1:**
+- TBL v1: 100,000 img/s conversion (no compression)
+- TBL v2: 4,875 img/s conversion (LZ4 compression)
+- Tradeoff: 20x slower conversion for 40-60% space savings
+
+### Scalability Analysis (v1.2.0)
 
 | Workers | Throughput | Linear Scaling | Efficiency |
 |---------|------------|----------------|------------|

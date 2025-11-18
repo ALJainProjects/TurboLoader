@@ -1,8 +1,15 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v1.4.0 - Format Converter Benchmarks and Documentation
+v1.5.0 - TBL v2 Format with LZ4 Compression
 
 Production-Ready Features:
+- TBL v2 format: 40-60% space savings with LZ4 compression
+- Streaming writer with constant memory usage
+- Memory-mapped reader for zero-copy reads
+- Data integrity validation (CRC32/CRC16 checksums)
+- Cached image dimensions for fast filtered loading
+- Rich metadata support (JSON, Protobuf, MessagePack)
+- 4,875 img/s TAR→TBL conversion throughput
 - 21,035 img/s throughput with 16 workers (12x faster than PyTorch, 1.3x faster than TensorFlow)
 - Smart Batching: Size-based sample grouping reduces padding by 15-25%, ~1.2x throughput boost
 - Distributed Training: Multi-node data loading with deterministic sharding (PyTorch DDP, Horovod, DeepSpeed)
@@ -24,7 +31,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "1.4.0"
+__version__ = "1.5.1"
 
 # Import C++ extension module
 try:

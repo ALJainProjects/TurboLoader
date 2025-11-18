@@ -5,6 +5,116 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2025-11-18
+
+### Changed
+
+- **Documentation Updates** - Comprehensive refresh of all documentation for v1.5.0 features
+  - Updated README.md with TBL v2 format details and performance benchmarks
+  - Enhanced CHANGELOG.md with complete v1.5.0 release notes
+  - Rewrote docs/guides/tbl-format.md (805 lines) with full TBL v2 specification
+  - Updated docs/architecture.md with version history and TBL v2 components
+  - Updated docs/benchmarks/index.md with TAR→TBL conversion metrics
+  - Refreshed docs/index.md with latest version history
+  - Updated all version references from 1.4.0/1.3.0 to 1.5.0
+
+## [1.5.0] - 2025-11-18
+
+### TBL v2 Format Release - Major Performance and Storage Improvements
+
+Complete rewrite of the TBL (TurboLoader Binary) format with significant improvements to compression, memory efficiency, and throughput.
+
+### Added
+
+- **TBL v2 Binary Format** - Next-generation custom format for ML datasets
+  - **LZ4 compression** - 40-60% space savings compared to uncompressed TAR (45-65% reduction vs TAR)
+  - **Streaming writer** - Constant O(1) memory usage during conversion (not O(n))
+  - **Memory-mapped reader** - Zero-copy reads with mmap() for maximum throughput
+  - **Data integrity validation** - CRC32 checksums for compressed data, CRC16 for index entries
+  - **Cached image dimensions** - Width/height stored in 16-bit index for fast filtered loading without decoding
+  - **Rich metadata support** - JSON, Protobuf, and MessagePack formats stored separately from image data
+  - **Cache-aligned structures** - 64-byte header alignment, 24-byte index entries for optimal CPU cache performance
+  - **Multi-format support** - JPEG, PNG, WebP, BMP, TIFF with automatic format detection
+
+- **tar_to_tbl Conversion Tool**
+  - Parallel processing support for multi-threaded conversion
+  - **4,875 img/s conversion throughput** (measured on Apple M4 Max)
+  - Progress reporting with ETA and throughput metrics
+  - Automatic compression ratio reporting
+  - Command-line interface with configurable options
+
+### Performance
+
+- **TAR → TBL Conversion:** 4,875 images/second throughput
+- **Space Savings:** 40-60% reduction vs uncompressed TAR
+- **Memory Usage:** O(1) constant memory during conversion (streaming writer)
+- **Read Performance:** Zero-copy memory-mapped I/O for maximum speed
+- **Cache Efficiency:** 64-byte aligned headers and 24-byte index entries
+
+### Format Improvements (v1 → v2)
+
+| Feature | TBL v1 | TBL v2 | Improvement |
+|---------|--------|--------|-------------|
+| **Compression** | None | LZ4 | 40-60% savings |
+| **Memory (write)** | O(n) | O(1) | Streaming |
+| **Checksums** | None | CRC32/CRC16 | Data integrity |
+| **Image dimensions** | No | 16-bit cached | Fast filtering |
+| **Metadata** | Limited | JSON/Proto/MP | Rich support |
+| **Header alignment** | 32-byte | 64-byte | Cache optimized |
+| **Index entry** | 16-byte | 24-byte | More metadata |
+
+### Technical Specifications
+
+**Header Format (64 bytes):**
+- Magic: "TBL\x02" (4 bytes) - Version 2 identifier
+- Version: uint32_t (4 bytes)
+- Number of samples: uint64_t (8 bytes)
+- Compression type: uint8_t (1 byte) - LZ4, ZSTD, etc.
+- Index entry size: uint32_t (4 bytes)
+- Reserved: 43 bytes for future extensions
+
+**Index Entry (24 bytes):**
+- Offset: uint64_t (8 bytes)
+- Compressed size: uint32_t (4 bytes)
+- Uncompressed size: uint32_t (4 bytes)
+- Format: uint8_t (1 byte)
+- Width: uint16_t (2 bytes)
+- Height: uint16_t (2 bytes)
+- CRC16 checksum: uint16_t (2 bytes)
+- Reserved: 3 bytes
+
+**Compression:**
+- LZ4 for fast compression/decompression
+- Per-sample compression for random access
+- CRC32 validation for compressed data integrity
+
+### Changed
+
+- **Version bumped to 1.5.0**
+- Updated all TBL format documentation to reflect v2 specification
+- Enhanced tar_to_tbl tool with parallel processing and progress reporting
+- Improved memory efficiency for large dataset conversions
+
+### Documentation
+
+- Complete rewrite of `docs/guides/tbl-format.md` for TBL v2
+- Updated README.md with TBL v2 features
+- Updated architecture documentation with TBL v2 components
+- Added TBL v2 conversion benchmarks to performance documentation
+- Updated all references from TBL v1 to TBL v2 across documentation
+
+### Migration from TBL v1
+
+TBL v2 is **not backward compatible** with v1. To migrate:
+
+```bash
+# Convert existing TBL v1 files to v2
+tbl_v1_to_v2 old_dataset.tbl new_dataset.tbl
+
+# Or convert from original TAR source
+tar_to_tbl original.tar dataset_v2.tbl
+```
+
 ## [1.4.0] - 2025-11-17
 
 ### Format Converter Benchmarks and Documentation

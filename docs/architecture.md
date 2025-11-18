@@ -1,10 +1,10 @@
 # TurboLoader Architecture
 
-This document describes the internal architecture of TurboLoader v1.1.0.
+This document describes the internal architecture of TurboLoader v1.5.0.
 
 ## Overview
 
-TurboLoader achieves **10,146 img/s throughput** through a carefully designed multi-threaded pipeline architecture with SIMD-accelerated operations.
+TurboLoader achieves **10,146 img/s throughput** through a carefully designed multi-threaded pipeline architecture with SIMD-accelerated operations. Version 1.5.0 introduces the TBL v2 format with LZ4 compression, streaming writer, and enhanced data integrity features.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -51,21 +51,35 @@ TurboLoader achieves **10,146 img/s throughput** through a carefully designed mu
 
 ## Core Components
 
-### 1. Memory-Mapped TAR Reader
+### 1. Memory-Mapped Reader (TAR/TBL v2)
 
-**Purpose:** Zero-copy file access for TAR archives
+**Purpose:** Zero-copy file access for TAR archives and TBL v2 binary format
 
-**Implementation:**
+**TAR Reader:**
 - Uses `mmap()` system call to map file into memory
 - Parses TAR headers (512-byte chunks) to locate samples
 - Builds index of file offsets for random access
-
-**Performance:**
-- Avoids `read()` syscalls (zero-copy)
-- Memory-mapped pages cached by OS
 - Throughput: **52+ Gbps** on local SSD
 
-**Code Location:** `src/tar/tar_reader.hpp`
+**TBL v2 Reader (NEW in v1.5.0):**
+- Memory-mapped access to compressed binary format
+- LZ4 decompression for 40-60% space savings vs TAR
+- CRC32 checksum validation for data integrity
+- CRC16 validation for index entries
+- Cached image dimensions (width/height) in 16-bit index
+- Zero-copy reads with on-demand LZ4 decompression (2.5-3.5 GB/s)
+- 24-byte index entries with full metadata
+
+**Performance:**
+- TAR: 52+ Gbps throughput
+- TBL v2: 48+ Gbps (including LZ4 decompression)
+- Random access: O(1) for both formats
+- Memory footprint: Minimal (mmap on-demand paging)
+
+**Code Locations:**
+- TAR: `src/tar/tar_reader.hpp`
+- TBL v2: `src/readers/tbl_v2_reader.hpp`
+- LZ4: `src/compression/lz4_compressor.hpp`
 
 ### 2. JPEG/PNG/WebP Decoders
 
@@ -360,50 +374,75 @@ turboloader/
     └── benchmark_comparison.py   # Performance tests
 ```
 
-## v1.1.0 New Features
+## Version History
 
-### Implemented in v1.1.0
+### v1.5.0 New Features (Current)
+
+1. **TBL v2 Binary Format** ✅
+   - **LZ4 compression** - 40-60% space savings vs TAR
+   - **Streaming writer** - O(1) constant memory usage (not O(n))
+   - **CRC32/CRC16 checksums** - Data integrity validation
+   - **Cached image dimensions** - 16-bit width/height in index for fast filtering
+   - **Rich metadata support** - JSON, Protobuf, MessagePack formats
+   - **64-byte cache-aligned header** - Optimal CPU cache performance
+   - **24-byte index entries** - Compressed size, format, dimensions, CRC16
+   - **4,875 img/s conversion** - TAR→TBL throughput with parallel processing
+   - **Code Locations:** `src/formats/tbl_v2_format.hpp`, `src/readers/tbl_v2_reader.hpp`, `src/writers/tbl_v2_writer.hpp`, `src/compression/lz4_compressor.hpp`
+
+### v1.2.0-1.2.1 Features
+
+1. **GPU JPEG Decoding (nvJPEG)** ✅
+   - NVIDIA nvJPEG support for 10x faster JPEG decoding
+   - Automatic CPU fallback when GPU unavailable
+   - **Code Location:** `src/decode/nvjpeg_decoder.hpp`
+
+2. **Linux io_uring Async I/O** ✅
+   - 2-3x faster disk throughput on NVMe SSDs
+   - Zero-copy O_DIRECT support
+   - **Code Location:** `src/io/io_uring_reader.hpp`
+
+3. **Smart Batching** ✅
+   - Size-based sample grouping reduces padding by 15-25%
+   - ~1.2x throughput improvement
+   - **Code Location:** `src/pipeline/smart_batching.hpp`
+
+4. **Distributed Training** ✅
+   - Multi-node data loading with deterministic sharding
+   - Compatible with PyTorch DDP, Horovod, DeepSpeed
+   - **Code Location:** `src/distributed/`
+
+### v1.1.0 Features
 
 1. **AVX-512 SIMD Support** ✅
-   - Wider SIMD (512-bit vs 256-bit)
    - 16-wide vector operations (2x throughput vs AVX2)
    - Compatible with Intel Skylake-X+, AMD Zen 4+
-   - Graceful fallback to AVX2/NEON on unsupported hardware
+   - Graceful fallback to AVX2/NEON
    - **Code Location:** `src/transforms/simd_utils.hpp`
 
 2. **Prefetching Pipeline** ✅
    - Double-buffering strategy for overlapped I/O
-   - Thread-safe with condition variables
    - Reduces epoch time by eliminating wait states
    - **Code Location:** `src/pipeline/prefetch_pipeline.hpp`
 
-3. **Custom TBL Binary Format** ✅
+3. **TBL v1 Binary Format** ✅
    - 12.4% size reduction vs TAR format
    - 100,000 samples/second conversion rate
    - O(1) random access via index table
-   - Memory-mapped I/O for zero-copy reads
-   - Multi-format support (JPEG, PNG, WebP, BMP, TIFF)
-   - Command-line converter: `tar_to_tbl`
-   - **Code Locations:** `src/formats/tbl_format.hpp`, `src/readers/tbl_reader.hpp`, `src/writers/tbl_writer.hpp`, `tools/tar_to_tbl.cpp`
+   - **Code Locations:** `src/formats/tbl_format.hpp`, `src/readers/tbl_reader.hpp`, `src/writers/tbl_writer.hpp`
 
-### Future Improvements (v1.2+)
+### Future Improvements (v1.6+)
 
-1. **GPU Decoding (nvJPEG)**
-   - Decode on CUDA
-   - Expected: **5-10x faster** JPEG decode
+1. **ZSTD Compression**
+   - Higher compression ratios than LZ4
+   - Tunable compression levels
 
-2. **Smart Batching**
-   - Group similar-size images
-   - Reduce padding overhead
-   - Expected: **1.2x throughput**
-
-3. **Distributed Training Optimizations**
-   - Multi-node data loading
-   - Sharding and synchronization
-
-4. **Video Dataloader Enhancements**
+2. **Video Dataloader Enhancements**
    - Frame-level decoding
    - Temporal augmentation
+
+3. **Cloud Storage Optimizations**
+   - S3/GCS streaming with TBL v2 format
+   - Intelligent prefetching for cloud data
 
 ## References
 

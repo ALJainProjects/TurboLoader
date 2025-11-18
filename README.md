@@ -17,12 +17,14 @@ TurboLoader is a high-performance data loading library that achieves **21,035 im
 ### Key Features
 
 - **12x Faster** than PyTorch DataLoader (optimized)
+- **TBL v2 Binary Format** - LZ4 compression (40-60% smaller than TAR), O(1) memory streaming writer, 4,875 img/s conversion **NEW in v1.5.0**
 - **GPU-Accelerated JPEG Decoding** - NVIDIA nvJPEG support for 10x faster decoding (when CUDA available) **NEW in v1.2.1**
 - **Linux io_uring Async I/O** - 2-3x faster disk throughput on NVMe SSDs (Linux kernel 5.1+) **NEW in v1.2.1**
 - **Smart Batching** - Reduces padding by 15-25%, ~1.2x throughput boost **NEW in v1.2.0**
 - **Distributed Training** - Multi-node support with deterministic sharding **NEW in v1.2.0**
 - **19 SIMD-Accelerated Transforms** (AVX2/AVX-512/NEON)
-- **Custom TBL Binary Format** (12.4% smaller, 100k samples/s conversion)
+- **Data Integrity Validation** - CRC32/CRC16 checksums for reliable data loading **NEW in v1.5.0**
+- **Cached Image Dimensions** - Fast filtered loading without decoding **NEW in v1.5.0**
 - **Prefetching Pipeline** (overlaps I/O with computation)
 - **Zero-Copy Tensor Conversion** (PyTorch/TensorFlow)
 - **Lock-Free Concurrent Queues** (50x faster than mutex-based)
@@ -35,18 +37,24 @@ TurboLoader is a high-performance data loading library that achieves **21,035 im
 
 ## Performance
 
-### What's New in v1.2.0
+### What's New in v1.5.0
 
-- **Smart Batching**: Size-based sample grouping reduces padding overhead by 15-25%, delivering ~1.2x throughput improvement
-- **Distributed Training**: Multi-node data loading with deterministic sharding, compatible with PyTorch DDP, Horovod, and DeepSpeed
-- **Scalability**: Linear scaling from 2,180 img/s (1 worker) to 21,036 img/s (16 workers)
+- **TBL v2 Binary Format**: Next-generation custom format with LZ4 compression (40-60% space savings vs TAR), streaming O(1) memory writer, CRC32/CRC16 checksums, cached image dimensions (width/height in index), rich metadata support (JSON/Protobuf/MessagePack)
+- **High-Speed Conversion**: 4,875 img/s TAR→TBL conversion throughput with parallel processing
+- **Cache-Optimized**: 64-byte aligned headers, 24-byte index entries for maximum CPU cache efficiency
+- **Data Integrity**: Per-sample CRC32 checksums for compressed data, CRC16 for index validation
 
 ### Previous Releases
+
+**v1.2.0:**
+- Smart Batching: Size-based sample grouping reduces padding overhead by 15-25%, delivering ~1.2x throughput improvement
+- Distributed Training: Multi-node data loading with deterministic sharding, compatible with PyTorch DDP, Horovod, and DeepSpeed
+- Scalability: Linear scaling from 2,180 img/s (1 worker) to 21,036 img/s (16 workers)
 
 **v1.1.0:**
 - AVX-512 SIMD Support: 2x vector width on compatible hardware (Intel Skylake-X+, AMD Zen 4+)
 - Prefetching Pipeline: Overlaps I/O with computation for reduced epoch time
-- TBL Binary Format: 12.4% smaller files, 100,000 samples/s conversion, instant random access
+- TBL v1 Binary Format: 12.4% smaller files, 100,000 samples/s conversion, instant random access
 
 ### Framework Comparison (v1.0.0)
 
@@ -232,8 +240,10 @@ See [Getting Started Guide](docs/getting-started.md) for more examples.
 | **Lock-Free Queues** | ✅ | ❌ | ✅ | ✅ | ✅ |
 | **Zero-Copy I/O** | ✅ | ❌ | ✅ | ✅ | ✅ |
 | **AutoAugment** | ✅ | ✅ | ✅ | ❌ | ✅ |
-| **Custom Format** | TAR | Any | Any | .beton | Any |
-| **GPU Decode** | Planned | ❌ | ❌ | ❌ | ✅ |
+| **Custom Format** | TBL v2 (LZ4) | Any | Any | .beton | Any |
+| **Compression** | 40-60% savings | ❌ | ❌ | ~60% | ❌ |
+| **Data Integrity** | CRC32/CRC16 | ❌ | ❌ | ✅ | ❌ |
+| **GPU Decode** | nvJPEG | ❌ | ❌ | ❌ | ✅ |
 | **Memory (2K imgs)** | 848 MB | 1,523 MB | 1,245 MB | ~900 MB | 1,200+ MB |
 | **Ease of Use** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
 | **License** | MIT | BSD | Apache | Apache | Apache |
@@ -291,9 +301,11 @@ See [Transforms API](docs/api/transforms.md) for complete reference.
     └──────┬───────┘
            │
     ┌──────▼───────────────────────────────────────────────────┐
-    │          Memory-Mapped TAR Reader (52+ Gbps)              │
+    │    Memory-Mapped Reader (TAR/TBL v2) (52+ Gbps)           │
     │  • mmap() zero-copy access                                │
-    │  • TAR format parsing (512-byte headers)                  │
+    │  • TBL v2: LZ4 decompression with CRC32 validation        │
+    │  • TAR: 512-byte header parsing                           │
+    │  • Cached dimensions for fast filtering                   │
     └──────┬───────────────────────────────────────────────────┘
            │
     ┌──────▼───────────────────────────────────────────────────┐
@@ -302,6 +314,7 @@ See [Transforms API](docs/api/transforms.md) for complete reference.
     │  ┌────────────────┐  ┌────────────────┐                  │
     │  │  Worker 1      │  │  Worker N      │                  │
     │  ├────────────────┤  ├────────────────┤                  │
+    │  │ LZ4 Decompress │  │ LZ4 Decompress │  TBL v2          │
     │  │ JPEG Decode    │  │ JPEG Decode    │  libjpeg-turbo   │
     │  │ SIMD Transforms│  │ SIMD Transforms│  AVX2/NEON       │
     │  │ Tensor Convert │  │ Tensor Convert │  Zero-copy       │
@@ -319,10 +332,11 @@ See [Transforms API](docs/api/transforms.md) for complete reference.
 ```
 
 **Key Components:**
-1. **Memory-Mapped I/O** - Zero-copy TAR parsing (52+ Gbps)
-2. **SIMD Transforms** - AVX2/NEON vectorized operations
-3. **Lock-Free Queues** - Cache-aligned atomic operations
-4. **Thread-Local Decoders** - Per-worker JPEG/PNG/WebP instances
+1. **TBL v2 Format** - LZ4 compression (40-60% savings), CRC32/CRC16 validation, cached dimensions
+2. **Memory-Mapped I/O** - Zero-copy TAR/TBL parsing (52+ Gbps)
+3. **SIMD Transforms** - AVX2/AVX-512/NEON vectorized operations
+4. **Lock-Free Queues** - Cache-aligned atomic operations
+5. **Thread-Local Decoders** - Per-worker JPEG/PNG/WebP instances
 
 See [Architecture Guide](docs/architecture.md) for detailed design.
 
@@ -359,28 +373,22 @@ See [Architecture Guide](docs/architecture.md) for detailed design.
 
 ## Roadmap
 
-### v1.0.0 (Current - Production/Stable)
-- ✅ Zero compiler warnings
-- ✅ Complete documentation (15+ guides)
-- ✅ Interactive benchmark web app with real-time visualizations
-- ✅ 19 SIMD-accelerated transforms (AVX2/NEON)
-- ✅ Advanced transforms: RandomPerspective, RandomPosterize, RandomSolarize, AutoAugment, Lanczos interpolation
-- ✅ AutoAugment learned policies: ImageNet, CIFAR10, SVHN
-- ✅ API stability guarantees
-- ✅ 87% test pass rate (13/15 tests passing)
-- ✅ Production/Stable status on PyPI
-- ✅ 305x faster than PyTorch (11,780 vs 39 img/s)
+### v1.5.0 (Current - Production/Stable)
+- ✅ TBL v2 Binary Format with LZ4 compression (40-60% space savings)
+- ✅ Streaming O(1) memory writer for efficient conversion
+- ✅ CRC32/CRC16 checksums for data integrity validation
+- ✅ Cached image dimensions (width/height) in 16-bit index
+- ✅ Rich metadata support (JSON, Protobuf, MessagePack)
+- ✅ 4,875 img/s TAR→TBL conversion throughput
+- ✅ 64-byte cache-aligned headers, 24-byte index entries
+- ✅ tar_to_tbl converter with parallel processing
 
-### v1.1.0 (Next Release)
-- [ ] AVX-512 optimizations for modern CPUs
-- [ ] Prefetching pipeline for reduced latency
-- [ ] Custom binary format (faster than TAR)
-- [ ] Smart batching (size-based grouping)
-- [ ] Multi-format support (any input format with automatic TAR conversion)
-- [ ] Extended test suite (5000+ images, multiple formats)
-- [ ] Cross-platform validation (Windows support)
+### v1.4.0
+- ✅ Format converter benchmarks and documentation
+- ✅ Comprehensive TAR/TBL performance analysis
+- ✅ Access pattern comparison (sequential vs random)
 
-### v1.3.0 (Current)
+### v1.3.0
 - ✅ Performance optimizations and stability improvements
 - ✅ Enhanced documentation and examples
 
@@ -388,10 +396,22 @@ See [Architecture Guide](docs/architecture.md) for detailed design.
 - ✅ GPU JPEG decoding (nvJPEG with automatic CPU fallback)
 - ✅ Linux io_uring async I/O (2-3x faster disk throughput)
 
-### v1.2.0+ (Future)
+### v1.2.0
+- ✅ Smart Batching (15-25% padding reduction, ~1.2x throughput boost)
+- ✅ Distributed Training (multi-node support with deterministic sharding)
+- ✅ Linear scaling to 16 workers (21,036 img/s peak)
+
+### v1.1.0
+- ✅ AVX-512 SIMD optimizations for modern CPUs
+- ✅ Prefetching pipeline for reduced latency
+- ✅ TBL v1 binary format (12.4% smaller than TAR)
+
+### v1.6.0+ (Future)
+- [ ] ZSTD compression option (higher compression ratios)
 - [ ] Video dataloader enhancements
 - [ ] Cloud storage optimizations (S3/GCS streaming)
 - [ ] Advanced distributed training features
+- [ ] Extended test suite (5000+ images, multiple formats)
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
 
@@ -423,7 +443,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {1.3.0},
+  version = {1.5.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
@@ -447,4 +467,4 @@ If you use TurboLoader in your research:
 
 ---
 
-**TurboLoader v1.0.0** - Production-ready ML data loading. Fast. Simple. Reliable.
+**TurboLoader v1.5.0** - Production-ready ML data loading with TBL v2 format. Fast. Efficient. Reliable.
