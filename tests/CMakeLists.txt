@@ -218,5 +218,24 @@ target_link_libraries(test_smart_batching PRIVATE turboloader)
 add_test(NAME smart_batching COMMAND test_smart_batching)
 message(STATUS "Building Smart Batching tests (v1.2.0)")
 
+# Test executable for Pipeline GPU Decode Integration (v1.2.1)
+# Tests nvJPEG integration into UnifiedPipeline
+# GPU tests will run CPU fallback if nvJPEG unavailable
+add_executable(test_pipeline_gpu_decode test_pipeline_gpu_decode.cpp)
+target_include_directories(test_pipeline_gpu_decode PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_pipeline_gpu_decode PRIVATE turboloader)
+# Add nvJPEG support if available
+if(CMAKE_CUDA_COMPILER AND NVJPEG_LIBRARY)
+    target_compile_definitions(test_pipeline_gpu_decode PRIVATE HAVE_NVJPEG)
+    target_link_libraries(test_pipeline_gpu_decode PRIVATE
+        ${NVJPEG_LIBRARY}
+        CUDA::cudart
+    )
+    message(STATUS "Building Pipeline GPU Decode tests with nvJPEG support (v1.2.1)")
+else()
+    message(STATUS "Building Pipeline GPU Decode tests with CPU fallback only (v1.2.1)")
+endif()
+add_test(NAME pipeline_gpu_decode COMMAND test_pipeline_gpu_decode)
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)

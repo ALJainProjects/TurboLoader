@@ -17,6 +17,8 @@ TurboLoader is a high-performance data loading library that achieves **21,035 im
 ### Key Features
 
 - **12x Faster** than PyTorch DataLoader (optimized)
+- **GPU-Accelerated JPEG Decoding** - NVIDIA nvJPEG support for 10x faster decoding (when CUDA available) **NEW in v1.2.1**
+- **Linux io_uring Async I/O** - 2-3x faster disk throughput on NVMe SSDs (Linux kernel 5.1+) **NEW in v1.2.1**
 - **Smart Batching** - Reduces padding by 15-25%, ~1.2x throughput boost **NEW in v1.2.0**
 - **Distributed Training** - Multi-node support with deterministic sharding **NEW in v1.2.0**
 - **19 SIMD-Accelerated Transforms** (AVX2/AVX-512/NEON)
@@ -378,11 +380,14 @@ See [Architecture Guide](docs/architecture.md) for detailed design.
 - [ ] Extended test suite (5000+ images, multiple formats)
 - [ ] Cross-platform validation (Windows support)
 
+### v1.2.1 (Current)
+- ✅ GPU JPEG decoding (nvJPEG with automatic CPU fallback)
+- ✅ Linux io_uring async I/O (2-3x faster disk throughput)
+
 ### v1.2.0+ (Future)
-- [ ] GPU JPEG decoding (nvJPEG)
-- [ ] Distributed training optimizations
 - [ ] Video dataloader enhancements
 - [ ] Cloud storage optimizations (S3/GCS streaming)
+- [ ] Advanced distributed training features
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
 
