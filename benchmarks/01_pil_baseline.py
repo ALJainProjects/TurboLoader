@@ -248,7 +248,7 @@ def run_benchmark(image_dir: str,
 
 def main():
     parser = argparse.ArgumentParser(description='PIL baseline benchmark')
-    parser.add_argument('image_dir', type=str,
+    parser.add_argument('--image-dir', '-dir', type=str, default="/private/tmp/benchmark_datasets/bench_2k/images/",
                        help='Directory containing JPEG images')
     parser.add_argument('--batch-size', '-b', type=int, default=32,
                        help='Batch size (default: 32)')

@@ -175,8 +175,8 @@ def run_benchmark(tar_path: str,
 
 def main():
     parser = argparse.ArgumentParser(description='TurboLoader benchmark')
-    parser.add_argument('tar_path', type=str,
-                       help='Path to TAR file containing images')
+    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
+                        help='Path to TAR file containing images')
     parser.add_argument('--batch-size', '-b', type=int, default=32,
                        help='Batch size (default: 32)')
     parser.add_argument('--num-workers', '-w', type=int, default=8,
