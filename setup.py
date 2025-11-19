@@ -188,7 +188,7 @@ class BuildExt(build_ext):
 
 setup(
     name='turboloader',
-    version='1.7.0',
+    version='1.7.1',
     author='TurboLoader Contributors',
     description='High-performance data loading for ML frameworks with 19 SIMD-accelerated transforms',
     long_description=open('README.md').read() if os.path.exists('README.md') else '',
