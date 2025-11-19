@@ -54,7 +54,7 @@ TurboLoader is a high-performance data loading library that achieves **21,035 im
 **v1.1.0:**
 - AVX-512 SIMD Support: 2x vector width on compatible hardware (Intel Skylake-X+, AMD Zen 4+)
 - Prefetching Pipeline: Overlaps I/O with computation for reduced epoch time
-- TBL v1 Binary Format: 12.4% smaller files, 100,000 samples/s conversion, instant random access
+- Binary format improvements and optimization enhancements
 
 ### Framework Comparison (v1.0.0)
 
@@ -244,7 +244,6 @@ The Python bindings expose most C++ functionality, but some features are C++-onl
 **C++ Only (Not Yet in Python):**
 - ⚠️ Smart Batching configuration - Available in C++ API only; Python uses default batching
 - ⚠️ Distributed training primitives - Use PyTorch DDP/Horovod with TurboLoader DataLoader
-- ⚠️ Direct TBL v1 Reader/Writer - v1.5.0+ focuses on TBL v2; use C++ API for v1 format
 
 **Transform Compose Example:**
 ```python
@@ -441,7 +440,7 @@ See [Architecture Guide](docs/architecture.md) for detailed design.
 ### v1.1.0
 - ✅ AVX-512 SIMD optimizations for modern CPUs
 - ✅ Prefetching pipeline for reduced latency
-- ✅ TBL v1 binary format (12.4% smaller than TAR)
+- ✅ Binary format improvements and optimizations
 
 ### v1.6.0+ (Future)
 - [ ] ZSTD compression option (higher compression ratios)

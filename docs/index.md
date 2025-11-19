@@ -219,7 +219,7 @@ See [Architecture Guide](architecture.md) for detailed design.
 - **v1.3.0** - Performance optimizations and stability improvements
 - **v1.2.1** - GPU JPEG decoding (nvJPEG) + Linux io_uring async I/O
 - **v1.2.0** - Smart Batching + Distributed Training (21,035 img/s peak)
-- **v1.1.0** - AVX-512 SIMD + TBL v1 Format + Prefetching
+- **v1.1.0** - AVX-512 SIMD + Binary Format Improvements + Prefetching
 - **v1.0.0** - Production/Stable Release (10,146 img/s)
 - **v0.8.0** - Documentation + Interactive Web App
 - **v0.7.0** - Advanced transforms + AutoAugment

@@ -129,7 +129,9 @@ print(f"  lz4: {lz4_include}")
 ext_modules = [
     Extension(
         '_turboloader',
-        sources=['src/python/turboloader_bindings.cpp'],
+        sources=[
+            'src/python/turboloader_bindings.cpp',
+        ],
         include_dirs=[
             get_pybind_include(),
             jpeg_include,
@@ -186,7 +188,7 @@ class BuildExt(build_ext):
 
 setup(
     name='turboloader',
-    version='1.6.1',
+    version='1.7.0',
     author='TurboLoader Contributors',
     description='High-performance data loading for ML frameworks with 19 SIMD-accelerated transforms',
     long_description=open('README.md').read() if os.path.exists('README.md') else '',
