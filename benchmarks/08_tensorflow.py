@@ -237,6 +237,11 @@ def run_benchmark(tar_path: str,
 
     # Clean up
     print(f"\nCleaning up: {work_dir}")
+
+    # Force garbage collection to clean up TensorFlow resources before exit
+    import gc
+    gc.collect()
+
     shutil.rmtree(work_dir, ignore_errors=True)
 
     # Calculate statistics
@@ -317,4 +322,11 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    finally:
+        # Ensure clean shutdown to avoid mutex lock errors during cleanup
+        import gc
+        gc.collect()
+        import sys
+        sys.exit(0)
