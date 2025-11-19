@@ -116,6 +116,16 @@ if not curl_include:
     )
 print(f"  libcurl: {curl_include}")
 
+lz4_include, lz4_lib = find_library('lz4', 'lz4', 'liblz4')
+if not lz4_include:
+    raise RuntimeError(
+        "Could not find lz4 installation.\n"
+        "Please install it:\n"
+        "  macOS: brew install lz4\n"
+        "  Linux: sudo apt-get install liblz4-dev\n"
+    )
+print(f"  lz4: {lz4_include}")
+
 ext_modules = [
     Extension(
         '_turboloader',
@@ -126,6 +136,7 @@ ext_modules = [
             png_include,
             webp_include,
             curl_include,
+            lz4_include,
             'src',  # For pipeline headers
         ],
         library_dirs=[
@@ -133,6 +144,7 @@ ext_modules = [
             png_lib,
             webp_lib,
             curl_lib,
+            lz4_lib,
         ],
         libraries=[
             'jpeg',
@@ -140,6 +152,7 @@ ext_modules = [
             'webp',
             'webpdemux',
             'curl',
+            'lz4',
         ],
         language='c++',
         extra_compile_args=[
@@ -173,7 +186,7 @@ class BuildExt(build_ext):
 
 setup(
     name='turboloader',
-    version='1.2.1',
+    version='1.5.1',
     author='TurboLoader Contributors',
     description='High-performance data loading for ML frameworks with 19 SIMD-accelerated transforms',
     long_description=open('README.md').read() if os.path.exists('README.md') else '',

@@ -144,7 +144,7 @@ public:
      *
      * @return Batch of samples (empty if finished)
      */
-    std::vector<Sample> next_batch() {
+    UnifiedBatch next_batch() {
         std::unique_lock<std::mutex> lock(queue_mutex_);
 
         // Wait for prefetched batch or finish signal
@@ -153,7 +153,7 @@ public:
         });
 
         if (prefetch_queue_.empty()) {
-            return {};  // Finished
+            return UnifiedBatch(0);  // Finished - return empty batch
         }
 
         // Get prefetched batch (instant!)
@@ -227,7 +227,7 @@ private:
     std::unique_ptr<UnifiedPipeline> base_pipeline_;
 
     // Prefetch queue (double-buffer or more)
-    std::deque<std::vector<Sample>> prefetch_queue_;
+    std::deque<UnifiedBatch> prefetch_queue_;
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
 

@@ -229,7 +229,7 @@ bool test_finish_signal() {
         const std::string test_tar = "/tmp/test_prefetch_small.tar";  // Small dataset
 
         UnifiedPipelineConfig base_config;
-        base_config.data_source = test_tar;
+        base_config.data_path = test_tar;
         base_config.batch_size = 4;
         base_config.num_workers = 1;
         base_config.format = DataFormat::TAR;
