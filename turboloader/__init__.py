@@ -35,8 +35,42 @@ __version__ = "1.5.1"
 
 # Import C++ extension module
 try:
-    from _turboloader import DataLoader, version, features
-    __all__ = ['DataLoader', 'version', 'features', '__version__']
+    from _turboloader import (
+        # Core DataLoader
+        DataLoader, version, features,
+        # TBL v2 Format (NEW in v1.5.0)
+        TblReaderV2, TblWriterV2,
+        SampleFormat, MetadataType,
+        # Transform Composition (NEW in v1.5.1)
+        Compose, ComposedTransforms,
+        # Transforms (all 19 SIMD-accelerated transforms)
+        Resize, CenterCrop, RandomCrop,
+        RandomHorizontalFlip, RandomVerticalFlip,
+        ColorJitter, GaussianBlur, Grayscale,
+        Normalize, ImageNetNormalize, ToTensor,
+        Pad, RandomRotation, RandomAffine,
+        RandomPerspective, RandomPosterize, RandomSolarize,
+        RandomErasing, AutoAugment, AutoAugmentPolicy,
+        # Enums
+        InterpolationMode, PaddingMode, TensorFormat,
+    )
+    __all__ = [
+        'DataLoader', 'version', 'features', '__version__',
+        # TBL v2
+        'TblReaderV2', 'TblWriterV2', 'SampleFormat', 'MetadataType',
+        # Transform Composition
+        'Compose', 'ComposedTransforms',
+        # Transforms
+        'Resize', 'CenterCrop', 'RandomCrop',
+        'RandomHorizontalFlip', 'RandomVerticalFlip',
+        'ColorJitter', 'GaussianBlur', 'Grayscale',
+        'Normalize', 'ImageNetNormalize', 'ToTensor',
+        'Pad', 'RandomRotation', 'RandomAffine',
+        'RandomPerspective', 'RandomPosterize', 'RandomSolarize',
+        'RandomErasing', 'AutoAugment', 'AutoAugmentPolicy',
+        # Enums
+        'InterpolationMode', 'PaddingMode', 'TensorFormat',
+    ]
 except ImportError:
     # Fallback for development/documentation builds
     __all__ = ['__version__']

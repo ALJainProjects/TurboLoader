@@ -1,6 +1,6 @@
 /**
  * @file turboloader_bindings.cpp
- * @brief Python bindings for TurboLoader v0.8.0 with full transform API
+ * @brief Python bindings for TurboLoader v1.5.1 with full transform API
  *
  * Provides PyTorch-compatible DataLoader interface using pybind11.
  * Includes all 19 SIMD-accelerated transforms with comprehensive docstrings.
@@ -11,6 +11,9 @@
 #include <pybind11/numpy.h>
 #include "../pipeline/pipeline.hpp"
 #include "../transforms/transforms.hpp"
+#include "../readers/tbl_v2_reader.hpp"
+#include "../writers/tbl_v2_writer.hpp"
+#include "../formats/tbl_v2_format.hpp"
 #include <thread>
 #include <chrono>
 
@@ -240,14 +243,16 @@ std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
  * with the turboloader package. The Python __init__.py re-exports the API.
  */
 PYBIND11_MODULE(_turboloader, m) {
-    m.doc() = "TurboLoader v0.8.0 - High-performance data loading with 19 SIMD transforms\n\n"
+    m.doc() = "TurboLoader v1.5.1 - High-performance data loading with 19 SIMD transforms\n\n"
               "Drop-in replacement for PyTorch DataLoader with 12x speedup.\n\n"
               "Features:\n"
+              "- TBL v2 format with LZ4 compression (40-60% space savings)\n"
               "- 19 SIMD-accelerated transforms (AVX2/NEON)\n"
               "- TAR archives (52+ Gbps local, HTTP/S3/GCS remote)\n"
               "- Multi-threaded with lock-free queues\n"
               "- AutoAugment policies (ImageNet, CIFAR10, SVHN)\n"
               "- PyTorch & TensorFlow tensor conversion\n"
+              "- Data integrity validation (CRC32/CRC16)\n"
               "- Zero-copy where possible\n"
               "- Professional documentation and API\n\n"
               "Usage:\n"
@@ -311,14 +316,14 @@ PYBIND11_MODULE(_turboloader, m) {
              "Get next batch (iterator protocol)");
 
     // Module-level functions
-    m.def("version", []() { return "0.8.0"; },
+    m.def("version", []() { return "1.5.1"; },
           "Get TurboLoader version\n\n"
           "Returns:\n"
-          "    str: Version string (e.g., '0.8.0')");
+          "    str: Version string (e.g., '1.5.1')");
 
     m.def("features", []() {
         py::dict features;
-        features["version"] = "0.8.0";
+        features["version"] = "1.5.1";
         features["tar_support"] = true;
         features["remote_tar"] = true;
         features["http_support"] = true;
@@ -758,25 +763,294 @@ PYBIND11_MODULE(_turboloader, m) {
              "    format (TensorFormat): Output tensor format (default: PYTORCH_CHW)\n"
              "    normalize (bool): Normalize to [0,1] range (default: True)");
 
-    // TransformPipeline
-    py::class_<TransformPipeline>(m, "TransformPipeline")
-        .def(py::init<>())
-        .def("add", [](TransformPipeline& self, std::shared_ptr<Transform> t) {
-            // Note: pybind11 handles shared_ptr, we need to convert to unique_ptr
-            // For simplicity, we'll use a wrapper approach
-            throw std::runtime_error("Use Compose to create pipelines from Python");
-        })
-        .def("apply", [](TransformPipeline& self, py::array_t<uint8_t> img) {
-            auto input = numpy_to_imagedata(img);
-            auto output = self.apply(*input);
-            return imagedata_to_numpy(*output);
-        });
+    // Python-side Compose helper (stores Python object references)
+    // Since C++ Transform objects can't be easily cloned across the Python/C++ boundary,
+    // we create a Python-side wrapper class that holds references to Python transform objects
+    class PyTransformPipeline {
+    private:
+        std::vector<py::object> transforms_;
 
-    // Compose helper (Python-friendly pipeline builder)
-    m.def("Compose", [](py::list transforms) {
-        auto pipeline = std::make_unique<TransformPipeline>();
-        // Note: This is a simplified version. In production, you'd need proper
-        // shared_ptr handling or transform cloning
-        return pipeline;
-    }, "Create a transform pipeline (Compose multiple transforms)");
+    public:
+        explicit PyTransformPipeline(py::list transforms) {
+            for (auto transform_obj : transforms) {
+                transforms_.push_back(py::reinterpret_borrow<py::object>(transform_obj));
+            }
+        }
+
+        py::array_t<uint8_t> apply(py::array_t<uint8_t> img) {
+            py::array_t<uint8_t> current = img;
+
+            // Apply each transform sequentially
+            for (const auto& transform_obj : transforms_) {
+                // Call the transform's apply method
+                current = transform_obj.attr("apply")(current).cast<py::array_t<uint8_t>>();
+            }
+
+            return current;
+        }
+
+        size_t size() const { return transforms_.size(); }
+    };
+
+    // Bind PyTransformPipeline
+    py::class_<PyTransformPipeline>(m, "ComposedTransforms",
+                  "Transform pipeline that applies multiple transforms sequentially\n\n"
+                  "This class composes multiple transforms into a single operation.\n"
+                  "Transforms are applied in the order they were added.")
+        .def("apply", &PyTransformPipeline::apply,
+             py::arg("img"),
+             "Apply all transforms in sequence\n\n"
+             "Args:\n"
+             "    img (np.ndarray): Input image (H, W, C) uint8\n\n"
+             "Returns:\n"
+             "    np.ndarray: Transformed image")
+        .def("__len__", &PyTransformPipeline::size,
+             "Get number of transforms in pipeline")
+        .def("__call__", &PyTransformPipeline::apply,
+             py::arg("img"),
+             "Apply pipeline (callable interface)");
+
+    // Compose helper function
+    m.def("Compose", [](py::list transforms) -> PyTransformPipeline {
+        if (transforms.size() == 0) {
+            throw std::runtime_error("Compose() requires at least one transform");
+        }
+
+        // Validate that all items have an 'apply' method
+        for (auto transform_obj : transforms) {
+            if (!py::hasattr(transform_obj, "apply")) {
+                throw std::runtime_error(
+                    "Compose() requires all items to have an 'apply' method. "
+                    "Make sure you're passing Transform objects."
+                );
+            }
+        }
+
+        return PyTransformPipeline(transforms);
+    }, py::arg("transforms"),
+       "Create a transform pipeline (Compose multiple transforms)\n\n"
+       "Combines multiple transforms into a single pipeline that applies them sequentially.\n"
+       "This is equivalent to calling each transform individually, but more convenient.\n\n"
+       "Args:\n"
+       "    transforms (list[Transform]): List of transforms to apply in order\n\n"
+       "Returns:\n"
+       "    ComposedTransforms: Pipeline that applies all transforms sequentially\n\n"
+       "Example:\n"
+       "    >>> import turboloader\n"
+       "    >>> import numpy as np\n"
+       "    >>> \n"
+       "    >>> # Create individual transforms\n"
+       "    >>> resize = turboloader.Resize(224, 224)\n"
+       "    >>> flip = turboloader.RandomHorizontalFlip(0.5)\n"
+       "    >>> normalize = turboloader.ImageNetNormalize()\n"
+       "    >>> \n"
+       "    >>> # Compose them into a pipeline\n"
+       "    >>> pipeline = turboloader.Compose([resize, flip, normalize])\n"
+       "    >>> \n"
+       "    >>> # Apply pipeline to an image\n"
+       "    >>> img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)\n"
+       "    >>> transformed = pipeline.apply(img)\n"
+       "    >>> # Or use callable interface\n"
+       "    >>> transformed = pipeline(img)");
+
+    // ========================================================================
+    // TBL V2 FORMAT BINDINGS (NEW in v1.5.0)
+    // ========================================================================
+
+    // SampleFormat enum
+    py::enum_<formats::SampleFormat>(m, "SampleFormat",
+                 "Sample format types for TBL v2\n\n"
+                 "Available formats:\n"
+                 "  UNKNOWN: Unknown/unsupported format\n"
+                 "  JPEG: JPEG image\n"
+                 "  PNG: PNG image\n"
+                 "  WEBP: WebP image\n"
+                 "  BMP: BMP image\n"
+                 "  TIFF: TIFF image\n"
+                 "  VIDEO_MP4: MP4 video\n"
+                 "  VIDEO_AVI: AVI video")
+        .value("UNKNOWN", formats::SampleFormat::UNKNOWN)
+        .value("JPEG", formats::SampleFormat::JPEG)
+        .value("PNG", formats::SampleFormat::PNG)
+        .value("WEBP", formats::SampleFormat::WEBP)
+        .value("BMP", formats::SampleFormat::BMP)
+        .value("TIFF", formats::SampleFormat::TIFF)
+        .value("VIDEO_MP4", formats::SampleFormat::VIDEO_MP4)
+        .value("VIDEO_AVI", formats::SampleFormat::VIDEO_AVI);
+
+    // MetadataType enum
+    py::enum_<formats::MetadataType>(m, "MetadataType",
+                 "Metadata types for TBL v2\n\n"
+                 "Available types:\n"
+                 "  NONE: No metadata\n"
+                 "  JSON: JSON-formatted metadata\n"
+                 "  PROTOBUF: Protocol Buffers\n"
+                 "  MSGPACK: MessagePack format\n"
+                 "  CUSTOM: Custom binary format")
+        .value("NONE", formats::MetadataType::NONE)
+        .value("JSON", formats::MetadataType::JSON)
+        .value("PROTOBUF", formats::MetadataType::PROTOBUF)
+        .value("MSGPACK", formats::MetadataType::MSGPACK)
+        .value("CUSTOM", formats::MetadataType::CUSTOM);
+
+    // TblReaderV2 class
+    py::class_<readers::TblReaderV2>(m, "TblReaderV2",
+             "TBL v2 format reader with LZ4 decompression (NEW in v1.5.0)\n\n"
+             "Features:\n"
+             "- Memory-mapped I/O for zero-copy reads\n"
+             "- Automatic LZ4 decompression\n"
+             "- Checksum verification\n"
+             "- Metadata access\n"
+             "- Dimension-based filtering\n\n"
+             "Example:\n"
+             "    >>> reader = turboloader.TblReaderV2('dataset.tbl', verify_checksums=True)\n"
+             "    >>> print(f'Samples: {reader.num_samples()}')\n"
+             "    >>> data, size = reader.read_sample(0)\n"
+             "    >>> metadata, meta_type = reader.read_metadata(0)")
+        .def(py::init<const std::string&, bool>(),
+             py::arg("path"),
+             py::arg("verify_checksums") = true,
+             "Create TBL v2 reader\n\n"
+             "Args:\n"
+             "    path (str): Path to TBL v2 file\n"
+             "    verify_checksums (bool): Enable checksum verification (default: True)")
+        .def("read_sample", [](readers::TblReaderV2& self, size_t index) {
+            auto [data, size] = self.read_sample(index);
+            // Return as Python bytes
+            return py::bytes(reinterpret_cast<const char*>(data), size);
+        }, py::arg("index"),
+           "Read sample data by index\n\n"
+           "Returns decompressed data if sample is compressed.\n"
+           "Verifies checksum if verification is enabled.\n\n"
+           "Args:\n"
+           "    index (int): Sample index\n\n"
+           "Returns:\n"
+           "    bytes: Sample data (decompressed if needed)")
+        .def("read_metadata", [](readers::TblReaderV2& self, size_t index) {
+            auto [metadata, type] = self.read_metadata(index);
+            return py::make_tuple(metadata, type);
+        }, py::arg("index"),
+           "Read metadata for a sample\n\n"
+           "Args:\n"
+           "    index (int): Sample index\n\n"
+           "Returns:\n"
+           "    tuple: (metadata_string, MetadataType)")
+        .def("num_samples", &readers::TblReaderV2::num_samples,
+             "Get number of samples in the file\n\n"
+             "Returns:\n"
+             "    int: Number of samples")
+        .def("is_compressed", &readers::TblReaderV2::is_compressed,
+             "Check if file uses compression\n\n"
+             "Returns:\n"
+             "    bool: True if compressed with LZ4")
+        .def("has_metadata", &readers::TblReaderV2::has_metadata,
+             "Check if file has metadata section\n\n"
+             "Returns:\n"
+             "    bool: True if file has metadata")
+        .def("filter_by_dimensions", &readers::TblReaderV2::filter_by_dimensions,
+             py::arg("min_width") = 0, py::arg("min_height") = 0,
+             py::arg("max_width") = 0, py::arg("max_height") = 0,
+             "Get indices of samples matching dimension filter\n\n"
+             "Args:\n"
+             "    min_width (int): Minimum width (0 = no filter)\n"
+             "    min_height (int): Minimum height (0 = no filter)\n"
+             "    max_width (int): Maximum width (0 = no filter)\n"
+             "    max_height (int): Maximum height (0 = no filter)\n\n"
+             "Returns:\n"
+             "    list[int]: Matching sample indices")
+        .def("filter_by_format", &readers::TblReaderV2::filter_by_format,
+             py::arg("format"),
+             "Get indices of samples matching format filter\n\n"
+             "Args:\n"
+             "    format (SampleFormat): Sample format to filter by\n\n"
+             "Returns:\n"
+             "    list[int]: Matching sample indices")
+        .def("get_sample_info", [](readers::TblReaderV2& self, size_t index) {
+            const auto& info = self.get_sample_info(index);
+            py::dict result;
+            result["offset"] = info.offset;
+            result["size"] = info.size;
+            result["uncompressed_size"] = info.uncompressed_size;
+            result["width"] = info.width;
+            result["height"] = info.height;
+            result["format"] = info.format;
+            result["is_compressed"] = info.is_compressed();
+            result["has_metadata"] = info.has_metadata();
+            return result;
+        }, py::arg("index"),
+           "Get sample information without reading data\n\n"
+           "Args:\n"
+           "    index (int): Sample index\n\n"
+           "Returns:\n"
+           "    dict: Sample info (offset, size, dimensions, format, flags)");
+
+    // TblWriterV2 class
+    py::class_<writers::TblWriterV2>(m, "TblWriterV2",
+             "Streaming TBL v2 format writer with LZ4 compression (NEW in v1.5.0)\n\n"
+             "Key improvements over v1:\n"
+             "- Constant memory usage (streams samples directly to disk)\n"
+             "- LZ4 compression support (40-60% additional space savings)\n"
+             "- Metadata support (labels, dimensions, EXIF)\n"
+             "- Data integrity checksums (CRC32/CRC16)\n"
+             "- Dimension caching for fast filtered loading\n\n"
+             "Example:\n"
+             "    >>> writer = turboloader.TblWriterV2('output.tbl', enable_compression=True)\n"
+             "    >>> with open('image.jpg', 'rb') as f:\n"
+             "    >>>     data = f.read()\n"
+             "    >>> idx = writer.add_sample(data, turboloader.SampleFormat.JPEG, width=256, height=256)\n"
+             "    >>> writer.add_metadata(idx, '{\"label\": \"cat\"}', turboloader.MetadataType.JSON)\n"
+             "    >>> writer.finalize()")
+        .def(py::init<const std::string&, bool>(),
+             py::arg("path"),
+             py::arg("enable_compression") = true,
+             "Create TBL v2 writer\n\n"
+             "Args:\n"
+             "    path (str): Output file path\n"
+             "    enable_compression (bool): Enable LZ4 compression (default: True)")
+        .def("add_sample", [](writers::TblWriterV2& self, py::bytes data,
+                              formats::SampleFormat format, uint16_t width, uint16_t height) {
+            // Convert Python bytes to C++ buffer
+            char* buffer;
+            Py_ssize_t length;
+            if (PYBIND11_BYTES_AS_STRING_AND_SIZE(data.ptr(), &buffer, &length)) {
+                throw std::runtime_error("Failed to extract bytes data");
+            }
+            return self.add_sample(reinterpret_cast<const uint8_t*>(buffer),
+                                  length, format, width, height);
+        }, py::arg("data"), py::arg("format"),
+           py::arg("width") = 0, py::arg("height") = 0,
+           "Add a sample to the TBL file\n\n"
+           "Args:\n"
+           "    data (bytes): Sample data\n"
+           "    format (SampleFormat): Sample format (JPEG, PNG, etc.)\n"
+           "    width (int): Image width (0 if unknown/not image)\n"
+           "    height (int): Image height (0 if unknown/not image)\n\n"
+           "Returns:\n"
+           "    int: Index of the added sample")
+        .def("add_metadata", &writers::TblWriterV2::add_metadata,
+             py::arg("sample_index"), py::arg("metadata"),
+             py::arg("type") = formats::MetadataType::JSON,
+             "Add metadata for a sample\n\n"
+             "Args:\n"
+             "    sample_index (int): Index of the sample\n"
+             "    metadata (str): Metadata content\n"
+             "    type (MetadataType): Metadata type (default: JSON)")
+        .def("finalize", &writers::TblWriterV2::finalize,
+             "Finalize the TBL file\n\n"
+             "Writes the header, index, data, and metadata sections.\n"
+             "Must be called before closing the file.")
+        .def("num_samples", &writers::TblWriterV2::num_samples,
+             "Get the number of samples written\n\n"
+             "Returns:\n"
+             "    int: Number of samples")
+        .def("is_compression_enabled", &writers::TblWriterV2::is_compression_enabled,
+             "Check if compression is enabled\n\n"
+             "Returns:\n"
+             "    bool: True if LZ4 compression is enabled")
+        .def("__enter__", [](writers::TblWriterV2& self) -> writers::TblWriterV2& {
+            return self;
+        }, "Context manager entry")
+        .def("__exit__", [](writers::TblWriterV2& self, py::object, py::object, py::object) {
+            self.finalize();
+        }, "Context manager exit (auto-finalizes)");
 }

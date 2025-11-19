@@ -55,6 +55,7 @@
 #include "../core/sample.hpp"
 #include "../core/object_pool.hpp"
 #include "../core/spsc_ring_buffer.hpp"
+#include "smart_batching.hpp"
 
 // Readers
 #include "../readers/tar_reader.hpp"
@@ -165,6 +166,16 @@ struct UnifiedPipelineConfig {
     // ===== Parquet processing =====
     bool parquet_use_threads = true;            // Multi-threaded reading
     bool parquet_use_mmap = true;               // Memory-mapped I/O
+
+    // ===== Smart Batching (NEW in v1.5.1) =====
+    bool enable_smart_batching = false;         // Enable size-based sample grouping
+    size_t bucket_width_step = 32;              // Group images with width ± this value
+    size_t bucket_height_step = 32;             // Group images with height ± this value
+    size_t min_bucket_size = 16;                // Minimum samples before creating batch
+    size_t max_bucket_size = 128;               // Maximum samples per bucket
+    bool enable_dynamic_buckets = true;         // Create buckets on-demand
+    size_t max_buckets = 100;                   // Maximum number of buckets
+    bool strict_sizing = false;                 // If true, only exact sizes in bucket
 };
 
 /**
@@ -468,6 +479,19 @@ public:
         // Detect source
         data_source_ = FormatDetector::detect_source(config_.data_path);
 
+        // Initialize Smart Batching (NEW in v1.5.1)
+        if (config_.enable_smart_batching) {
+            pipeline::SmartBatchConfig sb_config;
+            sb_config.bucket_width_step = config_.bucket_width_step;
+            sb_config.bucket_height_step = config_.bucket_height_step;
+            sb_config.min_bucket_size = config_.min_bucket_size;
+            sb_config.max_bucket_size = config_.max_bucket_size;
+            sb_config.enable_dynamic_buckets = config_.enable_dynamic_buckets;
+            sb_config.max_buckets = config_.max_buckets;
+            sb_config.strict_sizing = config_.strict_sizing;
+            smart_batcher_ = std::make_unique<pipeline::SmartBatcher<UnifiedSample>>(sb_config);
+        }
+
         // Initialize
         initialize();
     }
@@ -545,28 +569,67 @@ public:
         batch.batch_id = batches_produced_++;
 
         if (config_.format == DataFormat::TAR) {
-            // TAR mode: Round-robin across worker queues (lock-free)
-            size_t consecutive_failures = 0;
-            size_t max_failures = tar_workers_.size() * 2;  // Give up after 2 full rounds
+            // TAR mode with optional Smart Batching
+            if (config_.enable_smart_batching && smart_batcher_) {
+                // Smart Batching mode: Collect samples into batcher, return sized batches
+                // First, try to fill the batcher with samples from worker queues
+                size_t samples_collected = 0;
+                size_t max_collect = config_.batch_size * 4;  // Collect more samples for better grouping
 
-            while (batch.size() < config_.batch_size && consecutive_failures < max_failures) {
-                bool got_sample = false;
-
-                for (auto& worker : tar_workers_) {
-                    if (batch.size() >= config_.batch_size) break;
-
-                    UnifiedSample sample;
-                    if (worker->get_queue()->try_pop(sample)) {
-                        batch.add(std::move(sample));
-                        got_sample = true;
-                        consecutive_failures = 0;
+                while (samples_collected < max_collect) {
+                    bool got_sample = false;
+                    for (auto& worker : tar_workers_) {
+                        UnifiedSample sample;
+                        if (worker->get_queue()->try_pop(sample)) {
+                            // Add to smart batcher (groups by size)
+                            smart_batcher_->add_sample(sample, sample.width, sample.height);
+                            got_sample = true;
+                            samples_collected++;
+                        }
                     }
+                    if (!got_sample) break;
                 }
 
-                if (!got_sample) {
-                    consecutive_failures++;
-                    if (is_finished()) break;
-                    std::this_thread::yield();
+                // Get ready batches from smart batcher
+                auto ready_batches = smart_batcher_->get_ready_batches();
+                if (!ready_batches.empty()) {
+                    // Return first ready batch
+                    for (auto& sample : ready_batches[0]) {
+                        batch.add(std::move(sample));
+                    }
+                } else if (is_finished()) {
+                    // Pipeline finished: flush all remaining samples
+                    auto final_batches = smart_batcher_->flush_all();
+                    if (!final_batches.empty()) {
+                        for (auto& sample : final_batches[0]) {
+                            batch.add(std::move(sample));
+                        }
+                    }
+                }
+            } else {
+                // Standard mode: Round-robin across worker queues (lock-free)
+                size_t consecutive_failures = 0;
+                size_t max_failures = tar_workers_.size() * 2;  // Give up after 2 full rounds
+
+                while (batch.size() < config_.batch_size && consecutive_failures < max_failures) {
+                    bool got_sample = false;
+
+                    for (auto& worker : tar_workers_) {
+                        if (batch.size() >= config_.batch_size) break;
+
+                        UnifiedSample sample;
+                        if (worker->get_queue()->try_pop(sample)) {
+                            batch.add(std::move(sample));
+                            got_sample = true;
+                            consecutive_failures = 0;
+                        }
+                    }
+
+                    if (!got_sample) {
+                        consecutive_failures++;
+                        if (is_finished()) break;
+                        std::this_thread::yield();
+                    }
                 }
             }
         } else {
@@ -791,6 +854,9 @@ private:
     std::atomic<bool> running_;
     std::atomic<size_t> samples_processed_;
     std::atomic<size_t> batches_produced_;
+
+    // Smart Batching (NEW in v1.5.1)
+    std::unique_ptr<pipeline::SmartBatcher<UnifiedSample>> smart_batcher_;
 };
 
 }  // namespace turboloader

@@ -229,6 +229,43 @@ for batch in loader:
 
 See [Getting Started Guide](docs/getting-started.md) for more examples.
 
+###  Python API Limitations (v1.5.1)
+
+The Python bindings expose most C++ functionality, but some features are C++-only or not yet exposed:
+
+**Available in Python (v1.5.1):**
+- ✅ TBL v2 Reader/Writer (NEW) - Full support for reading and writing TBL v2 files with LZ4 compression
+- ✅ Transform Compose() (NEW) - Chain multiple transforms into a single pipeline
+- ✅ All 19 SIMD-accelerated transforms - Full transform API with composition support
+- ✅ DataLoader - High-performance data loading with TAR/WebDataset support
+- ✅ GPU-accelerated JPEG decoding (nvJPEG) - Automatic when CUDA available
+- ✅ Remote TAR support (HTTP, S3, GCS) - Via DataLoader
+
+**C++ Only (Not Yet in Python):**
+- ⚠️ Smart Batching configuration - Available in C++ API only; Python uses default batching
+- ⚠️ Distributed training primitives - Use PyTorch DDP/Horovod with TurboLoader DataLoader
+- ⚠️ Direct TBL v1 Reader/Writer - v1.5.0+ focuses on TBL v2; use C++ API for v1 format
+
+**Transform Compose Example:**
+```python
+import turboloader
+import numpy as np
+
+# Create a transform pipeline
+pipeline = turboloader.Compose([
+    turboloader.Resize(224, 224),
+    turboloader.RandomHorizontalFlip(0.5),
+    turboloader.ColorJitter(brightness=0.2, contrast=0.2),
+    turboloader.ImageNetNormalize()
+])
+
+# Apply the entire pipeline with a single call
+img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
+transformed = pipeline.apply(img)  # or pipeline(img)
+```
+
+For C++ API features, see [C++ Documentation](docs/api/cpp/).
+
 ---
 
 ## Feature Comparison
