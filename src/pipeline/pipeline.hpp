@@ -176,6 +176,13 @@ struct UnifiedPipelineConfig {
     bool enable_dynamic_buckets = true;         // Create buckets on-demand
     size_t max_buckets = 100;                   // Maximum number of buckets
     bool strict_sizing = false;                 // If true, only exact sizes in bucket
+
+    // ===== Distributed Training (NEW in v1.7.1) =====
+    bool enable_distributed = false;            // Enable multi-node data loading
+    int world_rank = 0;                         // Rank of this process (0 to world_size-1)
+    int world_size = 1;                         // Total number of processes
+    bool drop_last = false;                     // Drop incomplete batches at end
+    int distributed_seed = 42;                  // Seed for shuffling (same across all ranks)
 };
 
 /**
@@ -297,13 +304,17 @@ public:
     TarWorker(const UnifiedPipelineConfig& config,
               size_t worker_id,
               BufferPool* buffer_pool,
-              std::shared_ptr<std::vector<uint8_t>> remote_tar_data = nullptr)
+              std::shared_ptr<std::vector<uint8_t>> remote_tar_data = nullptr,
+              size_t distributed_start_idx = 0,
+              size_t distributed_end_idx = 0)
         : config_(config),
           worker_id_(worker_id),
           buffer_pool_(buffer_pool),
           queue_(std::make_unique<WorkerQueue>()),
           running_(false),
-          samples_processed_(0) {
+          samples_processed_(0),
+          distributed_start_idx_(distributed_start_idx),
+          distributed_end_idx_(distributed_end_idx) {
 
         // Per-worker TAR reader
         // Check if using remote TAR data (already fetched)
@@ -376,7 +387,20 @@ private:
     void run() {
         size_t total_samples = tar_reader_->num_samples();
 
-        for (size_t i = 0; i < total_samples && running_; ++i) {
+        // Determine sample range for this worker
+        // If distributed training is enabled, use the distributed shard range
+        size_t start_idx = 0;
+        size_t end_idx = total_samples;
+
+        if (config_.enable_distributed && distributed_end_idx_ > 0) {
+            // Distributed training mode: only process samples in this rank's shard
+            start_idx = distributed_start_idx_;
+            end_idx = distributed_end_idx_;
+        }
+
+        // Each worker processes every Nth sample (round-robin across workers)
+        // Start from worker_id and stride by num_workers
+        for (size_t i = start_idx + worker_id_; i < end_idx && running_; i += config_.num_workers) {
             // Zero-copy JPEG data from TAR
             auto jpeg_data = tar_reader_->get_sample(i);
             const auto& entry = tar_reader_->get_entry(i);
@@ -449,6 +473,10 @@ private:
     std::thread thread_;
     std::atomic<bool> running_;
     std::atomic<size_t> samples_processed_;
+
+    // Distributed Training (NEW in v1.7.1)
+    size_t distributed_start_idx_;
+    size_t distributed_end_idx_;
 };
 
 /**
@@ -466,7 +494,9 @@ public:
         : config_(config),
           running_(false),
           samples_processed_(0),
-          batches_produced_(0) {
+          batches_produced_(0),
+          distributed_start_idx_(0),
+          distributed_end_idx_(0) {
 
         // Auto-detect format
         if (config_.format == DataFormat::UNKNOWN) {
@@ -478,6 +508,19 @@ public:
 
         // Detect source
         data_source_ = FormatDetector::detect_source(config_.data_path);
+
+        // Calculate distributed training shard (NEW in v1.7.1)
+        if (config_.enable_distributed) {
+            // Validate distributed config
+            if (config_.world_rank < 0 || config_.world_rank >= config_.world_size) {
+                throw std::runtime_error("Invalid distributed config: world_rank=" +
+                    std::to_string(config_.world_rank) + ", world_size=" +
+                    std::to_string(config_.world_size));
+            }
+
+            // For now, we'll determine total_samples during start() when TAR is loaded
+            // Just validate the config here
+        }
 
         // Initialize Smart Batching (NEW in v1.5.1)
         if (config_.enable_smart_batching) {
@@ -512,10 +555,35 @@ public:
                 remote_tar_data = fetch_remote_tar(config_.data_path);
             }
 
+            // Calculate distributed training shard (NEW in v1.7.1)
+            if (config_.enable_distributed) {
+                // Create a temporary TarReader to get total sample count
+                std::unique_ptr<TarReader> temp_reader;
+                if (remote_tar_data) {
+                    temp_reader = std::make_unique<TarReader>(remote_tar_data, 0, 1);
+                } else {
+                    temp_reader = std::make_unique<TarReader>(config_.data_path, 0, 1);
+                }
+
+                size_t total_samples = temp_reader->num_samples();
+                size_t samples_per_rank = total_samples / config_.world_size;
+
+                // Calculate this rank's shard
+                distributed_start_idx_ = config_.world_rank * samples_per_rank;
+
+                if (config_.world_rank == config_.world_size - 1 && !config_.drop_last) {
+                    // Last rank gets all remaining samples
+                    distributed_end_idx_ = total_samples;
+                } else {
+                    distributed_end_idx_ = distributed_start_idx_ + samples_per_rank;
+                }
+            }
+
             // Create workers with per-worker lock-free queues
             for (size_t i = 0; i < config_.num_workers; ++i) {
                 tar_workers_.push_back(std::make_unique<TarWorker>(
-                    config_, i, buffer_pool_.get(), remote_tar_data
+                    config_, i, buffer_pool_.get(), remote_tar_data,
+                    distributed_start_idx_, distributed_end_idx_
                 ));
                 tar_workers_.back()->start();
             }
@@ -857,6 +925,10 @@ private:
 
     // Smart Batching (NEW in v1.5.1)
     std::unique_ptr<pipeline::SmartBatcher<UnifiedSample>> smart_batcher_;
+
+    // Distributed Training (NEW in v1.7.1)
+    size_t distributed_start_idx_;
+    size_t distributed_end_idx_;
 };
 
 }  // namespace turboloader

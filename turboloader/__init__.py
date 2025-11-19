@@ -31,7 +31,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "1.6.1"
+__version__ = "1.7.0"
 
 # Import C++ extension module
 try:
@@ -41,6 +41,8 @@ try:
         # TBL v2 Format (NEW in v1.5.0)
         TblReaderV2, TblWriterV2,
         SampleFormat, MetadataType,
+        # Smart Batching (NEW in v1.7.0)
+        SmartBatchConfig,
         # Transform Composition (NEW in v1.5.1)
         Compose, ComposedTransforms,
         # Transforms (all 19 SIMD-accelerated transforms)
@@ -58,6 +60,8 @@ try:
         'DataLoader', 'version', 'features', '__version__',
         # TBL v2
         'TblReaderV2', 'TblWriterV2', 'SampleFormat', 'MetadataType',
+        # Smart Batching
+        'SmartBatchConfig',
         # Transform Composition
         'Compose', 'ComposedTransforms',
         # Transforms

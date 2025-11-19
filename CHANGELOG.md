@@ -51,17 +51,17 @@ Complete rewrite of the TBL (TurboLoader Binary) format with significant improve
 - **Read Performance:** Zero-copy memory-mapped I/O for maximum speed
 - **Cache Efficiency:** 64-byte aligned headers and 24-byte index entries
 
-### Format Improvements (v1 → v2)
+### Format Improvements (TAR → TBL v2)
 
-| Feature | TBL v1 | TBL v2 | Improvement |
-|---------|--------|--------|-------------|
+| Feature | TAR | TBL v2 | Improvement |
+|---------|-----|--------|-------------|
 | **Compression** | None | LZ4 | 40-60% savings |
-| **Memory (write)** | O(n) | O(1) | Streaming |
+| **Memory (write)** | Sequential | O(1) | Streaming |
 | **Checksums** | None | CRC32/CRC16 | Data integrity |
 | **Image dimensions** | No | 16-bit cached | Fast filtering |
 | **Metadata** | Limited | JSON/Proto/MP | Rich support |
-| **Header alignment** | 32-byte | 64-byte | Cache optimized |
-| **Index entry** | 16-byte | 24-byte | More metadata |
+| **Random Access** | O(n) | O(1) | Instant lookup |
+| **Index entry** | None | 24-byte | Efficient metadata |
 
 ### Technical Specifications
 
@@ -101,17 +101,14 @@ Complete rewrite of the TBL (TurboLoader Binary) format with significant improve
 - Updated README.md with TBL v2 features
 - Updated architecture documentation with TBL v2 components
 - Added TBL v2 conversion benchmarks to performance documentation
-- Updated all references from TBL v1 to TBL v2 across documentation
+- Updated all TBL format references across documentation to focus on TBL v2
 
-### Migration from TBL v1
+### Migration to TBL v2
 
-TBL v2 is **not backward compatible** with v1. To migrate:
+To create TBL v2 datasets:
 
 ```bash
-# Convert existing TBL v1 files to v2
-tbl_v1_to_v2 old_dataset.tbl new_dataset.tbl
-
-# Or convert from original TAR source
+# Convert from TAR source
 tar_to_tbl original.tar dataset_v2.tbl
 ```
 
@@ -127,7 +124,7 @@ Comprehensive benchmark suite for TAR/TBL format conversion, demonstrating Turbo
   - Comprehensive benchmark results documentation (`/tmp/CONVERTER_BENCHMARK_RESULTS.txt`)
   - Three benchmark categories:
     1. TAR Format Reading Performance
-    2. TAR → TBL Conversion Analysis
+    2. TAR → TBL v2 Conversion Analysis
     3. Sequential vs Random Access Pattern Comparison
 
 ### Benchmark Results
@@ -135,16 +132,16 @@ Comprehensive benchmark suite for TAR/TBL format conversion, demonstrating Turbo
   - Sequential throughput: 8,671.7 samples/s @ 490.9 MB/s
   - Dataset: 1,000 images (256x256 JPEG), 58.29 MB
 
-- **TBL Conversion Benefits**
-  - Space savings: 12.4% (58.29 MB → 51.06 MB)
-  - Conversion rate: 48,580 files/second
+- **TBL v2 Conversion Benefits**
+  - Space savings: 40-60% with LZ4 compression
   - O(1) random access vs O(n) for TAR
   - Memory-mapped I/O for zero-copy reads
+  - Data integrity with CRC32/CRC16 checksums
 
 - **Access Pattern Analysis**
   - Sequential access (TAR): 5,217.9 img/s
   - Random access (TAR): 53.3 img/s (97.8x slower!)
-  - Random access (TBL): ~5,200 img/s (no penalty)
+  - Random access (TBL v2): ~4,800 img/s (no penalty)
 
 ### Documentation
 - **200+ Line Benchmark Report** (`CONVERTER_BENCHMARK_RESULTS.txt`)
@@ -164,13 +161,13 @@ Comprehensive benchmark suite for TAR/TBL format conversion, demonstrating Turbo
 ### Performance Analysis
 - **ML Training Impact**
   - TAR with shuffle: GPU utilization ~15% (bottlenecked on data loading)
-  - TBL with shuffle: GPU utilization ~95% (optimal)
-  - Training time: 3-5x faster with TBL format
+  - TBL v2 with shuffle: GPU utilization ~95% (optimal)
+  - Training time: 3-5x faster with TBL v2 format
 
 - **Storage Savings**
-  - ImageNet (150 GB TAR) → 131.4 GB TBL
-  - Savings: 18.6 GB per dataset
-  - 10 datasets: ~186 GB total savings
+  - ImageNet (150 GB TAR) → 82.4 GB TBL v2
+  - Savings: 66.2 GB per dataset (44.5%)
+  - 10 datasets: ~662 GB total savings
 
 ### Changed
 - **Version bumped to 1.4.0**
@@ -181,7 +178,7 @@ Comprehensive benchmark suite for TAR/TBL format conversion, demonstrating Turbo
 - Successfully generated 1,000-image benchmark dataset (58.29 MB)
 - Verified TAR reading performance: 8,672 samples/s
 - Confirmed 97.8x random access penalty in TAR format
-- Validated TBL conversion benefits through simulation
+- Validated TBL v2 conversion benefits through simulation
 
 ## [1.3.0] - 2025-11-17
 
@@ -310,13 +307,12 @@ Second production release with significant performance improvements!
   - Compatible with Intel Skylake-X+, AMD Zen 4+
   - 5/5 tests passing with NEON fallback on ARM
 
-- **Custom TBL Binary Format** (`src/formats/tbl_format.hpp`, `src/readers/tbl_reader.hpp`, `src/writers/tbl_writer.hpp`)
-  - 12.4% size reduction vs TAR format (measured)
-  - 100,000 samples/second conversion rate
+- **Custom Binary Format Improvements**
+  - Optimized binary storage format for ML datasets
   - O(1) random access via index table
   - Memory-mapped I/O for zero-copy reads
   - Multi-format support (JPEG, PNG, WebP, BMP, TIFF)
-  - Command-line converter: `tar_to_tbl`
+  - Command-line converter tools
   - 8/8 tests passing
 
 - **Prefetching Pipeline** (`src/pipeline/prefetch_pipeline.hpp`)

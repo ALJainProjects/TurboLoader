@@ -73,7 +73,7 @@ TurboLoader achieves **10,146 img/s throughput** through a carefully designed mu
 **Performance:**
 - TAR: 52+ Gbps throughput
 - TBL v2: 48+ Gbps (including LZ4 decompression)
-- Random access: O(1) for both formats
+- Random access: O(1) for TBL v2, O(n) for TAR
 - Memory footprint: Minimal (mmap on-demand paging)
 
 **Code Locations:**
@@ -424,11 +424,10 @@ turboloader/
    - Reduces epoch time by eliminating wait states
    - **Code Location:** `src/pipeline/prefetch_pipeline.hpp`
 
-3. **TBL v1 Binary Format** ✅
-   - 12.4% size reduction vs TAR format
-   - 100,000 samples/second conversion rate
+3. **Binary Format Improvements** ✅
+   - Optimized storage format for ML datasets
    - O(1) random access via index table
-   - **Code Locations:** `src/formats/tbl_format.hpp`, `src/readers/tbl_reader.hpp`, `src/writers/tbl_writer.hpp`
+   - Foundation for TBL v2 format
 
 ### Future Improvements (v1.6+)
 

@@ -30,10 +30,9 @@ TurboLoader achieves **21,035 images/second peak throughput**, making it:
 - **Compression ratio:** 1.80:1 average
 - **Memory usage:** O(1) constant (streaming writer)
 
-**TBL v2 vs TBL v1:**
-- TBL v1: 100,000 img/s conversion (no compression)
-- TBL v2: 4,875 img/s conversion (LZ4 compression)
-- Tradeoff: 20x slower conversion for 40-60% space savings
+**TBL v2 Performance:**
+- 4,875 img/s conversion throughput with LZ4 compression
+- 40-60% space savings compared to uncompressed TAR format
 
 ### Scalability Analysis (v1.2.0)
 
@@ -247,7 +246,7 @@ Total per 32-img  180 ms  100%
 | Feature | TurboLoader | FFCV |
 |---------|-------------|------|
 | Throughput | 10,146 img/s | ~15,000 img/s |
-| Custom format | TAR (standard) | .beton (custom) |
+| Custom format | TBL v2 (LZ4) | .beton (custom) |
 | SIMD | AVX2/NEON | AVX2 only |
 | PyTorch native | No (bindings) | Yes |
 | Ease of use | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |

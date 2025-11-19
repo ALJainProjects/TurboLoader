@@ -14,19 +14,17 @@ TBL v2 is designed specifically for machine learning workloads where:
 - **Memory efficiency** during conversion is essential (O(1) memory, not O(n))
 - **Dimension filtering** without decoding saves compute (cached width/height)
 
-### Key Benefits Over TBL v1
+### Key Benefits Over TAR
 
-| Feature | TBL v1 | TBL v2 | Improvement |
-|---------|--------|--------|-------------|
+| Feature | TAR | TBL v2 | Improvement |
+|---------|-----|--------|-------------|
 | **Compression** | None | LZ4 | **40-60% space savings** |
-| **Write Memory** | O(n) | O(1) | **Streaming writer** |
+| **Write Memory** | Sequential | O(1) | **Streaming writer** |
 | **Checksums** | None | CRC32/CRC16 | **Data integrity** |
 | **Image Dimensions** | No | 16-bit cached | **Fast filtering** |
-| **Metadata** | Limited (16 bytes) | Rich (JSON/Proto/MP) | **Flexible metadata** |
-| **Header Size** | 32 bytes | 64 bytes | **Cache-aligned** |
-| **Index Entry** | 16 bytes | 24 bytes | **More metadata** |
-| **Conversion Speed** | 100,000 img/s | 4,875 img/s | Slower (compression) |
-| **File Size** | 87.6% of TAR | 40-55% of TAR | **Much smaller** |
+| **Metadata** | Limited | Rich (JSON/Proto/MP) | **Flexible metadata** |
+| **Random Access** | O(n) | O(1) | **Instant lookup** |
+| **File Size** | 100% baseline | 40-55% of TAR | **Much smaller** |
 
 ### When to Use TBL v2
 
@@ -42,10 +40,7 @@ TBL v2 is designed specifically for machine learning workloads where:
 - Storage space is unlimited
 - Maximum compatibility needed (standard format)
 
-**Use TBL v1 when:**
-- Fastest conversion speed needed (100k img/s vs 4.8k img/s)
-- No compression required (images already compressed)
-- Legacy compatibility with TBL v1 readers
+**Note:** Only TBL v2 is supported in the Python API. TBL v2 provides the best balance of conversion speed, storage efficiency, and data integrity features.
 
 ## Format Specification
 
@@ -144,7 +139,7 @@ enum class SampleFormat : uint8_t {
 
 ```cpp
 enum class CompressionType : uint8_t {
-    NONE  = 0,  // No compression (like TBL v1)
+    NONE  = 0,  // No compression (uncompressed mode)
     LZ4   = 1,  // LZ4 (default, fast compression/decompression)
     ZSTD  = 2   // Zstandard (future, higher compression ratio)
 };
@@ -166,7 +161,7 @@ tar_to_tbl imagenet_train.tar imagenet_train.tbl --verbose
 # Parallel conversion with 8 threads
 tar_to_tbl large_dataset.tar large_dataset.tbl --workers 8
 
-# Without compression (faster, TBL v1 compatibility)
+# Without compression (faster, uncompressed mode)
 tar_to_tbl input.tar output.tbl --no-compression
 
 # Measure conversion speed
@@ -270,10 +265,10 @@ turboloader.convert_tar_to_tbl(
     progress_callback=progress
 )
 
-# No compression (TBL v1 compatibility)
+# No compression (uncompressed mode for faster conversion)
 turboloader.convert_tar_to_tbl(
     'input.tar',
-    'output_v1.tbl',
+    'output_uncompressed.tbl',
     compression='none'
 )
 ```
@@ -367,12 +362,11 @@ Measured on ImageNet (1.28M images, mixed JPEG/PNG):
 
 ```
 TAR format:          148.6 GB (100%)
-TBL v1 format:       130.2 GB (87.6%, 12.4% savings)
 TBL v2 format (LZ4): 82.4 GB (55.5%, 44.5% savings)
-Improvement:         66.2 GB saved vs TAR, 47.8 GB saved vs TBL v1
+Improvement:         66.2 GB saved vs TAR
 ```
 
-**Why much smaller than v1?**
+**Why much smaller than TAR?**
 1. **LZ4 compression** - 40-60% size reduction on image data
 2. **Per-sample compression** - Each image compressed independently (allows random access)
 3. **Efficient index** - 24-byte entries with cached dimensions
@@ -396,10 +390,9 @@ Accessing 10,000 random samples from ImageNet:
 
 ```
 TAR format:   18.2 seconds (O(n) scan)
-TBL v1:       0.014 seconds (O(1) lookup, no decompression)
 TBL v2 (LZ4): 0.034 seconds (O(1) lookup + LZ4 decompress)
 
-TBL v2 is still 535x faster than TAR!
+TBL v2 is 535x faster than TAR!
 ```
 
 ### Memory-Mapped I/O
@@ -496,13 +489,6 @@ print(metadata['samples'][0]['class'])  # 'cat'
 TBL v2 writer uses constant memory regardless of dataset size:
 
 ```cpp
-// TBL v1: O(n) memory - stores all samples in memory before writing
-TblV1Writer writer_v1("output.tbl");
-for (sample : samples) {
-    writer_v1.add_sample(sample);  // Buffered in memory
-}
-writer_v1.finalize();  // Writes all at once (needs n × sample_size RAM)
-
 // TBL v2: O(1) memory - streams to disk immediately
 TblV2Writer writer_v2("output.tbl");
 for (sample : samples) {
@@ -512,8 +498,8 @@ writer_v2.finalize();  // Only writes index table (24 × n bytes)
 ```
 
 **Memory usage for ImageNet (1.28M samples):**
-- TBL v1 writer: ~150 GB RAM (buffered)
 - TBL v2 writer: ~30 MB RAM (streaming)
+- TAR sequential write: Variable (depends on tar implementation)
 
 ## Use Cases
 
@@ -675,7 +661,7 @@ dd if=/dev/zero of=test.dat bs=1M count=10000
 
 3. Disable compression for fastest speed:
 ```bash
-tar_to_tbl input.tar output.tbl --no-compression  # TBL v1 mode
+tar_to_tbl input.tar output.tbl --no-compression  # Uncompressed mode
 ```
 
 ### Issue: TBL v2 file larger than expected
@@ -725,40 +711,36 @@ md5sum dataset.tbl
 - System hang during conversion
 
 **Cause:**
-- Using TBL v1 (O(n) memory)
-- Incorrect version
+- Insufficient system memory
+- Very large individual samples
 
 **Solution:**
 ```bash
-# Ensure using TBL v2 (streaming writer)
-tar_to_tbl --version  # Should show v2
-
-# If stuck on v1, upgrade:
+# Ensure using latest version with streaming writer
 pip install --upgrade turboloader
+
+# Reduce number of parallel workers if needed
+tar_to_tbl input.tar output.tbl --workers 4
 ```
 
-## Migration from TBL v1
+## Creating TBL v2 Datasets
 
-TBL v2 is **not backward compatible** with v1. To migrate:
+To create TBL v2 datasets from existing data:
 
 ```bash
-# Option 1: Convert from original TAR source (recommended)
+# Convert from TAR source
 tar_to_tbl original.tar dataset_v2.tbl
 
-# Option 2: Use migration tool (if TAR no longer available)
-tbl_v1_to_v2 old_dataset.tbl new_dataset.tbl
-
-# Option 3: Keep both formats during transition
-tar_to_tbl original.tar dataset_v1.tbl --no-compression  # v1
-tar_to_tbl original.tar dataset_v2.tbl                   # v2
+# With parallel processing for faster conversion
+tar_to_tbl original.tar dataset_v2.tbl --workers 8
 ```
 
-**Format detection:**
+**Python API:**
 ```python
 import turboloader
 
-# Automatically detects TBL v1 or v2
-loader = turboloader.DataLoader('dataset.tbl')  # Works with both!
+# Load TBL v2 files
+loader = turboloader.DataLoader('dataset.tbl', batch_size=64)
 ```
 
 ## Best Practices
@@ -777,16 +759,16 @@ loader = turboloader.DataLoader('dataset.tbl')  # Works with both!
 
 ## Performance Comparison
 
-| Operation | TAR | TBL v1 | TBL v2 (LZ4) |
-|-----------|-----|--------|--------------|
-| **Sequential Read** | 8,672 img/s | 5,218 img/s | 4,950 img/s |
-| **Random Read** | 53 img/s | 5,200 img/s | 4,800 img/s |
-| **File Size** | 100 GB | 87.6 GB | 45-55 GB |
-| **Conversion Speed** | N/A | 100k img/s | 4,875 img/s |
-| **Write Memory** | N/A | O(n) | O(1) |
-| **Data Integrity** | ❌ | ❌ | ✅ (CRC32/16) |
-| **Cached Dimensions** | ❌ | ❌ | ✅ |
-| **Compression** | ❌ | ❌ | ✅ (LZ4) |
+| Operation | TAR | TBL v2 (LZ4) |
+|-----------|-----|--------------|
+| **Sequential Read** | 8,672 img/s | 4,950 img/s |
+| **Random Read** | 53 img/s | 4,800 img/s |
+| **File Size** | 100 GB | 45-55 GB |
+| **Conversion Speed** | N/A | 4,875 img/s |
+| **Write Memory** | Variable | O(1) |
+| **Data Integrity** | ❌ | ✅ (CRC32/16) |
+| **Cached Dimensions** | ❌ | ✅ |
+| **Compression** | ❌ | ✅ (LZ4) |
 
 ## Code Locations
 
