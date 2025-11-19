@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "turboloader"
 version = "1.7.1"
-description = "High-performance ML data loading library (21,035 img/s, 12x faster than PyTorch). Features: Distributed Training with deterministic sharding (v1.7.1), TBL v2 format with LZ4 compression (40-60% smaller), Smart Batching (15-25% throughput boost), 19 SIMD-accelerated transforms (AVX2/NEON), AutoAugment policies, PyTorch/TensorFlow/JAX integration, lock-free concurrent queues, memory-mapped I/O, GPU-accelerated JPEG decoding. C++20 implementation with Python bindings."
+description = "Production-ready ML data loading library with distributed training support, SIMD-accelerated transforms, and custom binary format. Built with C++20 for maximum performance, with seamless Python integration for PyTorch, TensorFlow, and JAX workflows."
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
