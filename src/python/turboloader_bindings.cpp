@@ -243,7 +243,7 @@ std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
  * with the turboloader package. The Python __init__.py re-exports the API.
  */
 PYBIND11_MODULE(_turboloader, m) {
-    m.doc() = "TurboLoader v1.5.1 - High-performance data loading with 19 SIMD transforms\n\n"
+    m.doc() = "TurboLoader v1.6.0 - High-performance data loading with 19 SIMD transforms\n\n"
               "Drop-in replacement for PyTorch DataLoader with 12x speedup.\n\n"
               "Features:\n"
               "- TBL v2 format with LZ4 compression (40-60% space savings)\n"
@@ -316,14 +316,14 @@ PYBIND11_MODULE(_turboloader, m) {
              "Get next batch (iterator protocol)");
 
     // Module-level functions
-    m.def("version", []() { return "1.5.1"; },
+    m.def("version", []() { return "1.6.0"; },
           "Get TurboLoader version\n\n"
           "Returns:\n"
-          "    str: Version string (e.g., '1.5.1')");
+          "    str: Version string (e.g., '1.6.0')");
 
     m.def("features", []() {
         py::dict features;
-        features["version"] = "1.5.1";
+        features["version"] = "1.6.0";
         features["tar_support"] = true;
         features["remote_tar"] = true;
         features["http_support"] = true;
