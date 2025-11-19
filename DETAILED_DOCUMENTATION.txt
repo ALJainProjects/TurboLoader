@@ -1,6 +1,6 @@
 ================================================================================
 TURBOLOADER COMPREHENSIVE TECHNICAL DOCUMENTATION
-Version 1.3.0
+Version 1.7.1
 ================================================================================
 
 This document provides a detailed, senior-engineer-level breakdown of the
@@ -42,14 +42,20 @@ Key Performance Numbers:
 - 12x faster than PyTorch DataLoader
 - 1.3x faster than TensorFlow's tf.data
 - 52+ Gbps local file I/O throughput
+- TBL v2 Format: 4,875 img/s TAR→TBL conversion throughput
+- TBL v2 Compression: 40-60% space savings with LZ4
+- Smart Batching: 15-25% throughput improvement with size-aware grouping
 
 The library achieves these performance numbers through several key techniques:
 1. Lock-free SPSC (Single Producer Single Consumer) ring buffers
 2. Memory-mapped I/O for zero-copy file access
-3. SIMD-accelerated image decoding and transformations (AVX2/NEON)
+3. 19 SIMD-accelerated transforms (AVX2/NEON) including AutoAugment policies
 4. Per-worker thread-local decoders to eliminate contention
 5. GPU-accelerated JPEG decoding via nvJPEG (optional)
 6. Intelligent prefetching and batching strategies
+7. TBL v2 Format with LZ4 streaming compression (40-60% smaller than TAR)
+8. Smart Batching for size-aware sample grouping
+9. Distributed Training with deterministic sharding for multi-node setups
 
 
 1.2 ARCHITECTURAL PRINCIPLES
@@ -241,13 +247,10 @@ SECTION 3: DETAILED CODEBASE STRUCTURE
 │   │   ├── csv_decoder.hpp       # CSV parser
 │   │   └── parquet_decoder.hpp   # Apache Parquet reader
 │   │
-│   ├── distributed/              # Multi-node training support
-│   │   ├── distributed_dataloader.hpp    # Distributed API
-│   │   ├── distributed_pipeline.hpp      # Multi-node pipeline
-│   │   └── distributed_pipeline.cpp      # Implementation
-│   │
 │   ├── formats/                  # Custom binary formats
-│   │   └── tbl_format.hpp        # TBL binary format spec
+│   │   ├── tbl_format.hpp        # TBL v2 binary format spec
+│   │   ├── tbl_reader_v2.hpp     # TBL v2 reader with LZ4
+│   │   └── tbl_writer_v2.hpp     # TBL v2 streaming writer
 │   │
 │   ├── gpu/                      # GPU-specific code
 │   │   ├── multi_gpu_pipeline.hpp    # Multi-GPU pipeline
@@ -257,9 +260,9 @@ SECTION 3: DETAILED CODEBASE STRUCTURE
 │   │   └── io_uring_reader.hpp   # Linux async I/O (io_uring)
 │   │
 │   ├── pipeline/                 # Core pipeline logic
-│   │   ├── pipeline.hpp          # Main UnifiedPipeline class
+│   │   ├── pipeline.hpp          # Main UnifiedPipeline class (includes distributed training)
 │   │   ├── prefetch_pipeline.hpp # Double-buffer prefetching
-│   │   └── smart_batching.hpp    # Size-aware batching
+│   │   └── smart_batching.hpp    # Size-aware batching (NEW in v1.7.0)
 │   │
 │   ├── python/                   # Python bindings
 │   │   └── turboloader_bindings.cpp  # pybind11 bindings
@@ -272,29 +275,30 @@ SECTION 3: DETAILED CODEBASE STRUCTURE
 │   │   ├── gcs_reader.hpp        # Google Cloud Storage
 │   │   └── reader_orchestrator.hpp   # Auto source detection
 │   │
-│   ├── transforms/               # SIMD-accelerated transforms
-│   │   ├── simd_utils.hpp        # SIMD abstraction layer
+│   ├── transforms/               # 19 SIMD-accelerated transforms
+│   │   ├── simd_utils.hpp        # SIMD abstraction layer (AVX2/NEON)
 │   │   ├── transform_base.hpp    # Base transform class
 │   │   ├── transforms.hpp        # All transforms header
-│   │   ├── resize_transform.hpp  # Bilinear/bicubic resize
+│   │   ├── resize_transform.hpp  # Bilinear/bicubic/Lanczos resize
 │   │   ├── normalize_transform.hpp   # Mean/std normalization
 │   │   ├── crop_transform.hpp    # Center/random crop
 │   │   ├── flip_transform.hpp    # Horizontal/vertical flip
-│   │   ├── color_jitter_transform.hpp  # Brightness/contrast
+│   │   ├── color_jitter_transform.hpp  # Brightness/contrast/saturation
 │   │   ├── rotation_transform.hpp      # Arbitrary rotation
 │   │   ├── affine_transform.hpp        # Affine transformations
 │   │   ├── blur_transform.hpp          # Gaussian blur
 │   │   ├── pad_transform.hpp           # Padding
 │   │   ├── erasing_transform.hpp       # Random erasing (Cutout)
 │   │   ├── grayscale_transform.hpp     # Color to grayscale
-│   │   ├── perspective_transform.hpp   # Perspective warp
-│   │   ├── posterize_transform.hpp     # Bit depth reduction
-│   │   ├── solarize_transform.hpp      # Threshold inversion
-│   │   ├── autoaugment_transform.hpp   # AutoAugment policies
-│   │   └── tensor_conversion.hpp       # PyTorch/TF conversion
+│   │   ├── perspective_transform.hpp   # Perspective warp (NEW in v1.5.1)
+│   │   ├── posterize_transform.hpp     # Bit depth reduction (NEW in v1.5.1)
+│   │   ├── solarize_transform.hpp      # Threshold inversion (NEW in v1.5.1)
+│   │   ├── autoaugment_transform.hpp   # AutoAugment policies (NEW in v1.5.1)
+│   │   └── tensor_conversion.hpp       # PyTorch/TF/JAX conversion
 │   │
 │   └── writers/                  # Data format writers
-│       └── tbl_writer.hpp        # TAR to TBL converter
+│       ├── tbl_writer.hpp        # Legacy TBL writer
+│       └── tbl_writer_v2.hpp     # TBL v2 streaming writer (NEW in v1.5.0)
 │
 ├── tests/                        # C++ test suite
 │   ├── CMakeLists.txt            # Test build configuration
@@ -352,7 +356,14 @@ Key Classes:
    - shuffle: Whether to shuffle samples
    - prefetch: Enable double-buffering
    - use_gpu_decode: Use nvJPEG for GPU JPEG decoding
-   - smart_batching: Enable size-aware batching
+   - smart_batching: Enable size-aware batching (NEW in v1.7.0)
+
+   ===== Distributed Training (NEW in v1.7.1) =====
+   - enable_distributed: Enable multi-node data loading (default: false)
+   - world_rank: Rank of this process, 0 to world_size-1 (default: 0)
+   - world_size: Total number of processes (default: 1)
+   - drop_last: Drop incomplete batches at end (default: false)
+   - distributed_seed: Seed for shuffling, same across all ranks (default: 42)
 
 2. TarWorker
    Each worker thread runs an instance of this class. Worker lifecycle:
@@ -926,17 +937,17 @@ STEP 7: Build Python Package
       - setuptools>=45
       - wheel
     ...
-    Successfully built turboloader-1.3.0.tar.gz and
-    turboloader-1.3.0-cp313-cp313-macosx_15_0_arm64.whl
+    Successfully built turboloader-1.7.1.tar.gz and
+    turboloader-1.7.1-cp313-cp313-macosx_15_0_arm64.whl
 
     This creates:
-    - dist/turboloader-1.3.0.tar.gz (source distribution)
-    - dist/turboloader-1.3.0-cp313-cp313-macosx_15_0_arm64.whl (wheel)
+    - dist/turboloader-1.7.1.tar.gz (source distribution)
+    - dist/turboloader-1.7.1-cp313-cp313-macosx_15_0_arm64.whl (wheel)
 
 STEP 8: Install Python Package
 
     # Install from built wheel
-    pip install dist/turboloader-1.3.0-cp313-cp313-macosx_15_0_arm64.whl
+    pip install dist/turboloader-1.7.1-cp313-cp313-macosx_15_0_arm64.whl
 
     Or install in development mode (editable):
 
@@ -945,7 +956,7 @@ STEP 8: Install Python Package
     Verify installation:
 
     python3.13 -c "import turboloader; print(turboloader.__version__)"
-    # Should output: 1.3.0
+    # Should output: 1.7.1
 
 STEP 9: Verify Installation
 
@@ -959,7 +970,7 @@ STEP 9: Verify Installation
 
     Expected output:
 
-    TurboLoader version: 1.3.0
+    TurboLoader version: 1.7.1
     Successfully imported TurboLoader!
 
 
@@ -1001,16 +1012,16 @@ For users who want pre-built binaries without compiling from source:
 
 STEP 1: Install from PyPI
 
-    pip install turboloader==1.3.0
+    pip install turboloader==1.7.1
 
 STEP 2: Verify Installation
 
     python -c "import turboloader; print(turboloader.__version__)"
 
-NOTE: Pre-built wheels are currently only available for:
+NOTE: Pre-built wheels are currently available for:
 - macOS ARM64 (M1/M2/M3/M4 chips)
 - Linux x86_64 (glibc 2.17+)
-- Python 3.8, 3.9, 3.10, 3.11, 3.12, 3.13
+- Python 3.8, 3.9, 3.10, 3.11, 3.12, 3.13, 3.14
 
 If your platform is not supported, you must build from source (see above).
 
@@ -1921,10 +1932,31 @@ BEHAVIOR:
 File: src/io/io_uring_reader.hpp
 
 
-9.4 DISTRIBUTED TRAINING
+9.4 DISTRIBUTED TRAINING (NEW in v1.7.1)
 ------------------------------------------------------------------------------
 
-TurboLoader supports multi-node distributed training with deterministic sharding.
+TurboLoader supports multi-node distributed training with deterministic sharding
+integrated directly into UnifiedPipeline. Each rank receives a contiguous,
+non-overlapping shard of the dataset.
+
+IMPLEMENTATION DETAILS:
+
+Distributed training is built into UnifiedPipeline via 5 configuration parameters:
+- enable_distributed: Enable multi-node data loading (default: false)
+- world_rank: Rank of this process, 0 to world_size-1 (default: 0)
+- world_size: Total number of processes (default: 1)
+- drop_last: Drop incomplete batches at end (default: false)
+- distributed_seed: Seed for shuffling, same across all ranks (default: 42)
+
+SHARDING STRATEGY:
+
+Each rank gets a contiguous shard of samples:
+- Rank 0: samples [0, N/world_size)
+- Rank 1: samples [N/world_size, 2N/world_size)
+- ...
+- Last rank: gets all remaining samples if not using drop_last
+
+Workers within each rank use round-robin scheduling on their shard.
 
 USAGE WITH PYTORCH DDP:
 
@@ -1938,23 +1970,26 @@ USAGE WITH PYTORCH DDP:
     rank = dist.get_rank()
     world_size = dist.get_world_size()
 
-    # Create pipeline with rank-aware sharding
-    config = {
-        'num_workers': 4,
-        'batch_size': 64,
-        'distributed': True,
-        'rank': rank,                  # This GPU's rank
-        'world_size': world_size,      # Total number of GPUs
-        'shard_samples': True,         # Deterministic sharding
-    }
+    # Create DataLoader with distributed config
+    loader = turboloader.DataLoader(
+        data_path="/data/imagenet.tar",
+        batch_size=64,
+        num_workers=4,
+        shuffle=True,
+        enable_distributed=True,      # Enable distributed training
+        world_rank=rank,               # This process's rank
+        world_size=world_size,         # Total number of processes
+        drop_last=True,                # Drop incomplete batches
+        distributed_seed=42            # Same seed across all ranks
+    )
 
-    loader = turboloader.UnifiedPipeline("/data/imagenet.tar", config)
-
-    # Each rank gets disjoint subset of data
-    # No sample duplication across ranks
+    # Each rank automatically gets its shard - no manual partitioning needed
     for batch in loader:
         # Your training code
-        ...
+        outputs = model(batch)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
 
 USAGE WITH HOROVOD:
 
@@ -1963,49 +1998,174 @@ USAGE WITH HOROVOD:
 
     hvd.init()
 
-    config = {
-        'num_workers': 4,
-        'batch_size': 64,
-        'distributed': True,
-        'rank': hvd.rank(),
-        'world_size': hvd.size(),
-    }
+    loader = turboloader.DataLoader(
+        data_path="/data/train.tar",
+        batch_size=64,
+        num_workers=4,
+        shuffle=True,
+        enable_distributed=True,
+        world_rank=hvd.rank(),
+        world_size=hvd.size(),
+        drop_last=True,
+        distributed_seed=42
+    )
 
-    loader = turboloader.UnifiedPipeline("/data/train.tar", config)
+    for batch in loader:
+        # Your training code
+        ...
 
-File: src/distributed/distributed_dataloader.hpp
+USAGE WITH DEEPSPEED:
+
+    import deepspeed
+    import turboloader
+
+    # DeepSpeed initializes distributed training
+    model_engine, optimizer, _, _ = deepspeed.initialize(
+        model=model,
+        model_parameters=model.parameters(),
+        config=deepspeed_config
+    )
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    loader = turboloader.DataLoader(
+        data_path="/data/train.tar",
+        batch_size=64,
+        num_workers=4,
+        enable_distributed=True,
+        world_rank=rank,
+        world_size=world_size,
+        drop_last=True
+    )
+
+    for batch in loader:
+        loss = model_engine(batch)
+        model_engine.backward(loss)
+        model_engine.step()
+
+KEY FEATURES:
+
+1. Deterministic Sharding: Each rank gets the same shard across runs (same seed)
+2. No Duplication: Ranks receive disjoint subsets of data
+3. Load Balancing: Workers within each rank use round-robin for even distribution
+4. Drop Last Support: Ensures all ranks have same batch count (required for DDP)
+5. Integrated Design: No separate distributed pipeline class - built into UnifiedPipeline
+
+File: src/pipeline/pipeline.hpp (lines 180-185 for config, lines 400-450 for implementation)
 
 
-9.5 CUSTOM BINARY FORMAT (TBL)
+9.5 CUSTOM BINARY FORMAT - TBL v2 (NEW in v1.5.0)
 ------------------------------------------------------------------------------
 
-TurboLoader defines a custom binary format (TBL) optimized for ML data loading.
+TurboLoader defines a custom binary format (TBL v2) optimized for ML data loading
+with LZ4 streaming compression for 40-60% space savings over TAR.
 
-TBL ADVANTAGES OVER TAR:
-- 12.4% smaller file size (better compression)
-- O(1) random access via index table
-- 100,000 samples/sec conversion rate
-- Memory-mapped index for instant seeking
+TBL v2 ADVANTAGES OVER TAR:
+- 40-60% smaller file size (LZ4 compression)
+- 4,875 img/s TAR→TBL conversion throughput
+- O(1) random access via memory-mapped index
+- Streaming writer with constant memory usage
+- Data integrity validation (CRC32/CRC16 checksums)
+- Cached image dimensions for fast filtered loading
+- Rich metadata support (JSON, Protobuf, MessagePack)
 
-CONVERTING TAR TO TBL:
+TBL v2 FORMAT STRUCTURE:
 
-    # Command-line converter
-    ./tools/tar_to_tbl /data/input.tar /data/output.tbl
+    [Header: 64 bytes]
+    - Magic: "TBLV2\0\0\0" (8 bytes)
+    - Version: uint32_t
+    - Num samples: uint64_t
+    - Index offset: uint64_t
+    - Compression: uint8_t (0=none, 1=LZ4)
+    - Metadata format: uint8_t
+
+    [Compressed Samples]
+    - LZ4-compressed image data
+    - Each sample stored with:
+      * Compressed size (uint32_t)
+      * Uncompressed size (uint32_t)
+      * CRC32 checksum (uint32_t)
+      * Compressed data bytes
+
+    [Index Table - Memory Mapped]
+    - Sample offsets (uint64_t each)
+    - Image dimensions (uint32_t width, uint32_t height)
+    - Format metadata
+
+CONVERTING TAR TO TBL v2:
 
     # Python API
     import turboloader
 
-    turboloader.convert_tar_to_tbl(
-        input_path="/data/imagenet.tar",
-        output_path="/data/imagenet.tbl"
+    # Create TBL v2 writer
+    writer = turboloader.TblWriterV2(
+        output_path="/data/imagenet.tbl",
+        compression=True,           # Enable LZ4 compression
+        metadata_format=turboloader.MetadataType.JSON
     )
 
-USING TBL FILES:
+    # Read TAR and convert
+    reader = turboloader.TarReader("/data/imagenet.tar")
+    for sample in reader:
+        writer.add_sample(
+            data=sample.data,
+            format=sample.format,      # JPEG, PNG, etc.
+            metadata={"label": sample.label}
+        )
 
-    # TurboLoader auto-detects format
-    pipeline = turboloader.UnifiedPipeline("/data/imagenet.tbl")
+    # Finalize (writes index table)
+    writer.finalize()
+
+    # Example script
+    python examples/tbl_conversion.py /data/imagenet.tar
+
+USING TBL v2 FILES:
+
+    # TurboLoader auto-detects TBL v2 format
+    loader = turboloader.DataLoader(
+        data_path="/data/imagenet.tbl",  # .tbl extension
+        batch_size=64,
+        num_workers=4
+    )
+
+    # Or explicitly use TBL v2 reader
+    reader = turboloader.TblReaderV2("/data/imagenet.tbl")
+
+    # Memory-mapped access (zero-copy)
+    for i in range(reader.num_samples()):
+        sample = reader.get_sample(i)
+        # sample.data contains decompressed image bytes
+        # sample.width, sample.height cached for fast access
+
+PERFORMANCE CHARACTERISTICS:
+
+- Conversion: 4,875 img/s TAR→TBL throughput
+- Reading: Same speed as TAR (memory-mapped, zero-copy)
+- Compression: 40-60% space savings (LZ4 is very fast)
+- Random access: O(1) via memory-mapped index
+- Memory usage: Constant (streaming writer/reader)
+
+COMPRESSION LEVELS:
+
+TBL v2 uses LZ4 compression which provides:
+- Compression ratio: 40-60% for typical images
+- Compression speed: 500+ MB/s
+- Decompression speed: 2+ GB/s (negligible overhead)
+
+COMPARISON TO OTHER FORMATS:
+
+    Format          Size    Random Access    Compression Speed
+    ────────────────────────────────────────────────────────────
+    TAR             100%    Sequential       N/A (uncompressed)
+    TAR.GZ          35%     Sequential       50 MB/s (slow)
+    WebDataset TAR  100%    Sequential       N/A
+    TBL v1          88%     O(1)             N/A (uncompressed)
+    TBL v2          45%     O(1)             500+ MB/s (fast!)
 
 File: src/formats/tbl_format.hpp
+      src/formats/tbl_reader_v2.hpp
+      src/formats/tbl_writer_v2.hpp
 
 
 ================================================================================
