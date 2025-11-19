@@ -223,8 +223,8 @@ def run_benchmark(image_dir: str,
 
 def main():
     parser = argparse.ArgumentParser(description='Naive PyTorch DataLoader benchmark')
-    parser.add_argument('image_dir', type=str,
-                       help='Directory containing JPEG images')
+    parser.add_argument('--image-dir', '-dir', type=str, default="/private/tmp/benchmark_datasets/bench_2k/images/",
+                        help='Directory containing JPEG images')
     parser.add_argument('--batch-size', '-b', type=int, default=32,
                        help='Batch size (default: 32)')
     parser.add_argument('--num-workers', '-w', type=int, default=4,

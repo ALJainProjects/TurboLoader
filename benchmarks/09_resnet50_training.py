@@ -257,7 +257,8 @@ def main():
         description='ResNet-50 training benchmark with TurboLoader',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument('tar_path', help='Path to TAR dataset')
+    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
+                        help='Path to TAR file containing images')
     parser.add_argument('--batch-size', type=int, default=32,
                        help='Batch size for training')
     parser.add_argument('--num-workers', type=int, default=8,

@@ -37,8 +37,12 @@ LIBRARIES_AVAILABLE = {
 try:
     import turboloader
     LIBRARIES_AVAILABLE['turboloader'] = True
-except ImportError:
-    print("WARNING: TurboLoader not available")
+    # Debug: Check if Compose is available
+    if not hasattr(turboloader, 'Compose'):
+        print(f"WARNING: turboloader.Compose not available. Module path: {turboloader.__file__}")
+        print(f"Available attributes: {[x for x in dir(turboloader) if not x.startswith('_')]}")
+except ImportError as e:
+    print(f"WARNING: TurboLoader not available - {e}")
 
 try:
     import torch
@@ -53,8 +57,8 @@ except ImportError:
 try:
     import tensorflow as tf
     LIBRARIES_AVAILABLE['tensorflow'] = True
-except ImportError:
-    print("WARNING: TensorFlow not available")
+except (ImportError, AttributeError) as e:
+    print(f"WARNING: TensorFlow not available - {type(e).__name__}: {e}")
 
 try:
     from ffcv.loader import Loader, OrderOption
@@ -145,25 +149,26 @@ def benchmark_data_loading(tar_path: str, results: BenchmarkResults, num_workers
     if LIBRARIES_AVAILABLE['turboloader'] and LIBRARIES_AVAILABLE['torch']:
         print("\nTesting TurboLoader...")
         try:
-            loader = turboloader.Loader(
+            loader = turboloader.DataLoader(
                 tar_path,
                 batch_size=batch_size,
                 num_workers=num_workers,
-                shuffle=False,
-                decode=True
+                shuffle=False
             )
 
             start = time.time()
             images_loaded = 0
-            for i, batch in enumerate(loader):
-                if i >= num_batches:
+            batch_count = 0
+            for batch in loader:
+                if batch_count >= num_batches:
                     break
-                images_loaded += batch.shape[0]
+                images_loaded += len(batch)
+                batch_count += 1
             elapsed = time.time() - start
 
             throughput = images_loaded / elapsed
             results.add_result("Data Loading", "TurboLoader", "img/s", throughput)
-            results.add_result("Data Loading", "TurboLoader", "batch/s", num_batches / elapsed)
+            results.add_result("Data Loading", "TurboLoader", "batch/s", batch_count / elapsed)
             print(f"  Throughput: {throughput:.1f} img/s")
 
         except Exception as e:
@@ -263,33 +268,34 @@ def benchmark_transforms(tar_path: str, results: BenchmarkResults, num_workers: 
     if LIBRARIES_AVAILABLE['turboloader'] and LIBRARIES_AVAILABLE['torch']:
         print("\nTesting TurboLoader (SIMD transforms)...")
         try:
-            loader = turboloader.Loader(
+            transforms = turboloader.Compose([
+                turboloader.Resize(256, 256),
+                turboloader.RandomCrop(224, 224),
+                turboloader.RandomHorizontalFlip(0.5),
+                turboloader.ImageNetNormalize()
+            ])
+
+            loader = turboloader.DataLoader(
                 tar_path,
                 batch_size=batch_size,
                 num_workers=num_workers,
                 shuffle=True,
-                decode=True,
-                transforms=[
-                    turboloader.transforms.RandomResizedCrop(224),
-                    turboloader.transforms.RandomHorizontalFlip(0.5),
-                    turboloader.transforms.Normalize(
-                        mean=[0.485, 0.456, 0.406],
-                        std=[0.229, 0.224, 0.225]
-                    )
-                ]
+                transform=transforms
             )
 
             start = time.time()
             images_loaded = 0
-            for i, batch in enumerate(loader):
-                if i >= num_batches:
+            batch_count = 0
+            for batch in loader:
+                if batch_count >= num_batches:
                     break
-                images_loaded += batch.shape[0]
+                images_loaded += len(batch)
+                batch_count += 1
             elapsed = time.time() - start
 
             throughput = images_loaded / elapsed
             results.add_result("Transforms", "TurboLoader", "img/s", throughput)
-            results.add_result("Transforms", "TurboLoader", "batch/s", num_batches / elapsed)
+            results.add_result("Transforms", "TurboLoader", "batch/s", batch_count / elapsed)
             print(f"  Throughput: {throughput:.1f} img/s")
 
         except Exception as e:
@@ -407,20 +413,19 @@ def benchmark_end_to_end_training(tar_path: str, results: BenchmarkResults,
         try:
             from torchvision.models import resnet18
 
-            loader = turboloader.Loader(
+            transforms = turboloader.Compose([
+                turboloader.Resize(256, 256),
+                turboloader.RandomCrop(224, 224),
+                turboloader.RandomHorizontalFlip(0.5),
+                turboloader.ImageNetNormalize()
+            ])
+
+            loader = turboloader.DataLoader(
                 tar_path,
                 batch_size=batch_size,
                 num_workers=num_workers,
                 shuffle=True,
-                decode=True,
-                transforms=[
-                    turboloader.transforms.RandomResizedCrop(224),
-                    turboloader.transforms.RandomHorizontalFlip(0.5),
-                    turboloader.transforms.Normalize(
-                        mean=[0.485, 0.456, 0.406],
-                        std=[0.229, 0.224, 0.225]
-                    )
-                ]
+                transform=transforms
             )
 
             model = resnet18(num_classes=1000)
@@ -434,9 +439,15 @@ def benchmark_end_to_end_training(tar_path: str, results: BenchmarkResults,
             images_processed = 0
 
             for epoch in range(num_epochs):
-                for batch_idx, images in enumerate(loader):
+                for batch in loader:
+                    # batch is a dict with 'image' key containing numpy array
+                    if isinstance(batch, dict) and 'image' in batch:
+                        images_np = batch['image']
+                    else:
+                        images_np = batch
+
                     # Convert to PyTorch tensor
-                    images_t = torch.from_numpy(images).to(device)
+                    images_t = torch.from_numpy(images_np).float().to(device)
                     labels = torch.randint(0, 1000, (images_t.shape[0],)).to(device)
 
                     optimizer.zero_grad()
@@ -627,7 +638,8 @@ def benchmark_file_conversion(tar_path: str, results: BenchmarkResults):
 
 def main():
     parser = argparse.ArgumentParser(description='Comprehensive TurboLoader Benchmark')
-    parser.add_argument('tar_path', type=str, help='Path to TAR dataset')
+    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
+                        help='Path to TAR file containing images')
     parser.add_argument('--workers', type=int, default=4, help='Number of worker threads')
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size')
     parser.add_argument('--num-batches', type=int, default=100, help='Number of batches to test')

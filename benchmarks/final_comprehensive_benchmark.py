@@ -271,7 +271,8 @@ def benchmark_tar_to_tbl_conversion(tar_path):
 
 def main():
     parser = argparse.ArgumentParser(description='Final Comprehensive Benchmark')
-    parser.add_argument('tar_path', type=str, help='Path to TAR dataset')
+    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
+                        help='Path to TAR file containing images')
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size')
     parser.add_argument('--num-batches', type=int, default=50, help='Number of batches')
     parser.add_argument('--output', type=str, default='final_results.json', help='Output JSON')

@@ -347,7 +347,8 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Generate benchmark data for web app")
-    parser.add_argument('--tar-path', type=str, help='Path to TAR dataset for benchmarking')
+    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
+                        help='Path to TAR file containing images')
     parser.add_argument('--output', type=str, default='benchmark_data.json',
                        help='Output JSON file (default: benchmark_data.json)')
     parser.add_argument('--mock', action='store_true',
