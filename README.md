@@ -2,7 +2,7 @@
 
 **Production-Ready ML Data Loading Library**
 
-[![PyPI version](https://badge.fury.io/py/turboloader.svg)](https://pypi.org/project/turboloader/)
+[![PyPI version](https://img.shields.io/pypi/v/turboloader.svg)](https://pypi.org/project/turboloader/)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -283,7 +283,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: Production-Ready ML Data Loading},
   year = {2025},
-  version = {1.7.5},
+  version = {1.7.6},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
@@ -298,4 +298,4 @@ If you use TurboLoader in your research:
 
 ---
 
-TurboLoader v1.7.5 - Production-ready ML data loading. Fast. Efficient. Reliable.
+TurboLoader v1.7.6 - Production-ready ML data loading. Fast. Efficient. Reliable.
