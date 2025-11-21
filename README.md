@@ -3,6 +3,7 @@
 **Production-Ready ML Data Loading Library**
 
 [![PyPI version](https://img.shields.io/pypi/v/turboloader.svg)](https://pypi.org/project/turboloader/)
+[![Tests](https://github.com/ALJainProjects/TurboLoader/actions/workflows/test.yml/badge.svg)](https://github.com/ALJainProjects/TurboLoader/actions/workflows/test.yml)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

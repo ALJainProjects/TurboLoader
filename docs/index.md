@@ -15,9 +15,9 @@ Welcome to TurboLoader - the fastest ML data loading library with SIMD-accelerat
 TurboLoader achieves **21,035 img/s peak throughput** (12x faster than PyTorch) through:
 
 - **Native C++20 implementation** - No Python GIL overhead
-- **TBL v2 Binary Format** - LZ4 compression (40-60% space savings), O(1) streaming writer, 4,875 img/s conversion **NEW in v1.5.0**
-- **Data Integrity** - CRC32/CRC16 checksums for reliable data loading **NEW in v1.5.0**
-- **Cached Dimensions** - Width/height in index for fast filtering without decoding **NEW in v1.5.0**
+- **TBL v2 Binary Format** - LZ4 compression (40-60% space savings), O(1) streaming writer, 4,875 img/s conversion
+- **Data Integrity** - CRC32/CRC16 checksums for reliable data loading
+- **Cached Dimensions** - Width/height in index for fast filtering without decoding
 - **19 SIMD-accelerated transforms** - AVX-512/AVX2/NEON optimized operations
 - **Smart Batching** - Size-based grouping reduces padding by 15-25% (~1.2x boost)
 - **Distributed Training** - Multi-node support (PyTorch DDP, Horovod, DeepSpeed)
@@ -214,7 +214,11 @@ See [Architecture Guide](architecture.md) for detailed design.
 
 ## Version History
 
-- **v1.5.0** (Current) - TBL v2 Format with LZ4 compression (40-60% space savings)
+- **v1.7.7** (Current) - Developer experience improvements: Issue templates, Quick Start notebook, PyTorch Lightning example, Troubleshooting guide, Installation verification
+- **v1.7.6** - PyPI badge updates and documentation
+- **v1.7.5** - README updates and version management
+- **v1.7.4** - TensorFlow benchmark fixes
+- **v1.5.0** - TBL v2 Format with LZ4 compression (40-60% space savings)
 - **v1.4.0** - Format converter benchmarks and documentation
 - **v1.3.0** - Performance optimizations and stability improvements
 - **v1.2.1** - GPU JPEG decoding (nvJPEG) + Linux io_uring async I/O
@@ -248,7 +252,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {1.5.0},
+  version = {1.7.7},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```

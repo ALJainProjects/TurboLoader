@@ -1,6 +1,6 @@
 # Benchmark Overview
 
-Comprehensive performance analysis of TurboLoader v1.5.0.
+Comprehensive performance analysis of TurboLoader v1.7.7.
 
 ## Executive Summary
 
@@ -10,7 +10,7 @@ TurboLoader achieves **21,035 images/second peak throughput**, making it:
 - **Smart Batching boost** of ~1.2x from 15-25% padding reduction
 - **TBL v2 format** saves 40-60% storage with 4,875 img/s conversion throughput
 
-## Latest Results (v1.5.0)
+## Latest Results (v1.7.7)
 
 ### TBL v2 Format Conversion (NEW)
 
