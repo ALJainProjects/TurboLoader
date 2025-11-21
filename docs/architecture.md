@@ -1,10 +1,10 @@
 # TurboLoader Architecture
 
-This document describes the internal architecture of TurboLoader v1.5.0.
+This document describes the internal architecture of TurboLoader v1.7.7.
 
 ## Overview
 
-TurboLoader achieves **10,146 img/s throughput** through a carefully designed multi-threaded pipeline architecture with SIMD-accelerated operations. Version 1.5.0 introduces the TBL v2 format with LZ4 compression, streaming writer, and enhanced data integrity features.
+TurboLoader achieves **21,035 img/s peak throughput** through a carefully designed multi-threaded pipeline architecture with SIMD-accelerated operations. The system features TBL v2 format with LZ4 compression, streaming writer, SIMD-accelerated transforms, and enhanced data integrity features.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -61,7 +61,7 @@ TurboLoader achieves **10,146 img/s throughput** through a carefully designed mu
 - Builds index of file offsets for random access
 - Throughput: **52+ Gbps** on local SSD
 
-**TBL v2 Reader (NEW in v1.5.0):**
+**TBL v2 Reader **
 - Memory-mapped access to compressed binary format
 - LZ4 decompression for 40-60% space savings vs TAR
 - CRC32 checksum validation for data integrity
@@ -376,7 +376,7 @@ turboloader/
 
 ## Version History
 
-### v1.5.0 New Features (Current)
+### v1.7.7 Current Features
 
 1. **TBL v2 Binary Format** ✅
    - **LZ4 compression** - 40-60% space savings vs TAR

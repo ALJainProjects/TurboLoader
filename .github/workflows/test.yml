@@ -1,0 +1,248 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install system dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libjpeg-turbo8-dev \
+          libpng-dev \
+          libwebp-dev \
+          liblz4-dev \
+          libcurl4-openssl-dev
+
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install jpeg-turbo libpng webp lz4 cmake
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov numpy
+        pip install -e .
+
+    - name: Run Python tests
+      run: |
+        pytest tests/ -v --cov=turboloader --cov-report=xml --cov-report=term
+
+    - name: Upload coverage to Codecov
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  cpp-test:
+    name: C++ Tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libjpeg-turbo8-dev \
+          libpng-dev \
+          libwebp-dev \
+          liblz4-dev \
+          libcurl4-openssl-dev
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install jpeg-turbo libpng webp lz4 cmake
+
+    - name: Build C++ tests
+      run: |
+        mkdir -p build
+        cd build
+        cmake ..
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+    - name: Run C++ tests
+      run: |
+        cd build
+        ctest --output-on-failure -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install linting tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install black flake8 mypy
+
+    - name: Check code formatting with black
+      run: |
+        black --check --diff turboloader/ tests/ benchmarks/ examples/
+
+    - name: Lint with flake8
+      run: |
+        flake8 turboloader/ tests/ benchmarks/ examples/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 turboloader/ tests/ benchmarks/ examples/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Type check with mypy
+      run: |
+        mypy turboloader/ --ignore-missing-imports || true
+
+  build-wheels:
+    name: Build wheel for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libjpeg-turbo8-dev \
+          libpng-dev \
+          libwebp-dev \
+          liblz4-dev
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install jpeg-turbo libpng webp lz4 cmake
+
+    - name: Install build tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install build wheel
+
+    - name: Build wheel
+      run: |
+        python -m build
+
+    - name: Upload wheel
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ matrix.os }}
+        path: dist/*.whl
+
+  install-test:
+    name: Test installation on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: build-wheels
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Download wheel
+      uses: actions/download-artifact@v4
+      with:
+        name: wheels-${{ matrix.os }}
+        path: dist/
+
+    - name: Install system dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libjpeg-turbo8 libpng16-16 libwebp7 liblz4-1
+
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install jpeg-turbo libpng webp lz4
+
+    - name: Install wheel
+      run: |
+        pip install dist/*.whl
+
+    - name: Run verification script
+      run: |
+        python scripts/verify_installation.py
+
+    - name: Test basic functionality
+      run: |
+        python -c "
+import turboloader
+import numpy as np
+
+# Test DataLoader creation
+print(f'TurboLoader version: {turboloader.__version__}')
+
+# Test transform
+img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
+resize = turboloader.Resize(224, 224)
+output = resize.apply(img)
+assert output.shape == (224, 224, 3), f'Expected (224, 224, 3), got {output.shape}'
+
+print('✓ All basic tests passed')
+"

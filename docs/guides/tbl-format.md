@@ -1,8 +1,8 @@
 # TBL v2 Binary Format Guide
 
-**New in v1.5.0 - Major Format Upgrade**
+**TBL v2 Binary Format**
 
-TurboLoader v1.5.0 introduces TBL v2 (TurboLoader Binary v2), a completely redesigned custom binary format optimized for ML datasets with **40-60% space savings** through LZ4 compression, **O(1) memory streaming writer**, and **zero-copy memory-mapped reads**.
+TurboLoader features TBL v2 (TurboLoader Binary v2), a custom binary format optimized for ML datasets with **40-60% space savings** through LZ4 compression, **O(1) memory streaming writer**, and **zero-copy memory-mapped reads**.
 
 ## Overview
 
