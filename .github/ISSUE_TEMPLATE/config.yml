@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or Discussion
+    url: https://github.com/ALJainProjects/TurboLoader/discussions
+    about: Ask questions or discuss ideas with the community
+  - name: Documentation
+    url: https://github.com/ALJainProjects/TurboLoader/blob/main/README.md
+    about: Check the documentation for usage guides and API reference
+  - name: PyPI Package
+    url: https://pypi.org/project/turboloader/
+    about: View the package on PyPI

@@ -223,11 +223,14 @@ writer.finalize()
 
 ## Documentation
 
+- **[Quick Start Notebook](examples/quickstart.ipynb)** - Interactive tutorial for beginners
 - **[Installation Guide](docs/installation.md)** - Detailed setup instructions
 - **[Quick Start](docs/quickstart.md)** - Getting started examples
 - **[API Reference](docs/api/)** - Complete API documentation
 - **[PyTorch Integration](docs/pytorch.md)** - PyTorch-specific examples
+- **[PyTorch Lightning Example](examples/pytorch_lightning_example.py)** - Production-ready Lightning integration
 - **[Distributed Training](docs/distributed.md)** - Multi-node setup guide
+- **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
 ---
 
@@ -283,7 +286,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: Production-Ready ML Data Loading},
   year = {2025},
-  version = {1.7.6},
+  version = {1.7.7},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
@@ -293,9 +296,12 @@ If you use TurboLoader in your research:
 ## Support
 
 - **Documentation:** [docs/](docs/)
+- **Troubleshooting:** [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- **Verification Script:** Run `python scripts/verify_installation.py` to check your setup
 - **Issues:** [GitHub Issues](https://github.com/ALJainProjects/TurboLoader/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/ALJainProjects/TurboLoader/discussions)
 - **PyPI:** [https://pypi.org/project/turboloader/](https://pypi.org/project/turboloader/)
 
 ---
 
-TurboLoader v1.7.6 - Production-ready ML data loading. Fast. Efficient. Reliable.
+TurboLoader v1.7.7 - Production-ready ML data loading. Fast. Efficient. Reliable.
