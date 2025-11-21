@@ -1,0 +1,145 @@
+name: Bug Report
+description: File a bug report to help us improve TurboLoader
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out this form as completely as possible.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+      placeholder: Tell us what you see!
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Create DataLoader with '...'
+        2. Run batch iteration '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: A clear description of what you expected to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Minimal code example
+      description: Please provide a minimal code example that reproduces the issue
+      render: python
+      placeholder: |
+        import turboloader
+
+        loader = turboloader.DataLoader(...)
+        # Your code here
+    validations:
+      required: true
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: TurboLoader Version
+      description: What version of TurboLoader are you using?
+      options:
+        - "1.7.6 (latest)"
+        - "1.7.5"
+        - "1.7.4"
+        - "1.7.3"
+        - "1.7.2"
+        - "1.7.1"
+        - "1.7.0"
+        - "Older version"
+        - "Development/main branch"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What OS are you using?
+      options:
+        - "macOS"
+        - "Linux (Ubuntu/Debian)"
+        - "Linux (RHEL/CentOS)"
+        - "Linux (Other)"
+        - "Windows"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: What version of Python are you using?
+      placeholder: "e.g., 3.10.5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: framework
+    attributes:
+      label: ML Framework
+      description: Which ML framework are you using?
+      multiple: true
+      options:
+        - "PyTorch"
+        - "TensorFlow"
+        - "JAX"
+        - "PyTorch Lightning"
+        - "Other"
+        - "None (standalone)"
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: Additional environment information
+      placeholder: |
+        - GPU: NVIDIA RTX 3090
+        - CUDA Version: 11.8
+        - PyTorch Version: 2.0.1
+        - Installed via: pip/conda/source
+    validations:
+      required: false
+
+  - type: textarea
+    id: error-logs
+    attributes:
+      label: Error Messages / Stack Trace
+      description: Please paste any error messages or stack traces
+      render: shell
+      placeholder: Paste your error logs here
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have searched existing issues to ensure this is not a duplicate
+          required: true
+        - label: I have provided a minimal reproducible example
+          required: true
+        - label: I am using the latest version of TurboLoader
+          required: false
