@@ -224,14 +224,25 @@ writer.finalize()
 
 ## Documentation
 
+### Getting Started
 - **[Quick Start Notebook](examples/quickstart.ipynb)** - Interactive tutorial for beginners
 - **[Installation Guide](docs/installation.md)** - Detailed setup instructions
 - **[Quick Start](docs/quickstart.md)** - Getting started examples
-- **[API Reference](docs/api/)** - Complete API documentation
-- **[PyTorch Integration](docs/pytorch.md)** - PyTorch-specific examples
-- **[PyTorch Lightning Example](examples/pytorch_lightning_example.py)** - Production-ready Lightning integration
-- **[Distributed Training](docs/distributed.md)** - Multi-node setup guide
 - **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+
+### API Documentation
+- **[API Reference](docs/api/)** - Complete API documentation
+- **[Transforms API](docs/api/transforms.md)** - All 19 transforms with examples
+
+### Framework Integration
+- **[PyTorch Integration Guide](docs/guides/pytorch-integration.md)** - Complete PyTorch guide
+- **[TensorFlow Integration Guide](docs/guides/tensorflow-integration.md)** - Complete TensorFlow/Keras guide
+- **[PyTorch Lightning Example](examples/pytorch_lightning_example.py)** - Production-ready Lightning integration
+- **[Distributed Training (DDP)](examples/distributed_ddp.py)** - Multi-GPU PyTorch DDP example
+
+### Examples
+- **[ImageNet ResNet50 Training](examples/imagenet_resnet50.py)** - Complete training pipeline with AMP, checkpointing, TensorBoard
+- **[Distributed Training](docs/distributed.md)** - Multi-node setup guide
 
 ---
 
