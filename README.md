@@ -298,7 +298,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: Production-Ready ML Data Loading},
   year = {2025},
-  version = {1.7.7},
+  version = {1.7.8},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
@@ -316,4 +316,4 @@ If you use TurboLoader in your research:
 
 ---
 
-TurboLoader v1.7.7 - Production-ready ML data loading. Fast. Efficient. Reliable.
+TurboLoader v1.7.8 - Production-ready ML data loading. Fast. Efficient. Reliable.
