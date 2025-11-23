@@ -14,7 +14,7 @@ Thank you for your interest in contributing to TurboLoader! This document provid
 
 - C++17 compatible compiler (GCC 8+, Clang 10+, MSVC 2019+)
 - CMake 3.15 or higher
-- Python 3.8 or higher
+- Python 3.8 or highe r
 - libjpeg-turbo
 - libpng
 - libwebp
