@@ -225,24 +225,24 @@ writer.finalize()
 ## Documentation
 
 ### Getting Started
-- **[Quick Start Notebook](examples/quickstart.ipynb)** - Interactive tutorial for beginners
-- **[Installation Guide](docs/installation.md)** - Detailed setup instructions
-- **[Quick Start](docs/quickstart.md)** - Getting started examples
-- **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Quick Start Notebook](https://github.com/ALJainProjects/TurboLoader/blob/main/examples/quickstart.ipynb)** - Interactive tutorial for beginners
+- **[Installation Guide](https://github.com/ALJainProjects/TurboLoader/blob/main/docs/installation.md)** - Detailed setup instructions
+- **[Quick Start](https://github.com/ALJainProjects/TurboLoader/blob/main/docs/quickstart.md)** - Getting started examples
+- **[Troubleshooting Guide](https://github.com/ALJainProjects/TurboLoader/blob/main/docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
 ### API Documentation
-- **[API Reference](docs/api/)** - Complete API documentation
-- **[Transforms API](docs/api/transforms.md)** - All 19 transforms with examples
+- **[API Reference](https://github.com/ALJainProjects/TurboLoader/tree/main/docs/api)** - Complete API documentation
+- **[Transforms API](https://github.com/ALJainProjects/TurboLoader/blob/main/docs/api/transforms.md)** - All 19 transforms with examples
 
 ### Framework Integration
-- **[PyTorch Integration Guide](docs/guides/pytorch-integration.md)** - Complete PyTorch guide
-- **[TensorFlow Integration Guide](docs/guides/tensorflow-integration.md)** - Complete TensorFlow/Keras guide
-- **[PyTorch Lightning Example](examples/pytorch_lightning_example.py)** - Production-ready Lightning integration
-- **[Distributed Training (DDP)](examples/distributed_ddp.py)** - Multi-GPU PyTorch DDP example
+- **[PyTorch Integration Guide](https://github.com/ALJainProjects/TurboLoader/blob/main/docs/guides/pytorch-integration.md)** - Complete PyTorch guide
+- **[TensorFlow Integration Guide](https://github.com/ALJainProjects/TurboLoader/blob/main/docs/guides/tensorflow-integration.md)** - Complete TensorFlow/Keras guide
+- **[PyTorch Lightning Example](https://github.com/ALJainProjects/TurboLoader/blob/main/examples/pytorch_lightning_example.py)** - Production-ready Lightning integration
+- **[Distributed Training (DDP)](https://github.com/ALJainProjects/TurboLoader/blob/main/examples/distributed_ddp.py)** - Multi-GPU PyTorch DDP example
 
 ### Examples
-- **[ImageNet ResNet50 Training](examples/imagenet_resnet50.py)** - Complete training pipeline with AMP, checkpointing, TensorBoard
-- **[Distributed Training](docs/distributed.md)** - Multi-node setup guide
+- **[ImageNet ResNet50 Training](https://github.com/ALJainProjects/TurboLoader/blob/main/examples/imagenet_resnet50.py)** - Complete training pipeline with AMP, checkpointing, TensorBoard
+- **[Distributed Training](https://github.com/ALJainProjects/TurboLoader/blob/main/docs/distributed.md)** - Multi-node setup guide
 
 ---
 
@@ -298,7 +298,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: Production-Ready ML Data Loading},
   year = {2025},
-  version = {1.7.8},
+  version = {1.7.9},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
@@ -307,8 +307,8 @@ If you use TurboLoader in your research:
 
 ## Support
 
-- **Documentation:** [docs/](docs/)
-- **Troubleshooting:** [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- **Documentation:** [https://github.com/ALJainProjects/TurboLoader/tree/main/docs](https://github.com/ALJainProjects/TurboLoader/tree/main/docs)
+- **Troubleshooting:** [https://github.com/ALJainProjects/TurboLoader/blob/main/docs/TROUBLESHOOTING.md](https://github.com/ALJainProjects/TurboLoader/blob/main/docs/TROUBLESHOOTING.md)
 - **Verification Script:** Run `python scripts/verify_installation.py` to check your setup
 - **Issues:** [GitHub Issues](https://github.com/ALJainProjects/TurboLoader/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/ALJainProjects/TurboLoader/discussions)
@@ -316,4 +316,4 @@ If you use TurboLoader in your research:
 
 ---
 
-TurboLoader v1.7.8 - Production-ready ML data loading. Fast. Efficient. Reliable.
+TurboLoader v1.7.9 - Production-ready ML data loading. Fast. Efficient. Reliable.
