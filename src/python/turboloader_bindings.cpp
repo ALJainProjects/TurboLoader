@@ -1,11 +1,12 @@
 /**
  * @file turboloader_bindings.cpp
- * @brief Python bindings for TurboLoader v1.8.0
+ * @brief Python bindings for TurboLoader v1.8.1
  *
  * Provides PyTorch-compatible DataLoader interface using pybind11.
  * Includes all SIMD-accelerated transforms with comprehensive docstrings.
  *
  * v1.8.0: ARM NEON optimizations, modern augmentations, error recovery, logging
+ * v1.8.1: Full Python bindings for MixUp/CutMix/Mosaic source image methods
  */
 
 #include <pybind11/pybind11.h>
@@ -264,7 +265,7 @@ std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
  * with the turboloader package. The Python __init__.py re-exports the API.
  */
 PYBIND11_MODULE(_turboloader, m) {
-    m.doc() = "TurboLoader v1.8.0 - High-performance data loading for ML\n\n"
+    m.doc() = "TurboLoader v1.8.1 - High-performance data loading for ML\n\n"
               "Drop-in replacement for PyTorch DataLoader with 12x speedup.\n\n"
               "Features:\n"
               "- ARM NEON optimizations (3-5x speedup on Apple Silicon)\n"
@@ -372,14 +373,14 @@ PYBIND11_MODULE(_turboloader, m) {
              "Get next batch (iterator protocol)");
 
     // Module-level functions
-    m.def("version", []() { return "1.8.0"; },
+    m.def("version", []() { return "1.8.1"; },
           "Get TurboLoader version\n\n"
           "Returns:\n"
-          "    str: Version string (e.g., '1.8.0')");
+          "    str: Version string (e.g., '1.8.1')");
 
     m.def("features", []() {
         py::dict features;
-        features["version"] = "1.8.0";
+        features["version"] = "1.8.1";
         features["distributed_training"] = true;
         features["tar_support"] = true;
         features["remote_tar"] = true;
@@ -1185,7 +1186,7 @@ PYBIND11_MODULE(_turboloader, m) {
     // MODERN AUGMENTATIONS (NEW in v1.8.0)
     // ========================================================================
 
-    // MixUp transform
+    // MixUp transform with Python wrapper for source image management
     py::class_<transforms::MixUpTransform, transforms::Transform>(m, "MixUp",
              "MixUp augmentation (NEW in v1.8.0)\n\n"
              "Blends two images using linear interpolation:\n"
@@ -1204,12 +1205,29 @@ PYBIND11_MODULE(_turboloader, m) {
              "Args:\n"
              "    alpha (float): Beta distribution parameter (default: 0.4)\n"
              "    seed (int): Random seed (default: random)")
+        .def("set_mix_image", [](transforms::MixUpTransform& self, py::array_t<uint8_t> img) {
+            auto buf = img.request();
+            if (buf.ndim != 3) throw std::runtime_error("Image must be 3D (H, W, C)");
+            int height = buf.shape[0];
+            int width = buf.shape[1];
+            int channels = buf.shape[2];
+            // Store a copy of the image data (managed by the lambda capture)
+            static thread_local std::vector<uint8_t> mix_data;
+            static thread_local transforms::ImageData mix_image(nullptr, 0, 0, 0, 0, false);
+            mix_data.assign(static_cast<uint8_t*>(buf.ptr),
+                           static_cast<uint8_t*>(buf.ptr) + buf.size);
+            mix_image = transforms::ImageData(mix_data.data(), width, height, channels, width * channels, false);
+            self.set_mix_image(mix_image);
+        }, py::arg("image"),
+             "Set the second image for mixing\n\n"
+             "Args:\n"
+             "    image: NumPy array (H, W, C) uint8")
         .def("get_lambda", &transforms::MixUpTransform::get_lambda,
              "Get the lambda value used for the last mix\n\n"
              "Returns:\n"
              "    float: Lambda value in [0, 1]");
 
-    // CutMix transform
+    // CutMix transform with Python wrapper for source image management
     py::class_<transforms::CutMixTransform, transforms::Transform>(m, "CutMix",
              "CutMix augmentation (NEW in v1.8.0)\n\n"
              "Cuts a rectangular patch from one image and pastes it onto another.\n"
@@ -1227,19 +1245,42 @@ PYBIND11_MODULE(_turboloader, m) {
              "Args:\n"
              "    alpha (float): Beta distribution parameter (default: 1.0)\n"
              "    seed (int): Random seed (default: random)")
+        .def("set_source_image", [](transforms::CutMixTransform& self, py::array_t<uint8_t> img) {
+            auto buf = img.request();
+            if (buf.ndim != 3) throw std::runtime_error("Image must be 3D (H, W, C)");
+            int height = buf.shape[0];
+            int width = buf.shape[1];
+            int channels = buf.shape[2];
+            static thread_local std::vector<uint8_t> src_data;
+            static thread_local transforms::ImageData src_image(nullptr, 0, 0, 0, 0, false);
+            src_data.assign(static_cast<uint8_t*>(buf.ptr),
+                           static_cast<uint8_t*>(buf.ptr) + buf.size);
+            src_image = transforms::ImageData(src_data.data(), width, height, channels, width * channels, false);
+            self.set_source_image(src_image);
+        }, py::arg("image"),
+             "Set the source image for the cut patch\n\n"
+             "Args:\n"
+             "    image: NumPy array (H, W, C) uint8")
         .def("get_lambda", &transforms::CutMixTransform::get_lambda,
              "Get the lambda value (ratio of mixed area)\n\n"
              "Returns:\n"
-             "    float: Lambda value in [0, 1]");
+             "    float: Lambda value in [0, 1]")
+        .def("get_bbox", [](const transforms::CutMixTransform& self) {
+            int x1, y1, x2, y2;
+            self.get_bbox(x1, y1, x2, y2);
+            return py::make_tuple(x1, y1, x2, y2);
+        }, "Get the bounding box of the cut region\n\n"
+           "Returns:\n"
+           "    tuple: (x1, y1, x2, y2) coordinates");
 
-    // Mosaic transform
+    // Mosaic transform with Python wrapper for multiple images
     py::class_<transforms::MosaicTransform, transforms::Transform>(m, "Mosaic",
              "Mosaic augmentation (NEW in v1.8.0)\n\n"
              "Creates a 2x2 grid from 4 images, commonly used in YOLO training.\n\n"
              "Reference: Bochkovskiy et al., 'YOLOv4' (2020)\n\n"
              "Example:\n"
              "    >>> mosaic = turboloader.Mosaic(output_size=640)\n"
-             "    >>> mosaic.set_images(img1, img2, img3, img4)\n"
+             "    >>> mosaic.set_images([img1, img2, img3, img4])\n"
              "    >>> combined = mosaic.apply(img1)")
         .def(py::init<int, unsigned>(),
              py::arg("output_size") = 640,
@@ -1247,7 +1288,35 @@ PYBIND11_MODULE(_turboloader, m) {
              "Create Mosaic transform\n\n"
              "Args:\n"
              "    output_size (int): Size of output square image (default: 640)\n"
-             "    seed (int): Random seed (default: random)");
+             "    seed (int): Random seed (default: random)")
+        .def("set_images", [](transforms::MosaicTransform& self, py::list images) {
+            if (py::len(images) != 4) throw std::runtime_error("Mosaic requires exactly 4 images");
+            static thread_local std::vector<std::vector<uint8_t>> img_data(4);
+            static thread_local std::vector<transforms::ImageData> img_objects;
+            img_objects.clear();
+            for (int i = 0; i < 4; ++i) {
+                py::array_t<uint8_t> arr = images[i].cast<py::array_t<uint8_t>>();
+                auto buf = arr.request();
+                if (buf.ndim != 3) throw std::runtime_error("Each image must be 3D (H, W, C)");
+                int height = buf.shape[0];
+                int width = buf.shape[1];
+                int channels = buf.shape[2];
+                img_data[i].assign(static_cast<uint8_t*>(buf.ptr),
+                                  static_cast<uint8_t*>(buf.ptr) + buf.size);
+                img_objects.emplace_back(img_data[i].data(), width, height, channels, width * channels, false);
+            }
+            self.set_images(&img_objects[0], &img_objects[1], &img_objects[2], &img_objects[3]);
+        }, py::arg("images"),
+             "Set the 4 images for mosaic\n\n"
+             "Args:\n"
+             "    images: List of 4 NumPy arrays (H, W, C) uint8")
+        .def("get_center", [](const transforms::MosaicTransform& self) {
+            int cx, cy;
+            self.get_center(cx, cy);
+            return py::make_tuple(cx, cy);
+        }, "Get the center point of the mosaic\n\n"
+           "Returns:\n"
+           "    tuple: (cx, cy) coordinates");
 
     // RandAugment transform
     py::class_<transforms::RandAugmentTransform, transforms::Transform>(m, "RandAugment",

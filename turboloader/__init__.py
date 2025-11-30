@@ -31,7 +31,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 
 # Import C++ extension module
 try:
