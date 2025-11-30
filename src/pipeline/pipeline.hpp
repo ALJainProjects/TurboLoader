@@ -56,6 +56,7 @@
 #include "../core/object_pool.hpp"
 #include "../core/spsc_ring_buffer.hpp"
 #include "smart_batching.hpp"
+#include "error_recovery.hpp"
 
 // Readers
 #include "../readers/tar_reader.hpp"
@@ -183,6 +184,12 @@ struct UnifiedPipelineConfig {
     int world_size = 1;                         // Total number of processes
     bool drop_last = false;                     // Drop incomplete batches at end
     int distributed_seed = 42;                  // Seed for shuffling (same across all ranks)
+
+    // ===== Error Recovery (NEW in v1.8.0) =====
+    bool skip_corrupted = true;                 // Skip corrupted files instead of failing
+    size_t max_errors = 100;                    // Maximum errors before failing (0 = unlimited)
+    bool log_errors = true;                     // Log error messages for corrupted files
+    std::string error_log_path = "";            // Path to error log file (empty = stderr)
 };
 
 /**

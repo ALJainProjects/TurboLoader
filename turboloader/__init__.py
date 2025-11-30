@@ -1,6 +1,6 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v1.5.0 - TBL v2 Format with LZ4 Compression
+v1.8.0 - ARM NEON Optimizations, Modern Augmentations, Error Recovery & Logging
 
 Production-Ready Features:
 - TBL v2 format: 40-60% space savings with LZ4 compression
@@ -31,21 +31,21 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "1.7.9"
+__version__ = "1.8.0"
 
 # Import C++ extension module
 try:
     from _turboloader import (
         # Core DataLoader
         DataLoader, version, features,
-        # TBL v2 Format (NEW in v1.5.0)
+        # TBL v2 Format
         TblReaderV2, TblWriterV2,
         SampleFormat, MetadataType,
-        # Smart Batching (NEW in v1.7.0)
+        # Smart Batching
         SmartBatchConfig,
-        # Transform Composition (NEW in v1.5.1)
+        # Transform Composition
         Compose, ComposedTransforms,
-        # Transforms (all 19 SIMD-accelerated transforms)
+        # Transforms (all SIMD-accelerated transforms)
         Resize, CenterCrop, RandomCrop,
         RandomHorizontalFlip, RandomVerticalFlip,
         ColorJitter, GaussianBlur, Grayscale,
@@ -53,6 +53,10 @@ try:
         Pad, RandomRotation, RandomAffine,
         RandomPerspective, RandomPosterize, RandomSolarize,
         RandomErasing, AutoAugment, AutoAugmentPolicy,
+        # Modern Augmentations (v1.8.0)
+        MixUp, CutMix, Mosaic, RandAugment, GridMask,
+        # Logging (v1.8.0)
+        LogLevel, enable_logging, disable_logging, set_log_level, set_log_output,
         # Enums
         InterpolationMode, PaddingMode, TensorFormat,
     )
@@ -72,6 +76,10 @@ try:
         'Pad', 'RandomRotation', 'RandomAffine',
         'RandomPerspective', 'RandomPosterize', 'RandomSolarize',
         'RandomErasing', 'AutoAugment', 'AutoAugmentPolicy',
+        # Modern Augmentations (v1.8.0)
+        'MixUp', 'CutMix', 'Mosaic', 'RandAugment', 'GridMask',
+        # Logging (v1.8.0)
+        'LogLevel', 'enable_logging', 'disable_logging', 'set_log_level', 'set_log_output',
         # Enums
         'InterpolationMode', 'PaddingMode', 'TensorFormat',
     ]

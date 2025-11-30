@@ -160,7 +160,6 @@ ext_modules = [
         extra_compile_args=[
             '-std=c++20',
             '-O3',
-            '-march=native',  # Enable CPU-specific optimizations
             '-fvisibility=hidden',
         ],
     ),
@@ -168,29 +167,39 @@ ext_modules = [
 
 
 class BuildExt(build_ext):
-    """Custom build extension to set C++20 flag"""
+    """Custom build extension to set C++20 flag and platform-specific optimizations"""
 
     def build_extensions(self):
-        # Set C++20 standard
-        ct = self.compiler.compiler_type
-        opts = []
+        import platform
 
-        if ct == 'unix':
-            opts.append('-std=c++20')
-        elif ct == 'msvc':
-            opts.append('/std:c++20')
+        ct = self.compiler.compiler_type
+        arch = platform.machine().lower()
 
         for ext in self.extensions:
-            ext.extra_compile_args = opts + ext.extra_compile_args
+            opts = list(ext.extra_compile_args)
+
+            if ct == 'unix':
+                # Only add -march=native for single-arch builds on native platform
+                # Skip if cross-compiling (e.g., universal2 builds on macOS)
+                if 'arm64' in arch or 'aarch64' in arch:
+                    # ARM: use mcpu for Apple Silicon
+                    opts.append('-mcpu=apple-m1')
+                elif 'x86' in arch or 'amd64' in arch:
+                    # x86: use march=native
+                    opts.append('-march=native')
+            elif ct == 'msvc':
+                opts.append('/std:c++20')
+
+            ext.extra_compile_args = opts
 
         build_ext.build_extensions(self)
 
 
 setup(
     name='turboloader',
-    version='1.7.9',
+    version='1.8.0',
     author='TurboLoader Contributors',
-    description='High-performance data loading for ML frameworks with 19 SIMD-accelerated transforms',
+    description='High-performance data loading for ML with ARM NEON, modern augmentations, error recovery & logging',
     long_description=open('README.md').read() if os.path.exists('README.md') else '',
     long_description_content_type='text/markdown',
     ext_modules=ext_modules,

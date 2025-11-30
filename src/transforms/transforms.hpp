@@ -35,6 +35,9 @@
 #include "perspective_transform.hpp"
 #include "autoaugment_transform.hpp"
 
+// Modern augmentations (v1.8.0)
+#include "modern_augment_transform.hpp"
+
 // Tensor conversion
 #include "tensor_conversion.hpp"
 

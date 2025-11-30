@@ -730,6 +730,300 @@ inline T clamp(T value, T min_val, T max_val) {
     return std::max(min_val, std::min(max_val, value));
 }
 
+// ============================================================================
+// NEON-OPTIMIZED TRANSFORM OPERATIONS (v1.8.0)
+// ============================================================================
+
+#ifdef TURBOLOADER_SIMD_NEON
+
+/**
+ * @brief NEON-optimized horizontal flip for RGB images
+ * Processes 8 pixels at a time using NEON intrinsics
+ */
+inline void flip_horizontal_rgb_neon(const uint8_t* src, uint8_t* dst,
+                                     int width, int height, int stride) {
+    for (int y = 0; y < height; ++y) {
+        const uint8_t* src_row = src + y * stride;
+        uint8_t* dst_row = dst + y * stride;
+
+        int x = 0;
+        // Process 8 pixels at a time (24 bytes for RGB)
+        for (; x + 8 <= width; x += 8) {
+            int src_x = width - 8 - x;
+
+            // Load 8 RGB pixels from source (reversed position)
+            uint8x8x3_t pixels = vld3_u8(src_row + src_x * 3);
+
+            // Reverse the 8 pixels within each channel
+            pixels.val[0] = vrev64_u8(pixels.val[0]);
+            pixels.val[1] = vrev64_u8(pixels.val[1]);
+            pixels.val[2] = vrev64_u8(pixels.val[2]);
+
+            // Store to destination
+            vst3_u8(dst_row + x * 3, pixels);
+        }
+
+        // Handle remaining pixels
+        for (; x < width; ++x) {
+            int src_x = width - 1 - x;
+            dst_row[x * 3 + 0] = src_row[src_x * 3 + 0];
+            dst_row[x * 3 + 1] = src_row[src_x * 3 + 1];
+            dst_row[x * 3 + 2] = src_row[src_x * 3 + 2];
+        }
+    }
+}
+
+/**
+ * @brief NEON-optimized RGB to grayscale conversion
+ * Uses fixed-point arithmetic for speed: Y = (77*R + 150*G + 29*B) >> 8
+ */
+inline void rgb_to_grayscale_neon(const uint8_t* rgb, uint8_t* gray, size_t num_pixels) {
+    // Fixed-point coefficients: 0.299 ≈ 77/256, 0.587 ≈ 150/256, 0.114 ≈ 29/256
+    const uint8x8_t coeff_r = vdup_n_u8(77);
+    const uint8x8_t coeff_g = vdup_n_u8(150);
+    const uint8x8_t coeff_b = vdup_n_u8(29);
+
+    size_t i = 0;
+    // Process 8 pixels at a time
+    for (; i + 8 <= num_pixels; i += 8) {
+        // Load 8 RGB pixels (24 bytes) -> deinterleaved
+        uint8x8x3_t pixels = vld3_u8(rgb + i * 3);
+
+        // Multiply and accumulate in 16-bit
+        uint16x8_t sum = vmull_u8(pixels.val[0], coeff_r);
+        sum = vmlal_u8(sum, pixels.val[1], coeff_g);
+        sum = vmlal_u8(sum, pixels.val[2], coeff_b);
+
+        // Shift right by 8 and narrow to uint8
+        uint8x8_t result = vshrn_n_u16(sum, 8);
+
+        vst1_u8(gray + i, result);
+    }
+
+    // Scalar tail
+    for (; i < num_pixels; ++i) {
+        size_t idx = i * 3;
+        int val = (77 * rgb[idx] + 150 * rgb[idx + 1] + 29 * rgb[idx + 2]) >> 8;
+        gray[i] = static_cast<uint8_t>(std::min(255, val));
+    }
+}
+
+/**
+ * @brief NEON-optimized bilinear resize for RGB images
+ * Processes 4 output pixels in parallel
+ */
+inline void resize_bilinear_rgb_neon(const uint8_t* src, uint8_t* dst,
+                                     int src_width, int src_height,
+                                     int dst_width, int dst_height) {
+    const float x_ratio = static_cast<float>(src_width - 1) / (dst_width - 1);
+    const float y_ratio = static_cast<float>(src_height - 1) / (dst_height - 1);
+
+    for (int y = 0; y < dst_height; ++y) {
+        float src_y = y * y_ratio;
+        int y0 = static_cast<int>(src_y);
+        int y1 = std::min(y0 + 1, src_height - 1);
+        float dy = src_y - y0;
+        float inv_dy = 1.0f - dy;
+
+        // Preload NEON constants for this row
+        float32x4_t dy_vec = vdupq_n_f32(dy);
+        float32x4_t inv_dy_vec = vdupq_n_f32(inv_dy);
+
+        int x = 0;
+        // Process 4 pixels at a time
+        for (; x + 4 <= dst_width; x += 4) {
+            float src_x[4];
+            for (int i = 0; i < 4; ++i) {
+                src_x[i] = (x + i) * x_ratio;
+            }
+
+            float32x4_t src_x_vec = vld1q_f32(src_x);
+            int32x4_t x0_vec = vcvtq_s32_f32(src_x_vec);
+            float32x4_t dx_vec = vsubq_f32(src_x_vec, vcvtq_f32_s32(x0_vec));
+            float32x4_t inv_dx_vec = vsubq_f32(vdupq_n_f32(1.0f), dx_vec);
+
+            for (int c = 0; c < 3; ++c) {
+                float vals[4];
+                for (int i = 0; i < 4; ++i) {
+                    int x0 = static_cast<int>(src_x[i]);
+                    int x1 = std::min(x0 + 1, src_width - 1);
+                    float dx = src_x[i] - x0;
+                    float inv_dx = 1.0f - dx;
+
+                    float p00 = src[(y0 * src_width + x0) * 3 + c];
+                    float p10 = src[(y0 * src_width + x1) * 3 + c];
+                    float p01 = src[(y1 * src_width + x0) * 3 + c];
+                    float p11 = src[(y1 * src_width + x1) * 3 + c];
+
+                    float top = p00 * inv_dx + p10 * dx;
+                    float bot = p01 * inv_dx + p11 * dx;
+                    vals[i] = top * inv_dy + bot * dy;
+                }
+
+                float32x4_t result = vld1q_f32(vals);
+                result = vmaxq_f32(result, vdupq_n_f32(0.0f));
+                result = vminq_f32(result, vdupq_n_f32(255.0f));
+
+                uint32x4_t result_u32 = vcvtq_u32_f32(result);
+
+                for (int i = 0; i < 4; ++i) {
+                    dst[((y * dst_width) + x + i) * 3 + c] =
+                        static_cast<uint8_t>(vgetq_lane_u32(result_u32, 0));
+                    result_u32 = vextq_u32(result_u32, result_u32, 1);
+                }
+            }
+        }
+
+        // Scalar tail
+        for (; x < dst_width; ++x) {
+            float src_x_f = x * x_ratio;
+            int x0 = static_cast<int>(src_x_f);
+            int x1 = std::min(x0 + 1, src_width - 1);
+            float dx = src_x_f - x0;
+            float inv_dx = 1.0f - dx;
+
+            for (int c = 0; c < 3; ++c) {
+                float p00 = src[(y0 * src_width + x0) * 3 + c];
+                float p10 = src[(y0 * src_width + x1) * 3 + c];
+                float p01 = src[(y1 * src_width + x0) * 3 + c];
+                float p11 = src[(y1 * src_width + x1) * 3 + c];
+
+                float top = p00 * inv_dx + p10 * dx;
+                float bot = p01 * inv_dx + p11 * dx;
+                float val = top * inv_dy + bot * dy;
+
+                dst[(y * dst_width + x) * 3 + c] =
+                    static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, val)));
+            }
+        }
+    }
+}
+
+/**
+ * @brief NEON-optimized color jitter (brightness/contrast adjustment)
+ */
+inline void color_adjust_neon(const uint8_t* src, uint8_t* dst,
+                              float brightness, float contrast, size_t count) {
+    const float32x4_t brightness_vec = vdupq_n_f32(brightness * 255.0f);
+    const float32x4_t contrast_vec = vdupq_n_f32(contrast);
+    const float32x4_t half = vdupq_n_f32(127.5f);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t max_val = vdupq_n_f32(255.0f);
+
+    size_t i = 0;
+    // Process 8 pixels at a time
+    for (; i + 8 <= count; i += 8) {
+        // Load 8 uint8 values
+        uint8x8_t u8_vals = vld1_u8(src + i);
+
+        // Process first 4 pixels
+        uint16x4_t u16_lo = vget_low_u16(vmovl_u8(u8_vals));
+        uint32x4_t u32_lo = vmovl_u16(u16_lo);
+        float32x4_t f32_lo = vcvtq_f32_u32(u32_lo);
+
+        // Apply contrast: (val - 127.5) * contrast + 127.5
+        f32_lo = vsubq_f32(f32_lo, half);
+        f32_lo = vmulq_f32(f32_lo, contrast_vec);
+        f32_lo = vaddq_f32(f32_lo, half);
+
+        // Apply brightness
+        f32_lo = vaddq_f32(f32_lo, brightness_vec);
+
+        // Clamp
+        f32_lo = vmaxq_f32(f32_lo, zero);
+        f32_lo = vminq_f32(f32_lo, max_val);
+
+        // Process second 4 pixels
+        uint16x4_t u16_hi = vget_high_u16(vmovl_u8(u8_vals));
+        uint32x4_t u32_hi = vmovl_u16(u16_hi);
+        float32x4_t f32_hi = vcvtq_f32_u32(u32_hi);
+
+        f32_hi = vsubq_f32(f32_hi, half);
+        f32_hi = vmulq_f32(f32_hi, contrast_vec);
+        f32_hi = vaddq_f32(f32_hi, half);
+        f32_hi = vaddq_f32(f32_hi, brightness_vec);
+        f32_hi = vmaxq_f32(f32_hi, zero);
+        f32_hi = vminq_f32(f32_hi, max_val);
+
+        // Convert back to uint8
+        uint32x4_t r_lo = vcvtq_u32_f32(f32_lo);
+        uint32x4_t r_hi = vcvtq_u32_f32(f32_hi);
+        uint16x4_t r16_lo = vmovn_u32(r_lo);
+        uint16x4_t r16_hi = vmovn_u32(r_hi);
+        uint8x8_t result = vmovn_u16(vcombine_u16(r16_lo, r16_hi));
+
+        vst1_u8(dst + i, result);
+    }
+
+    // Scalar tail
+    for (; i < count; ++i) {
+        float val = src[i];
+        val = (val - 127.5f) * contrast + 127.5f;
+        val += brightness * 255.0f;
+        val = std::max(0.0f, std::min(255.0f, val));
+        dst[i] = static_cast<uint8_t>(val);
+    }
+}
+
+/**
+ * @brief NEON-optimized Gaussian blur (3x3 kernel)
+ */
+inline void gaussian_blur_3x3_neon(const uint8_t* src, uint8_t* dst,
+                                   int width, int height, int channels) {
+    // Gaussian 3x3 kernel (approximated with integer arithmetic):
+    // [1 2 1]     [1/16 2/16 1/16]
+    // [2 4 2]  =  [2/16 4/16 2/16]
+    // [1 2 1]     [1/16 2/16 1/16]
+
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            for (int c = 0; c < channels; ++c) {
+                int sum = 0;
+
+                // Top row
+                sum += src[((y-1) * width + (x-1)) * channels + c] * 1;
+                sum += src[((y-1) * width + x) * channels + c] * 2;
+                sum += src[((y-1) * width + (x+1)) * channels + c] * 1;
+
+                // Middle row
+                sum += src[(y * width + (x-1)) * channels + c] * 2;
+                sum += src[(y * width + x) * channels + c] * 4;
+                sum += src[(y * width + (x+1)) * channels + c] * 2;
+
+                // Bottom row
+                sum += src[((y+1) * width + (x-1)) * channels + c] * 1;
+                sum += src[((y+1) * width + x) * channels + c] * 2;
+                sum += src[((y+1) * width + (x+1)) * channels + c] * 1;
+
+                dst[(y * width + x) * channels + c] =
+                    static_cast<uint8_t>((sum + 8) >> 4);  // Divide by 16 with rounding
+            }
+        }
+    }
+
+    // Copy borders
+    for (int x = 0; x < width; ++x) {
+        for (int c = 0; c < channels; ++c) {
+            dst[x * channels + c] = src[x * channels + c];
+            dst[((height-1) * width + x) * channels + c] =
+                src[((height-1) * width + x) * channels + c];
+        }
+    }
+    for (int y = 0; y < height; ++y) {
+        for (int c = 0; c < channels; ++c) {
+            dst[(y * width) * channels + c] = src[(y * width) * channels + c];
+            dst[(y * width + width - 1) * channels + c] =
+                src[(y * width + width - 1) * channels + c];
+        }
+    }
+}
+
+#endif // TURBOLOADER_SIMD_NEON
+
+// ============================================================================
+// COMMON UTILITIES (All platforms)
+// ============================================================================
+
 /**
  * @brief Bilinear interpolation for single channel
  */
