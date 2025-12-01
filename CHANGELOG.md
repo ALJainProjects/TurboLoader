@@ -5,11 +5,24 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.9] - 2025-11-30
+
+### Fix Python 3.8 Build Compatibility
+
+This release fixes the setuptools version requirement for Python 3.8 builds.
+
+### Fixed
+- **Build System**: Lowered setuptools requirement from >=77 to >=61
+  - setuptools 77+ requires Python 3.9+, breaking Python 3.8 wheel builds
+  - Reverted license format to table syntax (`license = {text = "MIT"}`)
+
+---
+
 ## [2.3.8] - 2025-11-30
 
 ### Fix CI/CD Workflow and License Format
 
-This release removes the duplicate publish workflow, updates the license format, and improves manylinux library installation.
+This release removes the duplicate publish workflow and improves manylinux library installation.
 
 ### Fixed
 - **CI/CD**: Removed duplicate `publish.yml` workflow that was conflicting with `build-wheels.yml`
@@ -20,10 +33,6 @@ This release removes the duplicate publish workflow, updates the license format,
   - Added proper cmake3 symlink for CentOS-based containers
   - Added library verification step for debugging
   - Added PKG_CONFIG_PATH environment variable
-
-- **License Format**: Updated to SPDX string format (`license = "MIT"`)
-  - Requires setuptools >= 77 (automatically installed during build)
-  - Fixes deprecation warning about table format
 
 ---
 
