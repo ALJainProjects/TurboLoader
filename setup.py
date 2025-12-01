@@ -108,7 +108,7 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
 
         # If we found include but not lib, use system default
         if include_path and not lib_path:
-            for lp in ["/usr/lib/x86_64-linux-gnu", "/usr/lib", "/usr/local/lib"]:
+            for lp in ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/usr/local/lib"]:
                 if os.path.exists(lp):
                     lib_path = lp
                     break
@@ -135,10 +135,11 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
             and verify_include(include_path)
         ):
             return include_path, lib_path
-    except:
+    except Exception:
         pass
 
     # Try common system locations (verify headers exist)
+    # Order matters - check more specific paths first
     possible_paths = [
         "/usr/local",
         "/usr",
@@ -147,6 +148,10 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
     for base_path in possible_paths:
         include_path = os.path.join(base_path, "include")
         lib_path = os.path.join(base_path, "lib")
+
+        # Also check lib64 on Linux
+        if not os.path.exists(lib_path) and os.path.exists(os.path.join(base_path, "lib64")):
+            lib_path = os.path.join(base_path, "lib64")
 
         if (
             os.path.exists(include_path)
@@ -253,6 +258,33 @@ def get_extensions():
     ]
 
 
+class LazyExtensionList(list):
+    """Lazily evaluate extensions only when needed for building"""
+
+    def __init__(self):
+        super().__init__()
+        self._extensions = None
+
+    def _get_extensions(self):
+        if self._extensions is None:
+            self._extensions = get_extensions()
+        return self._extensions
+
+    def __iter__(self):
+        return iter(self._get_extensions())
+
+    def __len__(self):
+        return len(self._get_extensions())
+
+    def __getitem__(self, key):
+        return self._get_extensions()[key]
+
+    def __bool__(self):
+        # Return True to indicate we have extensions
+        # This prevents setuptools from skipping build_ext
+        return True
+
+
 class BuildExt(build_ext):
     """Custom build extension to set C++20 flag and platform-specific optimizations"""
 
@@ -287,20 +319,56 @@ class BuildExt(build_ext):
         build_ext.build_extensions(self)
 
 
-# Check if we're building an sdist (source distribution) - skip library detection
-# Library detection is only needed when building wheels (binary distributions)
-building_sdist = "sdist" in sys.argv or "egg_info" in sys.argv
+# Check if we're in a metadata-only operation (sdist, egg_info, etc.)
+# These operations don't need the native libraries
+def is_metadata_only():
+    """Check if this is a metadata-only operation that doesn't need libraries"""
+    # Check command line arguments
+    metadata_commands = {
+        "sdist",
+        "egg_info",
+        "--version",
+        "--name",
+        "--author",
+        "--author-email",
+        "--maintainer",
+        "--maintainer-email",
+        "--url",
+        "--license",
+        "--description",
+        "--long-description",
+        "--classifiers",
+        "--keywords",
+        "--platforms",
+        "--fullname",
+    }
 
-if building_sdist:
-    # For sdist, use a minimal extension definition (won't be compiled)
+    for arg in sys.argv[1:]:
+        if arg in metadata_commands:
+            return True
+        # Also check for pip's metadata extraction
+        if "egg_info" in arg or "dist_info" in arg:
+            return True
+
+    # Check environment variable that pip sets during metadata extraction
+    if os.environ.get("_PYPROJECT_HOOKS_BUILD_BACKEND"):
+        # We're being called by pyproject-hooks for metadata
+        # Check if it's just for getting requirements
+        if any("get_requires" in arg for arg in sys.argv):
+            return True
+
+    return False
+
+
+# Use lazy extension loading to defer library detection
+if is_metadata_only():
     ext_modules = []
 else:
-    # For wheel builds, detect libraries and build the extension
-    ext_modules = get_extensions()
+    ext_modules = LazyExtensionList()
 
 setup(
     name="turboloader",
-    version="2.3.4",
+    version="2.3.5",
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",

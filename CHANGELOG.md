@@ -5,6 +5,22 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.5] - 2025-12-01
+
+### Fix cibuildwheel Builds
+
+This release fixes wheel builds in CI/CD pipelines using cibuildwheel.
+
+### Fixed
+- **setup.py**: Implement lazy extension loading for cibuildwheel compatibility
+  - Added `LazyExtensionList` class that defers library detection until build time
+  - Library detection now only runs when extensions are actually accessed
+  - Improved `is_metadata_only()` to detect pip wheel operations
+  - Added `/usr/lib64` to library search paths for manylinux compatibility
+  - Fixes wheel builds on Ubuntu (manylinux), macOS-13 (x86_64), and macOS-14 (ARM64)
+
+---
+
 ## [2.3.4] - 2025-12-01
 
 ### Fix CI/CD sdist Build
