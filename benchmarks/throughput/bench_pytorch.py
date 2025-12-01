@@ -23,6 +23,7 @@ import numpy as np
 try:
     import torch
     from torch.utils.data import Dataset, DataLoader
+
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
@@ -30,6 +31,7 @@ except ImportError:
 try:
     from PIL import Image
     import torchvision.transforms as T
+
     HAS_TORCHVISION = True
 except ImportError:
     HAS_TORCHVISION = False
@@ -38,6 +40,7 @@ except ImportError:
 @dataclass
 class BenchmarkResult:
     """Result from a single benchmark run"""
+
     library: str
     metric: str
     value: float
@@ -56,9 +59,9 @@ class TarDataset(Dataset):
         self.samples = []
 
         # Index the TAR file
-        with tarfile.open(tar_path, 'r') as tar:
+        with tarfile.open(tar_path, "r") as tar:
             for member in tar.getmembers():
-                if member.name.endswith(('.jpg', '.jpeg', '.png', '.JPEG', '.JPG')):
+                if member.name.endswith((".jpg", ".jpeg", ".png", ".JPEG", ".JPG")):
                     self.samples.append(member.name)
 
         self.samples.sort()
@@ -70,14 +73,14 @@ class TarDataset(Dataset):
         filename = self.samples[idx]
 
         # Read from TAR
-        with tarfile.open(self.tar_path, 'r') as tar:
+        with tarfile.open(self.tar_path, "r") as tar:
             member = tar.getmember(filename)
             f = tar.extractfile(member)
             data = f.read()
 
         # Decode image
         if HAS_TORCHVISION:
-            img = Image.open(BytesIO(data)).convert('RGB')
+            img = Image.open(BytesIO(data)).convert("RGB")
             if self.transform:
                 img = self.transform(img)
         else:
@@ -101,9 +104,9 @@ class CachedTarDataset(Dataset):
         self.data_cache = {}
 
         print("Loading TAR into memory...")
-        with tarfile.open(tar_path, 'r') as tar:
+        with tarfile.open(tar_path, "r") as tar:
             for member in tar.getmembers():
-                if member.name.endswith(('.jpg', '.jpeg', '.png', '.JPEG', '.JPG')):
+                if member.name.endswith((".jpg", ".jpeg", ".png", ".JPEG", ".JPG")):
                     f = tar.extractfile(member)
                     self.data_cache[member.name] = f.read()
                     self.samples.append(member.name)
@@ -119,7 +122,7 @@ class CachedTarDataset(Dataset):
         data = self.data_cache[filename]
 
         if HAS_TORCHVISION:
-            img = Image.open(BytesIO(data)).convert('RGB')
+            img = Image.open(BytesIO(data)).convert("RGB")
             if self.transform:
                 img = self.transform(img)
         else:
@@ -138,11 +141,7 @@ def warmup_loader(loader, num_batches: int = 5):
             break
 
 
-def benchmark_throughput(
-    loader,
-    num_batches: int = 100,
-    batch_size: int = 64
-) -> Dict[str, float]:
+def benchmark_throughput(loader, num_batches: int = 100, batch_size: int = 64) -> Dict[str, float]:
     """Measure throughput in images/second"""
     gc.collect()
     if HAS_TORCH:
@@ -170,13 +169,13 @@ def benchmark_throughput(
     elapsed = time.perf_counter() - start
 
     return {
-        'throughput': total_images / elapsed,
-        'total_time': elapsed,
-        'total_images': total_images,
-        'avg_batch_time': np.mean(batch_times) * 1000,
-        'p50_batch_time': np.percentile(batch_times, 50) * 1000,
-        'p95_batch_time': np.percentile(batch_times, 95) * 1000,
-        'p99_batch_time': np.percentile(batch_times, 99) * 1000,
+        "throughput": total_images / elapsed,
+        "total_time": elapsed,
+        "total_images": total_images,
+        "avg_batch_time": np.mean(batch_times) * 1000,
+        "p50_batch_time": np.percentile(batch_times, 50) * 1000,
+        "p95_batch_time": np.percentile(batch_times, 95) * 1000,
+        "p99_batch_time": np.percentile(batch_times, 99) * 1000,
     }
 
 
@@ -186,7 +185,7 @@ def run_pytorch_benchmark(
     num_workers_list: List[int] = [0, 1, 2, 4, 8],
     num_batches: int = 100,
     with_transforms: bool = True,
-    cached: bool = False
+    cached: bool = False,
 ) -> List[BenchmarkResult]:
     """Run PyTorch DataLoader benchmarks"""
 
@@ -207,16 +206,15 @@ def run_pytorch_benchmark(
 
     # Create transforms
     if with_transforms and HAS_TORCHVISION:
-        transform = T.Compose([
-            T.Resize((256, 256)),
-            T.RandomCrop(224),
-            T.RandomHorizontalFlip(),
-            T.ToTensor(),
-            T.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            ),
-        ])
+        transform = T.Compose(
+            [
+                T.Resize((256, 256)),
+                T.RandomCrop(224),
+                T.RandomHorizontalFlip(),
+                T.ToTensor(),
+                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
+        )
     else:
         transform = T.ToTensor() if HAS_TORCHVISION else None
 
@@ -231,11 +229,11 @@ def run_pytorch_benchmark(
             print(f"\n--- Batch Size: {batch_size}, Workers: {num_workers} ---")
 
             config = {
-                'batch_size': batch_size,
-                'num_workers': num_workers,
-                'with_transforms': with_transforms,
-                'cached': cached,
-                'dataset': os.path.basename(tar_path),
+                "batch_size": batch_size,
+                "num_workers": num_workers,
+                "with_transforms": with_transforms,
+                "cached": cached,
+                "dataset": os.path.basename(tar_path),
             }
 
             try:
@@ -260,19 +258,22 @@ def run_pytorch_benchmark(
                 print(f"  Avg batch time: {stats['avg_batch_time']:.2f} ms")
                 print(f"  P95 batch time: {stats['p95_batch_time']:.2f} ms")
 
-                results.append(BenchmarkResult(
-                    library='pytorch' + ('_cached' if cached else ''),
-                    metric='throughput',
-                    value=stats['throughput'],
-                    unit='images/sec',
-                    config=config,
-                    timestamp=timestamp,
-                    extra=stats
-                ))
+                results.append(
+                    BenchmarkResult(
+                        library="pytorch" + ("_cached" if cached else ""),
+                        metric="throughput",
+                        value=stats["throughput"],
+                        unit="images/sec",
+                        config=config,
+                        timestamp=timestamp,
+                        extra=stats,
+                    )
+                )
 
             except Exception as e:
                 print(f"  Error: {e}")
                 import traceback
+
                 traceback.print_exc()
 
     return results
@@ -280,10 +281,10 @@ def run_pytorch_benchmark(
 
 def save_results(results: List[BenchmarkResult], output_path: str):
     """Save results to JSON file"""
-    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     data = [asdict(r) for r in results]
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(data, f, indent=2)
 
     print(f"\nResults saved to: {output_path}")
@@ -299,31 +300,36 @@ def print_summary(results: List[BenchmarkResult]):
     print("-" * 70)
 
     for r in results:
-        if r.metric == 'throughput':
+        if r.metric == "throughput":
             lib = r.library
-            batch = r.config.get('batch_size', 'N/A')
-            workers = r.config.get('num_workers', 'N/A')
+            batch = r.config.get("batch_size", "N/A")
+            workers = r.config.get("num_workers", "N/A")
             throughput = r.value
             print(f"{lib:>15} {batch:>8} {workers:>8} {throughput:>15.1f}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='PyTorch DataLoader Benchmark')
-    parser.add_argument('--tar-path', type=str, required=True,
-                        help='Path to TAR dataset')
-    parser.add_argument('--batch-sizes', type=int, nargs='+', default=[32, 64, 128],
-                        help='Batch sizes to test')
-    parser.add_argument('--workers', type=int, nargs='+', default=[0, 1, 2, 4, 8],
-                        help='Number of workers to test')
-    parser.add_argument('--num-batches', type=int, default=100,
-                        help='Number of batches per benchmark')
-    parser.add_argument('--no-transforms', action='store_true',
-                        help='Run without transforms')
-    parser.add_argument('--cached', action='store_true',
-                        help='Use cached dataset (loads TAR into memory)')
-    parser.add_argument('--output', type=str,
-                        default='benchmarks/results/throughput/pytorch.json',
-                        help='Output path for results')
+    parser = argparse.ArgumentParser(description="PyTorch DataLoader Benchmark")
+    parser.add_argument("--tar-path", type=str, required=True, help="Path to TAR dataset")
+    parser.add_argument(
+        "--batch-sizes", type=int, nargs="+", default=[32, 64, 128], help="Batch sizes to test"
+    )
+    parser.add_argument(
+        "--workers", type=int, nargs="+", default=[0, 1, 2, 4, 8], help="Number of workers to test"
+    )
+    parser.add_argument(
+        "--num-batches", type=int, default=100, help="Number of batches per benchmark"
+    )
+    parser.add_argument("--no-transforms", action="store_true", help="Run without transforms")
+    parser.add_argument(
+        "--cached", action="store_true", help="Use cached dataset (loads TAR into memory)"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="benchmarks/results/throughput/pytorch.json",
+        help="Output path for results",
+    )
 
     args = parser.parse_args()
 
@@ -339,7 +345,7 @@ def main():
         num_workers_list=args.workers,
         num_batches=args.num_batches,
         with_transforms=not args.no_transforms,
-        cached=args.cached
+        cached=args.cached,
     )
 
     # Save and print results
@@ -347,5 +353,5 @@ def main():
     print_summary(results)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

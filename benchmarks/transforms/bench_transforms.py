@@ -25,18 +25,21 @@ try:
     import torchvision.transforms as T
     import torchvision.transforms.functional as F
     from PIL import Image
+
     HAS_TORCHVISION = True
 except ImportError:
     HAS_TORCHVISION = False
 
 try:
     import albumentations as A
+
     HAS_ALBUMENTATIONS = True
 except ImportError:
     HAS_ALBUMENTATIONS = False
 
 try:
     import turboloader
+
     HAS_TURBOLOADER = True
 except ImportError:
     HAS_TURBOLOADER = False
@@ -45,6 +48,7 @@ except ImportError:
 @dataclass
 class BenchmarkResult:
     """Result from a single benchmark run"""
+
     library: str
     transform: str
     time_per_image_ms: float
@@ -63,10 +67,7 @@ def generate_test_images(num_images: int, size: tuple = (256, 256)) -> List[np.n
 
 
 def benchmark_transform(
-    transform_fn,
-    images: List[np.ndarray],
-    warmup_runs: int = 10,
-    timed_runs: int = 100
+    transform_fn, images: List[np.ndarray], warmup_runs: int = 10, timed_runs: int = 100
 ) -> Dict[str, float]:
     """Benchmark a single transform"""
     gc.collect()
@@ -86,13 +87,13 @@ def benchmark_transform(
 
     times = np.array(times)
     return {
-        'mean_ms': np.mean(times) * 1000,
-        'std_ms': np.std(times) * 1000,
-        'min_ms': np.min(times) * 1000,
-        'max_ms': np.max(times) * 1000,
-        'p50_ms': np.percentile(times, 50) * 1000,
-        'p95_ms': np.percentile(times, 95) * 1000,
-        'throughput': 1.0 / np.mean(times),
+        "mean_ms": np.mean(times) * 1000,
+        "std_ms": np.std(times) * 1000,
+        "min_ms": np.min(times) * 1000,
+        "max_ms": np.max(times) * 1000,
+        "p50_ms": np.percentile(times, 50) * 1000,
+        "p95_ms": np.percentile(times, 95) * 1000,
+        "throughput": 1.0 / np.mean(times),
     }
 
 
@@ -105,16 +106,16 @@ def run_turboloader_transforms(images: List[np.ndarray], timed_runs: int) -> Lis
     timestamp = datetime.now().isoformat()
 
     transforms = [
-        ('Resize(256, 256)', turboloader.Resize(256, 256)),
-        ('Resize(224, 224)', turboloader.Resize(224, 224)),
-        ('CenterCrop(224, 224)', turboloader.CenterCrop(224, 224)),
-        ('RandomCrop(224, 224)', turboloader.RandomCrop(224, 224)),
-        ('RandomHorizontalFlip(1.0)', turboloader.RandomHorizontalFlip(1.0)),
-        ('RandomVerticalFlip(1.0)', turboloader.RandomVerticalFlip(1.0)),
-        ('ColorJitter(0.4, 0.4, 0.4, 0.2)', turboloader.ColorJitter(0.4, 0.4, 0.4, 0.2)),
-        ('GaussianBlur(5)', turboloader.GaussianBlur(5)),
-        ('Grayscale', turboloader.Grayscale()),
-        ('ImageNetNormalize', turboloader.ImageNetNormalize()),
+        ("Resize(256, 256)", turboloader.Resize(256, 256)),
+        ("Resize(224, 224)", turboloader.Resize(224, 224)),
+        ("CenterCrop(224, 224)", turboloader.CenterCrop(224, 224)),
+        ("RandomCrop(224, 224)", turboloader.RandomCrop(224, 224)),
+        ("RandomHorizontalFlip(1.0)", turboloader.RandomHorizontalFlip(1.0)),
+        ("RandomVerticalFlip(1.0)", turboloader.RandomVerticalFlip(1.0)),
+        ("ColorJitter(0.4, 0.4, 0.4, 0.2)", turboloader.ColorJitter(0.4, 0.4, 0.4, 0.2)),
+        ("GaussianBlur(5)", turboloader.GaussianBlur(5)),
+        ("Grayscale", turboloader.Grayscale()),
+        ("ImageNetNormalize", turboloader.ImageNetNormalize()),
     ]
 
     print("\nTurboLoader Transforms:")
@@ -123,74 +124,76 @@ def run_turboloader_transforms(images: List[np.ndarray], timed_runs: int) -> Lis
     for name, transform in transforms:
         try:
             stats = benchmark_transform(
-                lambda img, t=transform: t.apply(img),
-                images,
-                timed_runs=timed_runs
+                lambda img, t=transform: t.apply(img), images, timed_runs=timed_runs
             )
             print(f"  {name:40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)")
 
-            results.append(BenchmarkResult(
-                library='turboloader',
-                transform=name,
-                time_per_image_ms=stats['mean_ms'],
-                throughput=stats['throughput'],
-                config={'input_size': images[0].shape[:2]},
-                timestamp=timestamp
-            ))
+            results.append(
+                BenchmarkResult(
+                    library="turboloader",
+                    transform=name,
+                    time_per_image_ms=stats["mean_ms"],
+                    throughput=stats["throughput"],
+                    config={"input_size": images[0].shape[:2]},
+                    timestamp=timestamp,
+                )
+            )
         except Exception as e:
             print(f"  {name:40} Error: {e}")
 
     # Test pipeline
     try:
-        pipeline = turboloader.Compose([
-            turboloader.Resize(256, 256),
-            turboloader.RandomCrop(224, 224),
-            turboloader.RandomHorizontalFlip(0.5),
-            turboloader.ColorJitter(0.4, 0.4, 0.4, 0.2),
-            turboloader.ImageNetNormalize(),
-        ])
-        stats = benchmark_transform(
-            lambda img: pipeline.apply(img),
-            images,
-            timed_runs=timed_runs
+        pipeline = turboloader.Compose(
+            [
+                turboloader.Resize(256, 256),
+                turboloader.RandomCrop(224, 224),
+                turboloader.RandomHorizontalFlip(0.5),
+                turboloader.ColorJitter(0.4, 0.4, 0.4, 0.2),
+                turboloader.ImageNetNormalize(),
+            ]
         )
-        print(f"  {'Full Pipeline (5 transforms)':40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)")
+        stats = benchmark_transform(lambda img: pipeline.apply(img), images, timed_runs=timed_runs)
+        print(
+            f"  {'Full Pipeline (5 transforms)':40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)"
+        )
 
-        results.append(BenchmarkResult(
-            library='turboloader',
-            transform='Full Pipeline (5 transforms)',
-            time_per_image_ms=stats['mean_ms'],
-            throughput=stats['throughput'],
-            config={'input_size': images[0].shape[:2]},
-            timestamp=timestamp
-        ))
+        results.append(
+            BenchmarkResult(
+                library="turboloader",
+                transform="Full Pipeline (5 transforms)",
+                time_per_image_ms=stats["mean_ms"],
+                throughput=stats["throughput"],
+                config={"input_size": images[0].shape[:2]},
+                timestamp=timestamp,
+            )
+        )
     except Exception as e:
         print(f"  {'Full Pipeline':40} Error: {e}")
 
     # Test pipe operator pipeline
     try:
         pipeline = (
-            turboloader.Resize(256, 256) |
-            turboloader.RandomCrop(224, 224) |
-            turboloader.RandomHorizontalFlip(0.5) |
-            turboloader.ColorJitter(0.4, 0.4, 0.4, 0.2) |
-            turboloader.ImageNetNormalize()
+            turboloader.Resize(256, 256)
+            | turboloader.RandomCrop(224, 224)
+            | turboloader.RandomHorizontalFlip(0.5)
+            | turboloader.ColorJitter(0.4, 0.4, 0.4, 0.2)
+            | turboloader.ImageNetNormalize()
         )
-        stats = benchmark_transform(
-            lambda img: pipeline.apply(img),
-            images,
-            timed_runs=timed_runs
+        stats = benchmark_transform(lambda img: pipeline.apply(img), images, timed_runs=timed_runs)
+        print(
+            f"  {'Pipe Operator Pipeline':40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)"
         )
-        print(f"  {'Pipe Operator Pipeline':40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)")
 
-        results.append(BenchmarkResult(
-            library='turboloader_pipe',
-            transform='Pipe Operator Pipeline',
-            time_per_image_ms=stats['mean_ms'],
-            throughput=stats['throughput'],
-            config={'input_size': images[0].shape[:2]},
-            timestamp=timestamp
-        ))
+        results.append(
+            BenchmarkResult(
+                library="turboloader_pipe",
+                transform="Pipe Operator Pipeline",
+                time_per_image_ms=stats["mean_ms"],
+                throughput=stats["throughput"],
+                config={"input_size": images[0].shape[:2]},
+                timestamp=timestamp,
+            )
+        )
     except Exception as e:
         print(f"  {'Pipe Operator Pipeline':40} Error: {e}")
 
@@ -209,16 +212,19 @@ def run_torchvision_transforms(images: List[np.ndarray], timed_runs: int) -> Lis
     pil_images = [Image.fromarray(img) for img in images]
 
     transforms = [
-        ('Resize(256, 256)', T.Resize((256, 256))),
-        ('Resize(224, 224)', T.Resize((224, 224))),
-        ('CenterCrop(224)', T.CenterCrop(224)),
-        ('RandomCrop(224)', T.RandomCrop(224)),
-        ('RandomHorizontalFlip(1.0)', T.RandomHorizontalFlip(1.0)),
-        ('RandomVerticalFlip(1.0)', T.RandomVerticalFlip(1.0)),
-        ('ColorJitter(0.4, 0.4, 0.4, 0.2)', T.ColorJitter(0.4, 0.4, 0.4, 0.2)),
-        ('GaussianBlur(5)', T.GaussianBlur(5)),
-        ('Grayscale', T.Grayscale(num_output_channels=3)),
-        ('Normalize', T.Compose([T.ToTensor(), T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])),
+        ("Resize(256, 256)", T.Resize((256, 256))),
+        ("Resize(224, 224)", T.Resize((224, 224))),
+        ("CenterCrop(224)", T.CenterCrop(224)),
+        ("RandomCrop(224)", T.RandomCrop(224)),
+        ("RandomHorizontalFlip(1.0)", T.RandomHorizontalFlip(1.0)),
+        ("RandomVerticalFlip(1.0)", T.RandomVerticalFlip(1.0)),
+        ("ColorJitter(0.4, 0.4, 0.4, 0.2)", T.ColorJitter(0.4, 0.4, 0.4, 0.2)),
+        ("GaussianBlur(5)", T.GaussianBlur(5)),
+        ("Grayscale", T.Grayscale(num_output_channels=3)),
+        (
+            "Normalize",
+            T.Compose([T.ToTensor(), T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])]),
+        ),
     ]
 
     print("\ntorchvision Transforms:")
@@ -226,64 +232,66 @@ def run_torchvision_transforms(images: List[np.ndarray], timed_runs: int) -> Lis
 
     for name, transform in transforms:
         try:
-            if 'Normalize' in name:
+            if "Normalize" in name:
                 # Normalize needs tensor input
                 stats = benchmark_transform(
-                    lambda img, t=transform: t(img),
-                    pil_images,
-                    timed_runs=timed_runs
+                    lambda img, t=transform: t(img), pil_images, timed_runs=timed_runs
                 )
             else:
                 stats = benchmark_transform(
-                    lambda img, t=transform: t(img),
-                    pil_images,
-                    timed_runs=timed_runs
+                    lambda img, t=transform: t(img), pil_images, timed_runs=timed_runs
                 )
             print(f"  {name:40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)")
 
-            results.append(BenchmarkResult(
-                library='torchvision',
-                transform=name,
-                time_per_image_ms=stats['mean_ms'],
-                throughput=stats['throughput'],
-                config={'input_size': images[0].shape[:2]},
-                timestamp=timestamp
-            ))
+            results.append(
+                BenchmarkResult(
+                    library="torchvision",
+                    transform=name,
+                    time_per_image_ms=stats["mean_ms"],
+                    throughput=stats["throughput"],
+                    config={"input_size": images[0].shape[:2]},
+                    timestamp=timestamp,
+                )
+            )
         except Exception as e:
             print(f"  {name:40} Error: {e}")
 
     # Test pipeline
     try:
-        pipeline = T.Compose([
-            T.Resize((256, 256)),
-            T.RandomCrop(224),
-            T.RandomHorizontalFlip(0.5),
-            T.ColorJitter(0.4, 0.4, 0.4, 0.2),
-            T.ToTensor(),
-            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
-        stats = benchmark_transform(
-            lambda img: pipeline(img),
-            pil_images,
-            timed_runs=timed_runs
+        pipeline = T.Compose(
+            [
+                T.Resize((256, 256)),
+                T.RandomCrop(224),
+                T.RandomHorizontalFlip(0.5),
+                T.ColorJitter(0.4, 0.4, 0.4, 0.2),
+                T.ToTensor(),
+                T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ]
         )
-        print(f"  {'Full Pipeline (5 transforms)':40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)")
+        stats = benchmark_transform(lambda img: pipeline(img), pil_images, timed_runs=timed_runs)
+        print(
+            f"  {'Full Pipeline (5 transforms)':40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)"
+        )
 
-        results.append(BenchmarkResult(
-            library='torchvision',
-            transform='Full Pipeline (5 transforms)',
-            time_per_image_ms=stats['mean_ms'],
-            throughput=stats['throughput'],
-            config={'input_size': images[0].shape[:2]},
-            timestamp=timestamp
-        ))
+        results.append(
+            BenchmarkResult(
+                library="torchvision",
+                transform="Full Pipeline (5 transforms)",
+                time_per_image_ms=stats["mean_ms"],
+                throughput=stats["throughput"],
+                config={"input_size": images[0].shape[:2]},
+                timestamp=timestamp,
+            )
+        )
     except Exception as e:
         print(f"  {'Full Pipeline':40} Error: {e}")
 
     return results
 
 
-def run_albumentations_transforms(images: List[np.ndarray], timed_runs: int) -> List[BenchmarkResult]:
+def run_albumentations_transforms(
+    images: List[np.ndarray], timed_runs: int
+) -> List[BenchmarkResult]:
     """Benchmark Albumentations transforms"""
     if not HAS_ALBUMENTATIONS:
         return []
@@ -292,16 +300,19 @@ def run_albumentations_transforms(images: List[np.ndarray], timed_runs: int) -> 
     timestamp = datetime.now().isoformat()
 
     transforms = [
-        ('Resize(256, 256)', A.Resize(256, 256)),
-        ('Resize(224, 224)', A.Resize(224, 224)),
-        ('CenterCrop(224, 224)', A.CenterCrop(224, 224)),
-        ('RandomCrop(224, 224)', A.RandomCrop(224, 224)),
-        ('HorizontalFlip(p=1.0)', A.HorizontalFlip(p=1.0)),
-        ('VerticalFlip(p=1.0)', A.VerticalFlip(p=1.0)),
-        ('ColorJitter', A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.2, p=1.0)),
-        ('GaussianBlur(blur_limit=5)', A.GaussianBlur(blur_limit=5, p=1.0)),
-        ('ToGray', A.ToGray(p=1.0)),
-        ('Normalize', A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])),
+        ("Resize(256, 256)", A.Resize(256, 256)),
+        ("Resize(224, 224)", A.Resize(224, 224)),
+        ("CenterCrop(224, 224)", A.CenterCrop(224, 224)),
+        ("RandomCrop(224, 224)", A.RandomCrop(224, 224)),
+        ("HorizontalFlip(p=1.0)", A.HorizontalFlip(p=1.0)),
+        ("VerticalFlip(p=1.0)", A.VerticalFlip(p=1.0)),
+        (
+            "ColorJitter",
+            A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.2, p=1.0),
+        ),
+        ("GaussianBlur(blur_limit=5)", A.GaussianBlur(blur_limit=5, p=1.0)),
+        ("ToGray", A.ToGray(p=1.0)),
+        ("Normalize", A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])),
     ]
 
     print("\nAlbumentations Transforms:")
@@ -310,47 +321,51 @@ def run_albumentations_transforms(images: List[np.ndarray], timed_runs: int) -> 
     for name, transform in transforms:
         try:
             stats = benchmark_transform(
-                lambda img, t=transform: t(image=img)['image'],
-                images,
-                timed_runs=timed_runs
+                lambda img, t=transform: t(image=img)["image"], images, timed_runs=timed_runs
             )
             print(f"  {name:40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)")
 
-            results.append(BenchmarkResult(
-                library='albumentations',
-                transform=name,
-                time_per_image_ms=stats['mean_ms'],
-                throughput=stats['throughput'],
-                config={'input_size': images[0].shape[:2]},
-                timestamp=timestamp
-            ))
+            results.append(
+                BenchmarkResult(
+                    library="albumentations",
+                    transform=name,
+                    time_per_image_ms=stats["mean_ms"],
+                    throughput=stats["throughput"],
+                    config={"input_size": images[0].shape[:2]},
+                    timestamp=timestamp,
+                )
+            )
         except Exception as e:
             print(f"  {name:40} Error: {e}")
 
     # Test pipeline
     try:
-        pipeline = A.Compose([
-            A.Resize(256, 256),
-            A.RandomCrop(224, 224),
-            A.HorizontalFlip(p=0.5),
-            A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.2, p=1.0),
-            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-        stats = benchmark_transform(
-            lambda img: pipeline(image=img)['image'],
-            images,
-            timed_runs=timed_runs
+        pipeline = A.Compose(
+            [
+                A.Resize(256, 256),
+                A.RandomCrop(224, 224),
+                A.HorizontalFlip(p=0.5),
+                A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.2, p=1.0),
+                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
         )
-        print(f"  {'Full Pipeline (5 transforms)':40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)")
+        stats = benchmark_transform(
+            lambda img: pipeline(image=img)["image"], images, timed_runs=timed_runs
+        )
+        print(
+            f"  {'Full Pipeline (5 transforms)':40} {stats['mean_ms']:8.3f} ms ({stats['throughput']:8.1f} img/sec)"
+        )
 
-        results.append(BenchmarkResult(
-            library='albumentations',
-            transform='Full Pipeline (5 transforms)',
-            time_per_image_ms=stats['mean_ms'],
-            throughput=stats['throughput'],
-            config={'input_size': images[0].shape[:2]},
-            timestamp=timestamp
-        ))
+        results.append(
+            BenchmarkResult(
+                library="albumentations",
+                transform="Full Pipeline (5 transforms)",
+                time_per_image_ms=stats["mean_ms"],
+                throughput=stats["throughput"],
+                config={"input_size": images[0].shape[:2]},
+                timestamp=timestamp,
+            )
+        )
     except Exception as e:
         print(f"  {'Full Pipeline':40} Error: {e}")
 
@@ -359,10 +374,10 @@ def run_albumentations_transforms(images: List[np.ndarray], timed_runs: int) -> 
 
 def save_results(results: List[BenchmarkResult], output_path: str):
     """Save results to JSON file"""
-    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     data = [asdict(r) for r in results]
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(data, f, indent=2)
 
     print(f"\nResults saved to: {output_path}")
@@ -386,13 +401,13 @@ def print_comparison(results: List[BenchmarkResult]):
     print("-" * 80)
 
     for transform, libs in sorted(transform_map.items()):
-        tl = libs.get('turboloader', libs.get('turboloader_pipe', float('inf')))
-        tv = libs.get('torchvision', float('inf'))
+        tl = libs.get("turboloader", libs.get("turboloader_pipe", float("inf")))
+        tv = libs.get("torchvision", float("inf"))
 
-        tl_str = f"{tl:.3f} ms" if tl != float('inf') else "N/A"
-        tv_str = f"{tv:.3f} ms" if tv != float('inf') else "N/A"
+        tl_str = f"{tl:.3f} ms" if tl != float("inf") else "N/A"
+        tv_str = f"{tv:.3f} ms" if tv != float("inf") else "N/A"
 
-        if tl != float('inf') and tv != float('inf'):
+        if tl != float("inf") and tv != float("inf"):
             speedup = tv / tl
             speedup_str = f"{speedup:.1f}x"
         else:
@@ -402,16 +417,26 @@ def print_comparison(results: List[BenchmarkResult]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Transform Performance Benchmark')
-    parser.add_argument('--num-images', type=int, default=50,
-                        help='Number of test images to generate')
-    parser.add_argument('--image-size', type=int, nargs=2, default=[256, 256],
-                        help='Input image size (width height)')
-    parser.add_argument('--timed-runs', type=int, default=100,
-                        help='Number of timed runs per transform')
-    parser.add_argument('--output', type=str,
-                        default='benchmarks/results/transforms/transforms.json',
-                        help='Output path for results')
+    parser = argparse.ArgumentParser(description="Transform Performance Benchmark")
+    parser.add_argument(
+        "--num-images", type=int, default=50, help="Number of test images to generate"
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        default=[256, 256],
+        help="Input image size (width height)",
+    )
+    parser.add_argument(
+        "--timed-runs", type=int, default=100, help="Number of timed runs per transform"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="benchmarks/results/transforms/transforms.json",
+        help="Output path for results",
+    )
 
     args = parser.parse_args()
 
@@ -449,5 +474,5 @@ def main():
     print_comparison(results)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

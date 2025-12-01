@@ -21,7 +21,7 @@ import statistics
 import tempfile
 
 # Add turboloader to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 try:
     import turboloader
@@ -35,7 +35,7 @@ def create_tbl_from_tar(tar_path: str, tbl_path: str) -> None:
     print(f"Converting {tar_path} to {tbl_path}...")
 
     # Use TblWriterV2 if available
-    if hasattr(turboloader, 'TblWriterV2'):
+    if hasattr(turboloader, "TblWriterV2"):
         writer = turboloader.TblWriterV2(tbl_path, compression=True)
         reader = turboloader.TarReader(tar_path)
 
@@ -44,7 +44,7 @@ def create_tbl_from_tar(tar_path: str, tbl_path: str) -> None:
             writer.add_sample(
                 data=sample.data,
                 format=sample.format,
-                metadata={"label": getattr(sample, 'label', 0)}
+                metadata={"label": getattr(sample, "label", 0)},
             )
             count += 1
             if count % 1000 == 0:
@@ -57,8 +57,9 @@ def create_tbl_from_tar(tar_path: str, tbl_path: str) -> None:
         sys.exit(1)
 
 
-def benchmark_format(path: str, format_name: str, batch_size: int = 64,
-                     num_workers: int = 4, iterations: int = 5) -> dict:
+def benchmark_format(
+    path: str, format_name: str, batch_size: int = 64, num_workers: int = 4, iterations: int = 5
+) -> dict:
     """Benchmark a specific format."""
     print(f"\nBenchmarking {format_name} format: {path}")
 
@@ -66,11 +67,7 @@ def benchmark_format(path: str, format_name: str, batch_size: int = 64,
     sample_counts = []
 
     for i in range(iterations):
-        loader = turboloader.DataLoader(
-            path,
-            batch_size=batch_size,
-            num_workers=num_workers
-        )
+        loader = turboloader.DataLoader(path, batch_size=batch_size, num_workers=num_workers)
 
         start = time.perf_counter()
         count = 0
@@ -92,12 +89,13 @@ def benchmark_format(path: str, format_name: str, batch_size: int = 64,
         "images_per_sec": avg_throughput,
         "std": std_throughput,
         "total_samples": sample_counts[0] if sample_counts else 0,
-        "iterations": iterations
+        "iterations": iterations,
     }
 
 
-def benchmark_cache_effectiveness(path: str, batch_size: int = 64,
-                                   num_workers: int = 4, epochs: int = 3) -> dict:
+def benchmark_cache_effectiveness(
+    path: str, batch_size: int = 64, num_workers: int = 4, epochs: int = 3
+) -> dict:
     """Benchmark cache effectiveness across epochs."""
     print(f"\nBenchmarking cache effectiveness: {path}")
     print(f"  Running {epochs} epochs with L1 cache enabled...")
@@ -110,7 +108,7 @@ def benchmark_cache_effectiveness(path: str, batch_size: int = 64,
         batch_size=batch_size,
         num_workers=num_workers,
         enable_cache=True,
-        cache_l1_mb=1024  # 1GB L1 cache
+        cache_l1_mb=1024,  # 1GB L1 cache
     )
 
     for epoch in range(epochs):
@@ -134,53 +132,52 @@ def benchmark_cache_effectiveness(path: str, batch_size: int = 64,
         "first_epoch": epoch_times[0] if epoch_times else 0,
         "last_epoch": epoch_times[-1] if epoch_times else 0,
         "speedup": speedup,
-        "epoch_times": epoch_times
+        "epoch_times": epoch_times,
     }
 
 
 def print_results(tar_result: dict, tbl_result: dict = None, cache_result: dict = None):
     """Print benchmark results."""
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("                      BENCHMARK RESULTS")
-    print("="*70)
+    print("=" * 70)
 
     print(f"\n{'Format':<15} {'Throughput (img/s)':<20} {'Std Dev':<15}")
-    print("-"*50)
+    print("-" * 50)
 
     print(f"{'TAR':<15} {tar_result['images_per_sec']:<20.1f} {tar_result['std']:<15.1f}")
 
     if tbl_result:
         print(f"{'TBL v2':<15} {tbl_result['images_per_sec']:<20.1f} {tbl_result['std']:<15.1f}")
 
-        speedup = tbl_result['images_per_sec'] / tar_result['images_per_sec'] if tar_result['images_per_sec'] > 0 else 0
+        speedup = (
+            tbl_result["images_per_sec"] / tar_result["images_per_sec"]
+            if tar_result["images_per_sec"] > 0
+            else 0
+        )
         print(f"\nTBL v2 Speedup: {speedup:.2f}x")
 
     if cache_result:
-        print("\n" + "-"*50)
+        print("\n" + "-" * 50)
         print("Cache Effectiveness (across epochs):")
         print(f"  First epoch:  {cache_result['first_epoch']:.1f} images/sec")
         print(f"  Last epoch:   {cache_result['last_epoch']:.1f} images/sec")
         print(f"  Cache speedup: {cache_result['speedup']:.2f}x")
 
-    print("="*70)
+    print("=" * 70)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark TBL v2 vs TAR format performance"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark TBL v2 vs TAR format performance")
     parser.add_argument("--tar", required=True, help="Path to TAR file")
     parser.add_argument("--tbl", help="Path to TBL v2 file (optional)")
-    parser.add_argument("--create-tbl", action="store_true",
-                       help="Create TBL v2 file from TAR")
-    parser.add_argument("--batch-size", type=int, default=64,
-                       help="Batch size (default: 64)")
-    parser.add_argument("--num-workers", type=int, default=4,
-                       help="Number of workers (default: 4)")
-    parser.add_argument("--iterations", type=int, default=5,
-                       help="Number of iterations (default: 5)")
-    parser.add_argument("--test-cache", action="store_true",
-                       help="Also test cache effectiveness")
+    parser.add_argument("--create-tbl", action="store_true", help="Create TBL v2 file from TAR")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size (default: 64)")
+    parser.add_argument("--num-workers", type=int, default=4, help="Number of workers (default: 4)")
+    parser.add_argument(
+        "--iterations", type=int, default=5, help="Number of iterations (default: 5)"
+    )
+    parser.add_argument("--test-cache", action="store_true", help="Also test cache effectiveness")
 
     args = parser.parse_args()
 
@@ -192,35 +189,35 @@ def main():
     # Create TBL if requested
     tbl_path = args.tbl
     if args.create_tbl and not tbl_path:
-        tbl_path = args.tar.replace('.tar', '.tbl')
+        tbl_path = args.tar.replace(".tar", ".tbl")
         if not os.path.exists(tbl_path):
             create_tbl_from_tar(args.tar, tbl_path)
 
     # Benchmark TAR
     tar_result = benchmark_format(
-        args.tar, "TAR",
+        args.tar,
+        "TAR",
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        iterations=args.iterations
+        iterations=args.iterations,
     )
 
     # Benchmark TBL v2 if available
     tbl_result = None
     if tbl_path and os.path.exists(tbl_path):
         tbl_result = benchmark_format(
-            tbl_path, "TBL v2",
+            tbl_path,
+            "TBL v2",
             batch_size=args.batch_size,
             num_workers=args.num_workers,
-            iterations=args.iterations
+            iterations=args.iterations,
         )
 
     # Test cache effectiveness if requested
     cache_result = None
     if args.test_cache:
         cache_result = benchmark_cache_effectiveness(
-            args.tar,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers
+            args.tar, batch_size=args.batch_size, num_workers=args.num_workers
         )
 
     # Print results

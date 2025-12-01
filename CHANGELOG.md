@@ -5,6 +5,19 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.3] - 2025-12-01
+
+### Additional Code Formatting and Cleanup
+
+This release applies additional black formatting to benchmark files.
+
+### Changed
+- **Code Formatting**
+  - Applied black formatter to 8 additional benchmark files
+  - All Python files now consistently formatted
+
+---
+
 ## [2.3.2] - 2025-12-01
 
 ### CI/CD Build Fixes, Code Quality, and Black Formatting

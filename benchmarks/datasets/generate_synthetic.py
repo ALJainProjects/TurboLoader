@@ -22,6 +22,7 @@ import numpy as np
 
 try:
     from PIL import Image
+
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -58,19 +59,19 @@ def generate_random_image(width: int, height: int, channels: int = 3) -> np.ndar
 def save_image_jpeg(img: np.ndarray, path: str, quality: int = 85):
     """Save image as JPEG"""
     if HAS_PIL:
-        Image.fromarray(img).save(path, 'JPEG', quality=quality)
+        Image.fromarray(img).save(path, "JPEG", quality=quality)
     else:
         # Fallback: save as raw binary
-        with open(path, 'wb') as f:
+        with open(path, "wb") as f:
             f.write(img.tobytes())
 
 
 def save_image_png(img: np.ndarray, path: str):
     """Save image as PNG"""
     if HAS_PIL:
-        Image.fromarray(img).save(path, 'PNG')
+        Image.fromarray(img).save(path, "PNG")
     else:
-        with open(path, 'wb') as f:
+        with open(path, "wb") as f:
             f.write(img.tobytes())
 
 
@@ -79,8 +80,8 @@ def generate_dataset_files(
     num_images: int,
     image_size: tuple = (256, 256),
     num_classes: int = 1000,
-    format: str = 'jpeg',
-    num_workers: int = 4
+    format: str = "jpeg",
+    num_workers: int = 4,
 ) -> list:
     """Generate dataset as individual image files"""
     os.makedirs(output_dir, exist_ok=True)
@@ -92,7 +93,7 @@ def generate_dataset_files(
         img = generate_random_image(image_size[0], image_size[1])
         label = idx % num_classes
 
-        if format == 'jpeg':
+        if format == "jpeg":
             filename = f"img_{idx:08d}.jpg"
             filepath = os.path.join(output_dir, filename)
             save_image_jpeg(img, filepath)
@@ -116,8 +117,8 @@ def generate_dataset_files(
                 print(f"  Generated {i + 1}/{num_images} images")
 
     # Save labels file
-    labels_path = os.path.join(output_dir, 'labels.txt')
-    with open(labels_path, 'w') as f:
+    labels_path = os.path.join(output_dir, "labels.txt")
+    with open(labels_path, "w") as f:
         for filepath, label in zip(files, labels):
             f.write(f"{os.path.basename(filepath)},{label}\n")
 
@@ -130,14 +131,14 @@ def generate_tar_dataset(
     num_images: int,
     image_size: tuple = (256, 256),
     num_classes: int = 1000,
-    format: str = 'jpeg'
+    format: str = "jpeg",
 ) -> str:
     """Generate dataset as a TAR archive"""
     import io
 
     print(f"Generating TAR archive with {num_images} images...")
 
-    with tarfile.open(output_path, 'w') as tar:
+    with tarfile.open(output_path, "w") as tar:
         labels = []
 
         for idx in range(num_images):
@@ -147,11 +148,11 @@ def generate_tar_dataset(
             # Create in-memory file
             if HAS_PIL:
                 buf = io.BytesIO()
-                if format == 'jpeg':
-                    Image.fromarray(img).save(buf, 'JPEG', quality=85)
+                if format == "jpeg":
+                    Image.fromarray(img).save(buf, "JPEG", quality=85)
                     filename = f"img_{idx:08d}.jpg"
                 else:
-                    Image.fromarray(img).save(buf, 'PNG')
+                    Image.fromarray(img).save(buf, "PNG")
                     filename = f"img_{idx:08d}.png"
                 buf.seek(0)
                 data = buf.getvalue()
@@ -170,9 +171,9 @@ def generate_tar_dataset(
                 print(f"  Added {idx + 1}/{num_images} images to TAR")
 
         # Add labels file
-        labels_content = '\n'.join(f"{f},{l}" for f, l in labels)
-        labels_data = labels_content.encode('utf-8')
-        info = tarfile.TarInfo(name='labels.txt')
+        labels_content = "\n".join(f"{f},{l}" for f, l in labels)
+        labels_data = labels_content.encode("utf-8")
+        info = tarfile.TarInfo(name="labels.txt")
         info.size = len(labels_data)
         tar.addfile(info, io.BytesIO(labels_data))
 
@@ -185,7 +186,7 @@ def generate_varying_size_dataset(
     num_images: int,
     min_size: int = 128,
     max_size: int = 512,
-    num_classes: int = 1000
+    num_classes: int = 1000,
 ) -> str:
     """Generate dataset with varying image sizes (for smart batching benchmarks)"""
     import io
@@ -193,7 +194,7 @@ def generate_varying_size_dataset(
     print(f"Generating varying-size TAR archive with {num_images} images...")
 
     sizes = []
-    with tarfile.open(output_path, 'w') as tar:
+    with tarfile.open(output_path, "w") as tar:
         labels = []
 
         for idx in range(num_images):
@@ -207,7 +208,7 @@ def generate_varying_size_dataset(
 
             if HAS_PIL:
                 buf = io.BytesIO()
-                Image.fromarray(img).save(buf, 'JPEG', quality=85)
+                Image.fromarray(img).save(buf, "JPEG", quality=85)
                 filename = f"img_{idx:08d}.jpg"
                 buf.seek(0)
                 data = buf.getvalue()
@@ -226,12 +227,12 @@ def generate_varying_size_dataset(
 
         # Add metadata
         meta = {
-            'num_images': num_images,
-            'sizes': sizes,
-            'labels': [(f, l) for f, l, w, h in labels]
+            "num_images": num_images,
+            "sizes": sizes,
+            "labels": [(f, l) for f, l, w, h in labels],
         }
-        meta_data = json.dumps(meta).encode('utf-8')
-        info = tarfile.TarInfo(name='metadata.json')
+        meta_data = json.dumps(meta).encode("utf-8")
+        info = tarfile.TarInfo(name="metadata.json")
         info.size = len(meta_data)
         tar.addfile(info, io.BytesIO(meta_data))
 
@@ -240,52 +241,51 @@ def generate_varying_size_dataset(
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate synthetic datasets for benchmarking')
-    parser.add_argument('--output', '-o', type=str, required=True,
-                        help='Output path (directory for files, .tar for archive)')
-    parser.add_argument('--num-images', '-n', type=int, default=10000,
-                        help='Number of images to generate')
-    parser.add_argument('--width', type=int, default=256,
-                        help='Image width')
-    parser.add_argument('--height', type=int, default=256,
-                        help='Image height')
-    parser.add_argument('--num-classes', type=int, default=1000,
-                        help='Number of classes for labels')
-    parser.add_argument('--format', choices=['jpeg', 'png'], default='jpeg',
-                        help='Image format')
-    parser.add_argument('--type', choices=['files', 'tar', 'varying'], default='tar',
-                        help='Dataset type (files, tar archive, or varying sizes)')
-    parser.add_argument('--workers', type=int, default=4,
-                        help='Number of worker threads')
+    parser = argparse.ArgumentParser(description="Generate synthetic datasets for benchmarking")
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        required=True,
+        help="Output path (directory for files, .tar for archive)",
+    )
+    parser.add_argument(
+        "--num-images", "-n", type=int, default=10000, help="Number of images to generate"
+    )
+    parser.add_argument("--width", type=int, default=256, help="Image width")
+    parser.add_argument("--height", type=int, default=256, help="Image height")
+    parser.add_argument(
+        "--num-classes", type=int, default=1000, help="Number of classes for labels"
+    )
+    parser.add_argument("--format", choices=["jpeg", "png"], default="jpeg", help="Image format")
+    parser.add_argument(
+        "--type",
+        choices=["files", "tar", "varying"],
+        default="tar",
+        help="Dataset type (files, tar archive, or varying sizes)",
+    )
+    parser.add_argument("--workers", type=int, default=4, help="Number of worker threads")
 
     args = parser.parse_args()
 
-    if args.type == 'files':
+    if args.type == "files":
         generate_dataset_files(
             args.output,
             args.num_images,
             (args.width, args.height),
             args.num_classes,
             args.format,
-            args.workers
+            args.workers,
         )
-    elif args.type == 'tar':
+    elif args.type == "tar":
         generate_tar_dataset(
-            args.output,
-            args.num_images,
-            (args.width, args.height),
-            args.num_classes,
-            args.format
+            args.output, args.num_images, (args.width, args.height), args.num_classes, args.format
         )
-    elif args.type == 'varying':
+    elif args.type == "varying":
         generate_varying_size_dataset(
-            args.output,
-            args.num_images,
-            min_size=128,
-            max_size=512,
-            num_classes=args.num_classes
+            args.output, args.num_images, min_size=128, max_size=512, num_classes=args.num_classes
         )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
