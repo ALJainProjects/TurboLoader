@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboloader"
-version = "2.3.5"
+version = "2.3.6"
 description = "Production-ready ML data loading library with distributed training support, SIMD-accelerated transforms, pipe operator composition, HDF5/TFRecord/Zarr support, and GPU transforms. Built with C++20 for maximum performance."
 readme = "README.md"
 requires-python = ">=3.8"
-license = "MIT"
+license = {text = "MIT"}
 authors = [
     {name = "Arnav Jain", email = "arnav@example.com"}
 ]
@@ -67,11 +67,12 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/arnavjain/turboloader"
-Documentation = "https://github.com/arnavjain/turboloader/blob/main/README.md"
-Repository = "https://github.com/arnavjain/turboloader"
-"Bug Tracker" = "https://github.com/arnavjain/turboloader/issues"
-Changelog = "https://github.com/arnavjain/turboloader/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ALJainProjects/TurboLoader"
+Documentation = "https://github.com/ALJainProjects/TurboLoader/blob/main/README.md"
+Repository = "https://github.com/ALJainProjects/TurboLoader"
+"Bug Tracker" = "https://github.com/ALJainProjects/TurboLoader/issues"
+Changelog = "https://github.com/ALJainProjects/TurboLoader/blob/main/CHANGELOG.md"
+Discussions = "https://github.com/ALJainProjects/TurboLoader/discussions"
 
 [tool.setuptools]
 packages = ["turboloader"]

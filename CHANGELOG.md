@@ -5,6 +5,25 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.6] - 2025-12-01
+
+### Fix Python 3.8 Compatibility
+
+This release fixes pyproject.toml license format for Python 3.8 compatibility.
+
+### Fixed
+- **pyproject.toml**: Use `license = {text = "MIT"}` format for Python 3.8 compatibility
+  - The newer `license = "MIT"` format requires setuptools 61+ (Python 3.10+)
+  - Reverted to table format `{text = "MIT"}` for broader compatibility
+  - Fixes "invalid pyproject.toml config: `project.license`" error in cibuildwheel
+
+### Changed
+- **pyproject.toml**: Fixed GitHub URLs to use correct repository path
+  - Updated all URLs from `arnavjain/turboloader` to `ALJainProjects/TurboLoader`
+  - Added Discussions link for PyPI page
+
+---
+
 ## [2.3.5] - 2025-12-01
 
 ### Fix cibuildwheel Builds
