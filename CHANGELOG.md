@@ -5,6 +5,28 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.8] - 2025-11-30
+
+### Fix CI/CD Workflow and License Format
+
+This release removes the duplicate publish workflow, updates the license format, and improves manylinux library installation.
+
+### Fixed
+- **CI/CD**: Removed duplicate `publish.yml` workflow that was conflicting with `build-wheels.yml`
+  - The `build-wheels.yml` workflow handles all building, testing, and publishing
+  - Fixes "Could not find libcurl installation" error during publish
+
+- **Manylinux Builds**: Improved library installation in cibuildwheel
+  - Added proper cmake3 symlink for CentOS-based containers
+  - Added library verification step for debugging
+  - Added PKG_CONFIG_PATH environment variable
+
+- **License Format**: Updated to SPDX string format (`license = "MIT"`)
+  - Requires setuptools >= 77 (automatically installed during build)
+  - Fixes deprecation warning about table format
+
+---
+
 ## [2.3.7] - 2025-11-30
 
 ### C++17 Compatibility for Cross-Platform Builds

@@ -1,6 +1,6 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.3.7 - C++17 Compatibility for Cross-Platform Builds
+v2.3.8 - Fix CI/CD Workflow and License Format
 
 New in v2.0.0:
 - Tiered Caching: L1 memory (LRU) + L2 disk cache for 5-10x faster subsequent epochs
@@ -46,7 +46,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.3.7"
+__version__ = "2.3.8"
 
 # Import C++ extension module
 try:
