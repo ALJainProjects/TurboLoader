@@ -53,11 +53,6 @@ jobs:
             cmake \
             ninja-build
 
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install jpeg-turbo libpng webp curl lz4 cmake ninja
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21
         env:
@@ -94,39 +89,11 @@ jobs:
             echo "Checking libraries..."
             ls -la /usr/lib64/libwebp* || true
 
-          # macOS-specific configuration
-          CIBW_BEFORE_ALL_MACOS: |
-            brew install jpeg-turbo libpng webp curl lz4
-
-          # macOS: Clear Python's embedded compiler flags that interfere with libc++ headers
-          # The python.org Python framework embeds CFLAGS/CPPFLAGS that break C++ standard library resolution
-          CIBW_BEFORE_BUILD_MACOS: |
-            pip install setuptools wheel pybind11
-            # Patch Python's sysconfig to not inject problematic flags for C++ compilation
-            python -c "
-            import sysconfig
-            import os
-
-            # Print current config for debugging
-            print('Original CFLAGS:', sysconfig.get_config_var('CFLAGS'))
-            print('Original CPPFLAGS:', sysconfig.get_config_var('CPPFLAGS'))
-            "
-
           # Environment variables for finding libraries
           CIBW_ENVIRONMENT_LINUX: >
             CFLAGS="-I/usr/include -I/usr/include/lz4"
             LDFLAGS="-L/usr/lib64 -L/usr/lib"
             PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/pkgconfig"
-
-          # macOS: Override compiler flags completely
-          # Empty CFLAGS/CXXFLAGS/CPPFLAGS prevent Python's embedded flags from being used
-          # This is critical: python.org Python embeds flags that break libc++ header resolution
-          CIBW_ENVIRONMENT_MACOS: >
-            MACOSX_DEPLOYMENT_TARGET="10.15"
-            CFLAGS=""
-            CXXFLAGS=""
-            CPPFLAGS=""
-            LDFLAGS=""
 
           # Build configuration
           CIBW_BUILD_VERBOSITY: 1
@@ -140,6 +107,57 @@ jobs:
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
             auditwheel repair -w {dest_dir} {wheel}
 
+          # macOS-specific configuration
+          # Install dependencies via Homebrew
+          CIBW_BEFORE_ALL_MACOS: |
+            brew install jpeg-turbo libpng webp curl lz4 pkg-config
+
+          # Patch sysconfig at runtime to remove problematic python.org Python CFLAGS
+          # that interfere with libc++ header resolution
+          # This creates a sitecustomize.py that patches sysconfig before any build
+          CIBW_BEFORE_BUILD_MACOS: |
+            # Create sitecustomize.py to patch sysconfig at import time
+            SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+            cat > "$SITE_PACKAGES/sitecustomize.py" << 'PATCH_EOF'
+            import sysconfig
+            import re
+
+            # Store original get_config_var
+            _original_get_config_var = sysconfig.get_config_var
+
+            def _patched_get_config_var(name):
+                value = _original_get_config_var(name)
+                if value and name in ('CFLAGS', 'CPPFLAGS', 'PY_CFLAGS', 'PY_CPPFLAGS',
+                                       'CONFIGURE_CFLAGS', 'CONFIGURE_CPPFLAGS'):
+                    # Remove -isysroot flags (and the path that follows)
+                    value = re.sub(r'-isysroot\s+\S+', '', value)
+                    # Remove -I flags pointing to Python.framework internals
+                    value = re.sub(r'-I\S*Python\.framework\S*', '', value)
+                    # Remove -iwithsysroot flags
+                    value = re.sub(r'-iwithsysroot\S*', '', value)
+                    # Clean up extra whitespace
+                    value = ' '.join(value.split())
+                return value
+
+            # Monkey-patch sysconfig
+            sysconfig.get_config_var = _patched_get_config_var
+            print("Patched sysconfig to remove problematic compiler flags")
+            PATCH_EOF
+
+            echo "Created sitecustomize.py at $SITE_PACKAGES"
+
+            # Verify patch works
+            python -c "import sysconfig; print('CFLAGS:', sysconfig.get_config_var('CFLAGS')[:80] if sysconfig.get_config_var('CFLAGS') else 'None')"
+
+          # Environment for macOS builds
+          CIBW_ENVIRONMENT_MACOS: >
+            CFLAGS="-I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix webp)/include -I$(brew --prefix curl)/include -I$(brew --prefix lz4)/include"
+            CPPFLAGS="-I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix webp)/include -I$(brew --prefix curl)/include -I$(brew --prefix lz4)/include"
+            LDFLAGS="-L$(brew --prefix jpeg-turbo)/lib -L$(brew --prefix libpng)/lib -L$(brew --prefix webp)/lib -L$(brew --prefix curl)/lib -L$(brew --prefix lz4)/lib"
+            PKG_CONFIG_PATH="$(brew --prefix jpeg-turbo)/lib/pkgconfig:$(brew --prefix libpng)/lib/pkgconfig:$(brew --prefix webp)/lib/pkgconfig:$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix lz4)/lib/pkgconfig"
+            MACOSX_DEPLOYMENT_TARGET="10.15"
+
+          # Repair macOS wheels
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: >
             delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
 

@@ -299,14 +299,15 @@ class BuildExt(build_ext):
         # python.org Python embeds CFLAGS/CPPFLAGS that can interfere with libc++ headers
         if system == "darwin" and ct == "unix":
             # Filter out problematic include paths from preprocessor args
-            if hasattr(self.compiler, 'preprocessor'):
+            if hasattr(self.compiler, "preprocessor"):
                 self.compiler.preprocessor = [
-                    arg for arg in self.compiler.preprocessor
-                    if not (arg.startswith('-I') and 'Python.framework' in arg)
+                    arg
+                    for arg in self.compiler.preprocessor
+                    if not (arg.startswith("-I") and "Python.framework" in arg)
                 ]
 
             # Filter compiler_so (used for C++ compilation)
-            if hasattr(self.compiler, 'compiler_so'):
+            if hasattr(self.compiler, "compiler_so"):
                 filtered = []
                 skip_next = False
                 for arg in self.compiler.compiler_so:
@@ -314,31 +315,31 @@ class BuildExt(build_ext):
                         skip_next = False
                         continue
                     # Skip -isysroot with problematic paths and -I flags pointing to Python framework
-                    if arg == '-isysroot':
+                    if arg == "-isysroot":
                         skip_next = True
                         continue
-                    if arg.startswith('-I') and 'Python.framework' in arg:
+                    if arg.startswith("-I") and "Python.framework" in arg:
                         continue
                     # Keep other flags but filter problematic -iwithsysroot
-                    if arg.startswith('-iwithsysroot'):
+                    if arg.startswith("-iwithsysroot"):
                         continue
                     filtered.append(arg)
                 self.compiler.compiler_so = filtered
 
             # Same for compiler_cxx
-            if hasattr(self.compiler, 'compiler_cxx'):
+            if hasattr(self.compiler, "compiler_cxx"):
                 filtered = []
                 skip_next = False
                 for arg in self.compiler.compiler_cxx:
                     if skip_next:
                         skip_next = False
                         continue
-                    if arg == '-isysroot':
+                    if arg == "-isysroot":
                         skip_next = True
                         continue
-                    if arg.startswith('-I') and 'Python.framework' in arg:
+                    if arg.startswith("-I") and "Python.framework" in arg:
                         continue
-                    if arg.startswith('-iwithsysroot'):
+                    if arg.startswith("-iwithsysroot"):
                         continue
                     filtered.append(arg)
                 self.compiler.compiler_cxx = filtered
@@ -420,7 +421,7 @@ else:
 
 setup(
     name="turboloader",
-    version="2.3.17",
+    version="2.3.18",
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",

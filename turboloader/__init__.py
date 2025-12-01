@@ -1,6 +1,6 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.3.17 - Fix all compiler warnings (zero warnings build)
+v2.3.18 - Fix macOS cibuildwheel builds with sysconfig patching
 
 New in v2.0.0:
 - Tiered Caching: L1 memory (LRU) + L2 disk cache for 5-10x faster subsequent epochs
@@ -46,7 +46,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.3.17"
+__version__ = "2.3.18"
 
 # Import C++ extension module
 try:
