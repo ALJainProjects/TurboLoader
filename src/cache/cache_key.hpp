@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <functional>
 

@@ -31,7 +31,7 @@ TurboLoader achieves **21,035 img/s peak throughput** (12x faster than PyTorch) 
 
 ### Performance
 
-**Latest Results (v1.2.0):**
+**Latest Results (v2.0.0):**
 
 | Workers | Throughput | Linear Scaling | Efficiency |
 |---------|------------|----------------|------------|
@@ -214,22 +214,14 @@ See [Architecture Guide](architecture.md) for detailed design.
 
 ## Version History
 
-- **v1.7.7** (Current) - Developer experience improvements: Issue templates, Quick Start notebook, PyTorch Lightning example, Troubleshooting guide, Installation verification
-- **v1.7.6** - PyPI badge updates and documentation
-- **v1.7.5** - README updates and version management
-- **v1.7.4** - TensorFlow benchmark fixes
+- **v2.0.0** (Current) - Tiered Caching (L1 memory + L2 disk), Smart Batching enabled by default, Pipeline tuning optimizations
+- **v1.9.0** - Transform Pipe Operator, HDF5/TFRecord/Zarr support (headers), COCO/VOC annotations, Azure Blob Storage, GPU transforms, io_uring
+- **v1.8.0** - Modern Augmentations (MixUp, CutMix, Mosaic, RandAugment, GridMask), Logging system
+- **v1.7.7** - Developer experience improvements: Issue templates, Quick Start notebook, PyTorch Lightning example
 - **v1.5.0** - TBL v2 Format with LZ4 compression (40-60% space savings)
-- **v1.4.0** - Format converter benchmarks and documentation
-- **v1.3.0** - Performance optimizations and stability improvements
-- **v1.2.1** - GPU JPEG decoding (nvJPEG) + Linux io_uring async I/O
 - **v1.2.0** - Smart Batching + Distributed Training (21,035 img/s peak)
 - **v1.1.0** - AVX-512 SIMD + Binary Format Improvements + Prefetching
 - **v1.0.0** - Production/Stable Release (10,146 img/s)
-- **v0.8.0** - Documentation + Interactive Web App
-- **v0.7.0** - Advanced transforms + AutoAugment
-- **v0.6.0** - Transform system with 14 operations
-- **v0.5.0** - TAR format support
-- **v0.4.0** - Initial public release
 
 See [CHANGELOG](../CHANGELOG.md) for complete history.
 
@@ -252,7 +244,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {1.7.7},
+  version = {2.0.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```

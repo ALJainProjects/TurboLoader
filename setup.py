@@ -161,11 +161,8 @@ ext_modules = [
             '-std=c++20',
             '-O3',
             '-fvisibility=hidden',
-            '-mmacosx-version-min=10.15',  # Required for std::filesystem
         ],
-        extra_link_args=[
-            '-mmacosx-version-min=10.15',  # Required for std::filesystem
-        ],
+        extra_link_args=[],
     ),
 ]
 
@@ -178,30 +175,35 @@ class BuildExt(build_ext):
 
         ct = self.compiler.compiler_type
         arch = platform.machine().lower()
+        system = platform.system().lower()
 
         for ext in self.extensions:
             opts = list(ext.extra_compile_args)
+            link_opts = list(ext.extra_link_args)
 
             if ct == 'unix':
-                # Only add -march=native for single-arch builds on native platform
-                # Skip if cross-compiling (e.g., universal2 builds on macOS)
-                if 'arm64' in arch or 'aarch64' in arch:
-                    # ARM: use mcpu for Apple Silicon
-                    opts.append('-mcpu=apple-m1')
-                elif 'x86' in arch or 'amd64' in arch:
-                    # x86: use march=native
-                    opts.append('-march=native')
+                # macOS-specific flags
+                if system == 'darwin':
+                    opts.append('-mmacosx-version-min=10.15')
+                    link_opts.append('-mmacosx-version-min=10.15')
+                    if 'arm64' in arch:
+                        opts.append('-mcpu=apple-m1')
+                else:
+                    # Linux - use march=native for x86
+                    if 'x86' in arch or 'amd64' in arch:
+                        opts.append('-march=native')
             elif ct == 'msvc':
                 opts.append('/std:c++20')
 
             ext.extra_compile_args = opts
+            ext.extra_link_args = link_opts
 
         build_ext.build_extensions(self)
 
 
 setup(
     name='turboloader',
-    version='2.0.0',
+    version='2.1.0',
     author='TurboLoader Contributors',
     description='High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support',
     long_description=open('README.md').read() if os.path.exists('README.md') else '',

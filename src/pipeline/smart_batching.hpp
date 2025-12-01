@@ -68,7 +68,7 @@ public:
 
     /**
      * @brief Try to add sample to this bucket
-     * @return true if sample fits in bucket's size range
+     * @return true if sample was added (bucket size matches and has capacity)
      */
     bool try_add(const SampleType& sample, size_t sample_width, size_t sample_height,
                  size_t width_step, size_t height_step) {
@@ -82,12 +82,17 @@ public:
 
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (samples_.size() >= capacity_) {
-            return false;
-        }
-
+        // Always add - the bucket manager will flush when ready
         samples_.push_back(sample);
         return true;
+    }
+
+    /**
+     * @brief Check if bucket is full (at or above capacity)
+     */
+    bool is_full() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return samples_.size() >= capacity_;
     }
 
     /**
@@ -190,6 +195,10 @@ public:
     /**
      * @brief Get ready batches from all buckets
      * @return Vector of sample batches, each with similar sizes
+     *
+     * Flushes buckets that are either:
+     * - At or above min_bucket_size (ready)
+     * - Full (at capacity)
      */
     std::vector<std::vector<SampleType>> get_ready_batches() {
         std::vector<std::vector<SampleType>> batches;
@@ -197,7 +206,8 @@ public:
         std::lock_guard<std::mutex> lock(buckets_mutex_);
 
         for (auto& [key, bucket] : buckets_) {
-            if (bucket->is_ready(config_.min_bucket_size)) {
+            // Flush if ready OR full
+            if (bucket->is_ready(config_.min_bucket_size) || bucket->is_full()) {
                 auto samples = bucket->flush();
                 if (!samples.empty()) {
                     batches.push_back(std::move(samples));
@@ -224,6 +234,19 @@ public:
         }
 
         return batches;
+    }
+
+    /**
+     * @brief Check if batcher is empty (no samples in any bucket)
+     */
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(buckets_mutex_);
+        for (const auto& [key, bucket] : buckets_) {
+            if (bucket->size() > 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

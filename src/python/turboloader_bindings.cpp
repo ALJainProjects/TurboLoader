@@ -1,6 +1,6 @@
 /**
  * @file turboloader_bindings.cpp
- * @brief Python bindings for TurboLoader v2.0.0
+ * @brief Python bindings for TurboLoader v2.1.0
  *
  * Provides PyTorch-compatible DataLoader interface using pybind11.
  * Includes all SIMD-accelerated transforms with comprehensive docstrings.
@@ -9,6 +9,8 @@
  * v1.8.1: Full Python bindings for MixUp/CutMix/Mosaic source image methods
  * v2.0.0: Pipe operator for transforms, HDF5/TFRecord/Zarr support, COCO/VOC,
  *         Azure Blob Storage, GPU transforms, multi-platform wheels
+ * v2.1.0: Fixed double-partitioning bug, fixed smart batcher race condition,
+ *         exposed enable_smart_batching in Python bindings
  */
 
 #include <pybind11/pybind11.h>
@@ -85,6 +87,8 @@ public:
      * @param cache_l1_mb L1 memory cache size in MB (default: 512)
      * @param cache_l2_gb L2 disk cache size in GB (default: 0 = disabled)
      * @param cache_dir L2 disk cache directory (default: /tmp/turboloader_cache)
+     * @param enable_smart_batching Enable smart batching for reduced padding (default: true)
+     * @param prefetch_batches Number of batches to prefetch (default: 4)
      */
     DataLoader(
         const std::string& data_path,
@@ -99,7 +103,9 @@ public:
         bool enable_cache = false,
         size_t cache_l1_mb = 512,
         size_t cache_l2_gb = 0,
-        const std::string& cache_dir = "/tmp/turboloader_cache"
+        const std::string& cache_dir = "/tmp/turboloader_cache",
+        bool enable_smart_batching = false,
+        size_t prefetch_batches = 4
     ) {
         config_.data_path = data_path;
         config_.batch_size = batch_size;
@@ -119,6 +125,10 @@ public:
         config_.cache_l1_mb = cache_l1_mb;
         config_.cache_l2_gb = cache_l2_gb;
         config_.cache_dir = cache_dir;
+
+        // Smart Batching (NEW in v2.1.0 - exposed in Python)
+        config_.enable_smart_batching = enable_smart_batching;
+        config_.prefetch_batches = prefetch_batches;
 
         // Create pipeline (will auto-detect format)
         pipeline_ = std::make_unique<UnifiedPipeline>(config_);
@@ -196,9 +206,8 @@ public:
      * @brief Iterator: __next__
      */
     py::list next() {
-        if (is_finished()) {
-            throw py::stop_iteration();
-        }
+        // Don't check is_finished() at the start - let next_batch() handle it
+        // This avoids race conditions where workers finish between checks
 
         // Keep trying to get a batch, with small sleep between attempts
         // This handles the case where workers need time to process
@@ -281,7 +290,7 @@ std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
  * with the turboloader package. The Python __init__.py re-exports the API.
  */
 PYBIND11_MODULE(_turboloader, m) {
-    m.doc() = "TurboLoader v2.0.0 - High-performance data loading for ML\n\n"
+    m.doc() = "TurboLoader v2.1.0 - High-performance data loading for ML\n\n"
               "Drop-in replacement for PyTorch DataLoader with 12x speedup.\n\n"
               "Features:\n"
               "- ARM NEON optimizations (3-5x speedup on Apple Silicon)\n"
@@ -322,7 +331,7 @@ PYBIND11_MODULE(_turboloader, m) {
 
     // DataLoader class (PyTorch-compatible)
     py::class_<DataLoader>(m, "DataLoader")
-        .def(py::init<const std::string&, size_t, size_t, bool, bool, int, int, bool, int, bool, size_t, size_t, const std::string&>(),
+        .def(py::init<const std::string&, size_t, size_t, bool, bool, int, int, bool, int, bool, size_t, size_t, const std::string&, bool, size_t>(),
              py::arg("data_path"),
              py::arg("batch_size") = 32,
              py::arg("num_workers") = 4,
@@ -336,6 +345,8 @@ PYBIND11_MODULE(_turboloader, m) {
              py::arg("cache_l1_mb") = 512,
              py::arg("cache_l2_gb") = 0,
              py::arg("cache_dir") = "/tmp/turboloader_cache",
+             py::arg("enable_smart_batching") = true,
+             py::arg("prefetch_batches") = 4,
              "Create TurboLoader DataLoader (PyTorch-compatible)\n\n"
              "Args:\n"
              "    data_path (str): Path to data (TAR, video, CSV, Parquet)\n"
@@ -351,7 +362,9 @@ PYBIND11_MODULE(_turboloader, m) {
              "    enable_cache (bool): Enable tiered caching (NEW in v2.0.0, default: False)\n"
              "    cache_l1_mb (int): L1 memory cache size in MB (default: 512)\n"
              "    cache_l2_gb (int): L2 disk cache size in GB, 0=disabled (default: 0)\n"
-             "    cache_dir (str): L2 disk cache directory (default: /tmp/turboloader_cache)\n\n"
+             "    cache_dir (str): L2 disk cache directory (default: /tmp/turboloader_cache)\n"
+             "    enable_smart_batching (bool): Enable smart batching for reduced padding (NEW in v2.1.0, default: True)\n"
+             "    prefetch_batches (int): Number of batches to prefetch (default: 4)\n\n"
              "Returns:\n"
              "    DataLoader: Iterable that yields batches\n\n"
              "Example:\n"
@@ -368,6 +381,11 @@ PYBIND11_MODULE(_turboloader, m) {
              "    >>>     enable_cache=True,\n"
              "    >>>     cache_l1_mb=1024,  # 1GB L1 memory cache\n"
              "    >>>     cache_l2_gb=10     # 10GB L2 disk cache\n"
+             "    >>> )\n\n"
+             "    >>> # Disable smart batching for benchmarking\n"
+             "    >>> loader = turboloader.DataLoader(\n"
+             "    >>>     'imagenet.tar',\n"
+             "    >>>     enable_smart_batching=False\n"
              "    >>> )"
         )
         .def("next_batch", &DataLoader::next_batch,
@@ -397,14 +415,14 @@ PYBIND11_MODULE(_turboloader, m) {
              "Get next batch (iterator protocol)");
 
     // Module-level functions
-    m.def("version", []() { return "2.0.0"; },
+    m.def("version", []() { return "2.1.0"; },
           "Get TurboLoader version\n\n"
           "Returns:\n"
-          "    str: Version string (e.g., '2.0.0')");
+          "    str: Version string (e.g., '2.1.0')");
 
     m.def("features", []() {
         py::dict features;
-        features["version"] = "2.0.0";
+        features["version"] = "2.1.0";
         features["distributed_training"] = true;
         features["tar_support"] = true;
         features["remote_tar"] = true;

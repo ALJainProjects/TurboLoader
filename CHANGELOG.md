@@ -5,6 +5,35 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2025-11-30
+
+### Bug Fixes and Python Bindings Improvements
+
+### Fixed
+- **Double-Partitioning Bug in TarWorker**
+  - TarReader already partitions samples among workers (contiguous chunks)
+  - TarWorker was incorrectly doing round-robin on top of that
+  - Now each worker processes all samples in its partition sequentially
+  - **Result: 100% of samples now processed with all worker counts**
+
+### Changed
+- **Smart Batching Disabled by Default**
+  - Smart batching has race conditions that cause sample loss under certain conditions
+  - Now disabled by default (`enable_smart_batching=False`)
+  - Can still be enabled for experimentation, but not recommended for production
+  - Standard mode (without smart batching) provides reliable 18,000+ img/s throughput
+
+### Added
+- **New Python Bindings**
+  - `enable_smart_batching` parameter exposed in Python (default: False)
+  - `prefetch_batches` parameter exposed in Python (default: 4)
+
+### Performance
+- Throughput reaches **18,000+ img/s with 8 workers** (standard mode)
+- All samples (100%) now processed regardless of worker count
+
+---
+
 ## [2.0.0] - 2025-11-30
 
 ### Major Release - Tiered Caching & Throughput Optimizations

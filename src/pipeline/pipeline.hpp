@@ -172,7 +172,7 @@ struct UnifiedPipelineConfig {
     bool parquet_use_mmap = true;               // Memory-mapped I/O
 
     // ===== Smart Batching (enabled by default in v2.0.0) =====
-    bool enable_smart_batching = true;          // Enable size-based sample grouping
+    bool enable_smart_batching = false;         // Size-based sample grouping (experimental, disabled by default)
     size_t bucket_width_step = 32;              // Group images with width ± this value
     size_t bucket_height_step = 32;             // Group images with height ± this value
     size_t min_bucket_size = 16;                // Minimum samples before creating batch
@@ -403,22 +403,11 @@ public:
 
 private:
     void run() {
-        size_t total_samples = tar_reader_->num_samples();
+        // TarReader already partitions samples among workers (contiguous chunks)
+        // Each worker processes all samples in its partition sequentially
+        size_t num_samples = tar_reader_->num_samples();
 
-        // Determine sample range for this worker
-        // If distributed training is enabled, use the distributed shard range
-        size_t start_idx = 0;
-        size_t end_idx = total_samples;
-
-        if (config_.enable_distributed && distributed_end_idx_ > 0) {
-            // Distributed training mode: only process samples in this rank's shard
-            start_idx = distributed_start_idx_;
-            end_idx = distributed_end_idx_;
-        }
-
-        // Each worker processes every Nth sample (round-robin across workers)
-        // Start from worker_id and stride by num_workers
-        for (size_t i = start_idx + worker_id_; i < end_idx && running_; i += config_.num_workers) {
+        for (size_t i = 0; i < num_samples && running_; ++i) {
             // Zero-copy JPEG data from TAR
             auto jpeg_data = tar_reader_->get_sample(i);
             const auto& entry = tar_reader_->get_entry(i);
@@ -703,39 +692,82 @@ public:
             // TAR mode with optional Smart Batching
             if (config_.enable_smart_batching && smart_batcher_) {
                 // Smart Batching mode: Collect samples into batcher, return sized batches
-                // First, try to fill the batcher with samples from worker queues
-                size_t samples_collected = 0;
-                size_t max_collect = config_.batch_size * 4;  // Collect more samples for better grouping
 
-                while (samples_collected < max_collect) {
-                    bool got_sample = false;
-                    for (auto& worker : tar_workers_) {
-                        UnifiedSample sample;
-                        if (worker->get_queue()->try_pop(sample)) {
-                            // Add to smart batcher (groups by size)
-                            smart_batcher_->add_sample(sample, sample.width, sample.height);
-                            got_sample = true;
-                            samples_collected++;
-                        }
-                    }
-                    if (!got_sample) break;
-                }
-
-                // Get ready batches from smart batcher
-                auto ready_batches = smart_batcher_->get_ready_batches();
-                if (!ready_batches.empty()) {
-                    // Return first ready batch
-                    for (auto& sample : ready_batches[0]) {
-                        batch.add(std::move(sample));
-                    }
-                } else if (is_finished()) {
-                    // Pipeline finished: flush all remaining samples
-                    auto final_batches = smart_batcher_->flush_all();
-                    if (!final_batches.empty()) {
-                        for (auto& sample : final_batches[0]) {
+                // First check if we have pending batches from previous iteration
+                {
+                    std::lock_guard<std::mutex> lock(pending_batches_mutex_);
+                    if (!pending_smart_batches_.empty()) {
+                        auto& pending = pending_smart_batches_.front();
+                        for (auto& sample : pending) {
                             batch.add(std::move(sample));
                         }
+                        pending_smart_batches_.pop_front();
+                        return batch;
                     }
+                }
+
+                // Keep trying until we get a batch or everything is truly finished
+                const int max_attempts = 1000;  // Prevent infinite loop
+                for (int attempt = 0; attempt < max_attempts; ++attempt) {
+                    // Collect samples from worker queues into smart batcher
+                    size_t samples_collected = 0;
+                    size_t max_collect = config_.batch_size * 4;
+                    while (samples_collected < max_collect) {
+                        bool got_sample = false;
+                        for (auto& worker : tar_workers_) {
+                            UnifiedSample sample;
+                            if (worker->get_queue()->try_pop(sample)) {
+                                smart_batcher_->add_sample(sample, sample.width, sample.height);
+                                got_sample = true;
+                                samples_collected++;
+                            }
+                        }
+                        if (!got_sample) break;
+                    }
+
+                    // Check if all workers are done AND all queues are empty
+                    bool all_queues_empty = true;
+                    bool all_workers_done = true;
+                    for (const auto& worker : tar_workers_) {
+                        if (!worker->is_finished()) {
+                            all_workers_done = false;
+                        }
+                        if (!worker->get_queue()->empty()) {
+                            all_queues_empty = false;
+                        }
+                    }
+
+                    // Get ready or final batches from smart batcher
+                    std::vector<std::vector<UnifiedSample>> ready_batches;
+                    if (all_workers_done && all_queues_empty) {
+                        ready_batches = smart_batcher_->flush_all();
+                    } else {
+                        ready_batches = smart_batcher_->get_ready_batches();
+                    }
+
+                    // Store all batches, return the first one
+                    if (!ready_batches.empty()) {
+                        // Return first batch
+                        for (auto& sample : ready_batches[0]) {
+                            batch.add(std::move(sample));
+                        }
+                        // Queue remaining batches for future calls
+                        if (ready_batches.size() > 1) {
+                            std::lock_guard<std::mutex> lock(pending_batches_mutex_);
+                            for (size_t i = 1; i < ready_batches.size(); ++i) {
+                                pending_smart_batches_.push_back(std::move(ready_batches[i]));
+                            }
+                        }
+                        break;  // Got a batch, exit retry loop
+                    }
+
+                    // If workers are done, queues empty, and batcher empty, we're done
+                    if (all_workers_done && all_queues_empty && smart_batcher_->empty()) {
+                        break;  // Truly finished
+                    }
+
+                    // Workers still running or samples in transit - yield and retry
+                    std::this_thread::yield();
                 }
             } else {
                 // Standard mode: Round-robin across worker queues (lock-free)
@@ -787,6 +819,17 @@ public:
                     return false;
                 }
                 if (!worker->get_queue()->empty()) {
+                    return false;
+                }
+            }
+            // Also check smart batcher if enabled
+            if (config_.enable_smart_batching && smart_batcher_ && !smart_batcher_->empty()) {
+                return false;
+            }
+            // Check for pending smart batches
+            {
+                std::lock_guard<std::mutex> lock(pending_batches_mutex_);
+                if (!pending_smart_batches_.empty()) {
                     return false;
                 }
             }
@@ -988,6 +1031,8 @@ private:
 
     // Smart Batching (NEW in v1.5.1)
     std::unique_ptr<pipeline::SmartBatcher<UnifiedSample>> smart_batcher_;
+    std::deque<std::vector<UnifiedSample>> pending_smart_batches_;  // Queue of ready batches
+    mutable std::mutex pending_batches_mutex_;
 
     // Distributed Training (NEW in v1.7.1)
     size_t distributed_start_idx_;

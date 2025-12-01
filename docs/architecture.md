@@ -1,6 +1,6 @@
 # TurboLoader Architecture
 
-This document describes the internal architecture of TurboLoader v1.7.7.
+This document describes the internal architecture of TurboLoader v2.0.0.
 
 ## Overview
 
@@ -376,9 +376,21 @@ turboloader/
 
 ## Version History
 
-### v1.7.7 Current Features
+### v2.0.0 Current Features
 
-1. **TBL v2 Binary Format** ✅
+1. **Tiered Caching System** ✅
+   - **L1 Memory Cache** - LRU cache with 512MB default size
+   - **L2 Disk Cache** - Async background writer for decoded images
+   - **xxHash64 content hashing** - 10+ GB/s cache key generation
+   - **Cache-aside pattern** - L1 → L2 → decode on miss
+   - **5-10x faster subsequent epochs** - Skip decode for cached images
+
+2. **Smart Batching Default** ✅
+   - Enabled by default for ~1.2x throughput boost
+   - Increased prefetch batches (4, up from 2)
+   - Larger buffer pool (256, up from 128)
+
+3. **TBL v2 Binary Format** ✅
    - **LZ4 compression** - 40-60% space savings vs TAR
    - **Streaming writer** - O(1) constant memory usage (not O(n))
    - **CRC32/CRC16 checksums** - Data integrity validation
