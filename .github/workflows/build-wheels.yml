@@ -104,8 +104,9 @@ jobs:
             LDFLAGS="-L/usr/lib64 -L/usr/lib"
             PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/pkgconfig"
 
+          # macOS: Use LDFLAGS for library paths only, setup.py handles includes via pkg-config/brew
+          # Do NOT set CFLAGS with -I flags as it interferes with libc++ header search order
           CIBW_ENVIRONMENT_MACOS: >
-            CFLAGS="-I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix webp)/include -I$(brew --prefix lz4)/include -I$(brew --prefix curl)/include"
             LDFLAGS="-L$(brew --prefix jpeg-turbo)/lib -L$(brew --prefix libpng)/lib -L$(brew --prefix webp)/lib -L$(brew --prefix lz4)/lib -L$(brew --prefix curl)/lib"
             MACOSX_DEPLOYMENT_TARGET="10.15"
 
