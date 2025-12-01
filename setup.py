@@ -285,7 +285,7 @@ class LazyExtensionList(list):
 
 
 class BuildExt(build_ext):
-    """Custom build extension to set C++20 flag and platform-specific optimizations"""
+    """Custom build extension to set C++17 flag and platform-specific optimizations"""
 
     def build_extensions(self):
         import platform
@@ -305,6 +305,10 @@ class BuildExt(build_ext):
                     link_opts.append("-mmacosx-version-min=10.15")
                     if "arm64" in arch:
                         opts.append("-mcpu=apple-m1")
+                    # Add rpath for Homebrew libraries on macOS
+                    for lib_dir in ext.library_dirs:
+                        if lib_dir and os.path.exists(lib_dir):
+                            link_opts.append(f"-Wl,-rpath,{lib_dir}")
                 else:
                     # Linux - use march=native for x86
                     if "x86" in arch or "amd64" in arch:
@@ -367,7 +371,7 @@ else:
 
 setup(
     name="turboloader",
-    version="2.3.13",
+    version="2.3.14",
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",
