@@ -83,12 +83,16 @@ jobs:
             if [ -f /usr/bin/cmake3 ] && [ ! -f /usr/bin/cmake ]; then
               ln -s /usr/bin/cmake3 /usr/bin/cmake
             fi
-            # Verify libraries are installed
-            echo "Checking installed libraries..."
-            ls -la /usr/include/jpeglib.h || echo "jpeg not found"
-            ls -la /usr/include/png.h || echo "png not found"
-            ls -la /usr/include/curl/curl.h || echo "curl not found"
-            ls -la /usr/include/lz4.h || echo "lz4 not found"
+            # Check if webpdemux is available, create symlink if needed
+            if [ -f /usr/lib64/libwebpdemux.so ]; then
+              echo "libwebpdemux found"
+            elif [ -f /usr/lib64/libwebp.so ]; then
+              echo "Creating libwebpdemux symlink to libwebp"
+              ln -sf /usr/lib64/libwebp.so /usr/lib64/libwebpdemux.so
+            fi
+            # Verify libraries
+            echo "Checking libraries..."
+            ls -la /usr/lib64/libwebp* || true
 
           # macOS-specific configuration
           CIBW_BEFORE_ALL_MACOS: |

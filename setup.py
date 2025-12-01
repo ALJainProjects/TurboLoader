@@ -243,7 +243,6 @@ def get_extensions():
                 "jpeg",
                 "png",
                 "webp",
-                "webpdemux",
                 "curl",
                 "lz4",
             ],
@@ -368,7 +367,7 @@ else:
 
 setup(
     name="turboloader",
-    version="2.3.9",
+    version="2.3.10",
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",
