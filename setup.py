@@ -158,98 +158,99 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
     return None, None
 
 
-# Find all required libraries
-print("Detecting dependencies...")
+def get_extensions():
+    """Build extension modules - only called when actually building wheels"""
+    print("Detecting dependencies...")
 
-jpeg_include, jpeg_lib = find_library("jpeg-turbo", "jpeg-turbo", "libjpeg")
-if not jpeg_include:
-    raise RuntimeError(
-        "Could not find libjpeg-turbo installation.\n"
-        "Please install it:\n"
-        "  macOS: brew install jpeg-turbo\n"
-        "  Linux: sudo apt-get install libjpeg-turbo8-dev\n"
-    )
-print(f"  libjpeg-turbo: {jpeg_include}")
+    jpeg_include, jpeg_lib = find_library("jpeg-turbo", "jpeg-turbo", "libjpeg")
+    if not jpeg_include:
+        raise RuntimeError(
+            "Could not find libjpeg-turbo installation.\n"
+            "Please install it:\n"
+            "  macOS: brew install jpeg-turbo\n"
+            "  Linux: sudo apt-get install libjpeg-turbo8-dev\n"
+        )
+    print(f"  libjpeg-turbo: {jpeg_include}")
 
-png_include, png_lib = find_library("libpng", "libpng", "libpng")
-if not png_include:
-    raise RuntimeError(
-        "Could not find libpng installation.\n"
-        "Please install it:\n"
-        "  macOS: brew install libpng\n"
-        "  Linux: sudo apt-get install libpng-dev\n"
-    )
-print(f"  libpng: {png_include}")
+    png_include, png_lib = find_library("libpng", "libpng", "libpng")
+    if not png_include:
+        raise RuntimeError(
+            "Could not find libpng installation.\n"
+            "Please install it:\n"
+            "  macOS: brew install libpng\n"
+            "  Linux: sudo apt-get install libpng-dev\n"
+        )
+    print(f"  libpng: {png_include}")
 
-webp_include, webp_lib = find_library("webp", "webp", "libwebp")
-if not webp_include:
-    raise RuntimeError(
-        "Could not find libwebp installation.\n"
-        "Please install it:\n"
-        "  macOS: brew install webp\n"
-        "  Linux: sudo apt-get install libwebp-dev\n"
-    )
-print(f"  libwebp: {webp_include}")
+    webp_include, webp_lib = find_library("webp", "webp", "libwebp")
+    if not webp_include:
+        raise RuntimeError(
+            "Could not find libwebp installation.\n"
+            "Please install it:\n"
+            "  macOS: brew install webp\n"
+            "  Linux: sudo apt-get install libwebp-dev\n"
+        )
+    print(f"  libwebp: {webp_include}")
 
-curl_include, curl_lib = find_library("curl", "curl", "libcurl", header_subdir="curl")
-if not curl_include:
-    raise RuntimeError(
-        "Could not find libcurl installation.\n"
-        "Please install it:\n"
-        "  macOS: brew install curl\n"
-        "  Linux: sudo apt-get install libcurl4-openssl-dev\n"
-    )
-print(f"  libcurl: {curl_include}")
+    curl_include, curl_lib = find_library("curl", "curl", "libcurl", header_subdir="curl")
+    if not curl_include:
+        raise RuntimeError(
+            "Could not find libcurl installation.\n"
+            "Please install it:\n"
+            "  macOS: brew install curl\n"
+            "  Linux: sudo apt-get install libcurl4-openssl-dev\n"
+        )
+    print(f"  libcurl: {curl_include}")
 
-lz4_include, lz4_lib = find_library("lz4", "lz4", "liblz4")
-if not lz4_include:
-    raise RuntimeError(
-        "Could not find lz4 installation.\n"
-        "Please install it:\n"
-        "  macOS: brew install lz4\n"
-        "  Linux: sudo apt-get install liblz4-dev\n"
-    )
-print(f"  lz4: {lz4_include}")
+    lz4_include, lz4_lib = find_library("lz4", "lz4", "liblz4")
+    if not lz4_include:
+        raise RuntimeError(
+            "Could not find lz4 installation.\n"
+            "Please install it:\n"
+            "  macOS: brew install lz4\n"
+            "  Linux: sudo apt-get install liblz4-dev\n"
+        )
+    print(f"  lz4: {lz4_include}")
 
-ext_modules = [
-    Extension(
-        "_turboloader",
-        sources=[
-            "src/python/turboloader_bindings.cpp",
-        ],
-        include_dirs=[
-            get_pybind_include(),
-            jpeg_include,
-            png_include,
-            webp_include,
-            curl_include,
-            lz4_include,
-            "src",  # For pipeline headers
-        ],
-        library_dirs=[
-            jpeg_lib,
-            png_lib,
-            webp_lib,
-            curl_lib,
-            lz4_lib,
-        ],
-        libraries=[
-            "jpeg",
-            "png",
-            "webp",
-            "webpdemux",
-            "curl",
-            "lz4",
-        ],
-        language="c++",
-        extra_compile_args=[
-            "-std=c++20",
-            "-O3",
-            "-fvisibility=hidden",
-        ],
-        extra_link_args=[],
-    ),
-]
+    return [
+        Extension(
+            "_turboloader",
+            sources=[
+                "src/python/turboloader_bindings.cpp",
+            ],
+            include_dirs=[
+                get_pybind_include(),
+                jpeg_include,
+                png_include,
+                webp_include,
+                curl_include,
+                lz4_include,
+                "src",  # For pipeline headers
+            ],
+            library_dirs=[
+                jpeg_lib,
+                png_lib,
+                webp_lib,
+                curl_lib,
+                lz4_lib,
+            ],
+            libraries=[
+                "jpeg",
+                "png",
+                "webp",
+                "webpdemux",
+                "curl",
+                "lz4",
+            ],
+            language="c++",
+            extra_compile_args=[
+                "-std=c++20",
+                "-O3",
+                "-fvisibility=hidden",
+            ],
+            extra_link_args=[],
+        ),
+    ]
 
 
 class BuildExt(build_ext):
@@ -286,9 +287,20 @@ class BuildExt(build_ext):
         build_ext.build_extensions(self)
 
 
+# Check if we're building an sdist (source distribution) - skip library detection
+# Library detection is only needed when building wheels (binary distributions)
+building_sdist = "sdist" in sys.argv or "egg_info" in sys.argv
+
+if building_sdist:
+    # For sdist, use a minimal extension definition (won't be compiled)
+    ext_modules = []
+else:
+    # For wheel builds, detect libraries and build the extension
+    ext_modules = get_extensions()
+
 setup(
     name="turboloader",
-    version="2.3.3",
+    version="2.3.4",
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",

@@ -5,6 +5,21 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.4] - 2025-12-01
+
+### Fix CI/CD sdist Build
+
+This release fixes the source distribution build in CI/CD pipelines.
+
+### Fixed
+- **setup.py**: Defer library detection until wheel build time
+  - sdist builds no longer require native libraries installed
+  - Library detection moved to `get_extensions()` function
+  - Checks `sys.argv` for `sdist` or `egg_info` to skip detection
+  - Fixes "Could not find libcurl" error during CI sdist builds
+
+---
+
 ## [2.3.3] - 2025-12-01
 
 ### Additional Code Formatting and Cleanup
