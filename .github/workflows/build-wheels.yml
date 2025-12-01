@@ -61,9 +61,9 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21
         env:
-          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
-          # Skip musllinux, 32-bit, and Python 3.8 on macOS x86_64 (SDK header path issues)
-          CIBW_SKIP: "*-musllinux_* *-win32 *-manylinux_i686 cp38-macosx_x86_64"
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-*"
+          # Skip musllinux and 32-bit builds
+          CIBW_SKIP: "*-musllinux_* *-win32 *-manylinux_i686"
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
 
           # Linux-specific configuration (manylinux uses CentOS/yum)
@@ -105,8 +105,8 @@ jobs:
             PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/pkgconfig"
 
           CIBW_ENVIRONMENT_MACOS: >
-            CFLAGS="-I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix webp)/include -I$(brew --prefix lz4)/include"
-            LDFLAGS="-L$(brew --prefix jpeg-turbo)/lib -L$(brew --prefix libpng)/lib -L$(brew --prefix webp)/lib -L$(brew --prefix lz4)/lib"
+            CFLAGS="-I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix webp)/include -I$(brew --prefix lz4)/include -I$(brew --prefix curl)/include"
+            LDFLAGS="-L$(brew --prefix jpeg-turbo)/lib -L$(brew --prefix libpng)/lib -L$(brew --prefix webp)/lib -L$(brew --prefix lz4)/lib -L$(brew --prefix curl)/lib"
             MACOSX_DEPLOYMENT_TARGET="10.15"
 
           # Build configuration
@@ -165,16 +165,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-13, macos-14]
-        python: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        python: ['3.9', '3.10', '3.11', '3.12']
         exclude:
-          # Python 3.8 and 3.9 not available on macOS-14 (ARM)
-          - os: macos-14
-            python: '3.8'
+          # Python 3.9 not available on macOS-14 (ARM)
           - os: macos-14
             python: '3.9'
-          # Python 3.8 on macOS-13 x86_64 has SDK header path issues
-          - os: macos-13
-            python: '3.8'
 
     steps:
       - uses: actions/checkout@v4

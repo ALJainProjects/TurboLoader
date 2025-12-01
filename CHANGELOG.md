@@ -5,6 +5,24 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.11] - 2025-11-30
+
+### Fix macOS Build and Drop Python 3.8 Support
+
+This release fixes macOS wheel builds and drops Python 3.8 support.
+
+### Changed
+- **Python Version**: Minimum Python version is now 3.9 (was 3.8)
+  - Python 3.8 had SDK header path issues on macOS
+  - setuptools >=61 compatibility issues with Python 3.8
+
+### Fixed
+- **macOS Build**: Added missing curl include/library paths for cibuildwheel
+  - `CFLAGS` and `LDFLAGS` now include `$(brew --prefix curl)` paths
+  - Fixes "197 warnings and 20 errors" compilation failure
+
+---
+
 ## [2.3.10] - 2025-11-30
 
 ### Fix Manylinux Build

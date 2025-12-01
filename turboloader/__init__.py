@@ -1,6 +1,6 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.3.10 - Fix Manylinux Build
+v2.3.11 - Fix macOS Build and Drop Python 3.8
 
 New in v2.0.0:
 - Tiered Caching: L1 memory (LRU) + L2 disk cache for 5-10x faster subsequent epochs
@@ -46,7 +46,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.3.10"
+__version__ = "2.3.11"
 
 # Import C++ extension module
 try:
