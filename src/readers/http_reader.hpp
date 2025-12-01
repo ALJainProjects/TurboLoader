@@ -257,9 +257,9 @@ public:
             // Get HTTP response code
             curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response.http_code);
 
-            // Get download size
-            double download_size;
-            curl_easy_getinfo(handle, CURLINFO_SIZE_DOWNLOAD, &download_size);
+            // Get download size (use _T variant to avoid deprecation warning)
+            curl_off_t download_size = 0;
+            curl_easy_getinfo(handle, CURLINFO_SIZE_DOWNLOAD_T, &download_size);
             response.bytes_downloaded = static_cast<size_t>(download_size);
 
             // Release connection back to pool
@@ -341,8 +341,8 @@ public:
 
         CURLcode res = curl_easy_perform(handle);
 
-        double content_length;
-        curl_easy_getinfo(handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &content_length);
+        curl_off_t content_length = -1;
+        curl_easy_getinfo(handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
 
         pool_->release(handle);
 

@@ -3,18 +3,13 @@ include README.md
 include LICENSE
 include AUTHORS.md
 include CONTRIBUTING.md
-include ARCHITECTURE.md
 
 # Include ALL C++ source files and headers
 graft src
-recursive-include src *.hpp *.h *.cpp *.c
+recursive-include src *.hpp *.cpp
 
 # Include CMake files
 include CMakeLists.txt
-recursive-include cmake *.cmake
-
-# Include Python bindings
-recursive-include python *.cpp *.hpp CMakeLists.txt
 
 # Include benchmarks
 recursive-include benchmarks *.py *.md
@@ -23,7 +18,7 @@ recursive-include benchmarks *.py *.md
 recursive-include examples *.py *.md
 
 # Include tests
-recursive-include tests *.cpp *.hpp
+recursive-include tests *.cpp *.py
 
 # Exclude build artifacts
 global-exclude *.pyc

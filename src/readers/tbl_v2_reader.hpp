@@ -216,7 +216,9 @@ public:
                     mheader.metadata_size
                 );
 
-                return {metadata, mheader.type};
+                // Copy type to avoid packed struct binding issue on GCC
+                formats::MetadataType type = mheader.type;
+                return {metadata, type};
             }
 
             // Skip to next metadata block

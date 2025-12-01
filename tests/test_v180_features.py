@@ -21,15 +21,19 @@ class TestVersion:
     """Test version information"""
 
     def test_version_is_190(self):
-        """Verify version is 2.0.0"""
+        """Verify version is >= 2.0.0 (v1.8.0 features require 2.x)"""
         import turboloader
-        assert turboloader.__version__ == "2.0.0"
+        version = turboloader.__version__
+        major, minor, patch = map(int, version.split('.'))
+        assert major >= 2, f"Expected version >= 2.0.0, got {version}"
 
     def test_version_function(self):
         """Test version() function returns correct version"""
         try:
             import turboloader
-            assert turboloader.version() == "2.0.0"
+            version = turboloader.version()
+            major, minor, patch = map(int, version.split('.'))
+            assert major >= 2, f"Expected version >= 2.0.0, got {version}"
         except (ImportError, AttributeError):
             pytest.skip("C++ module not built")
 

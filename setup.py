@@ -18,14 +18,79 @@ class get_pybind_include(object):
         return pybind11.get_include()
 
 
-def find_library(name, brew_name=None, pkg_config_name=None):
-    """Find a library installation (works on macOS and Linux)"""
+def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None):
+    """Find a library installation (works on macOS and Linux)
+
+    Args:
+        name: Library name
+        brew_name: Homebrew package name
+        pkg_config_name: pkg-config name
+        header_subdir: Subdirectory where headers are located (e.g., 'curl' for curl/curl.h)
+    """
     if brew_name is None:
         brew_name = name
     if pkg_config_name is None:
         pkg_config_name = name
 
-    # Try Homebrew first (macOS)
+    def verify_include(include_path):
+        """Verify the include path actually has the required headers"""
+        if header_subdir:
+            check_path = os.path.join(include_path, header_subdir)
+        else:
+            check_path = include_path
+        return os.path.exists(check_path)
+
+    # Try pkg-config first (most reliable on Linux)
+    try:
+        cflags = subprocess.check_output(
+            ['pkg-config', '--cflags', pkg_config_name],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+
+        libs = subprocess.check_output(
+            ['pkg-config', '--libs', pkg_config_name],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+
+        # Parse -I flag for include path
+        include_path = None
+        for flag in cflags.split():
+            if flag.startswith('-I'):
+                path = flag[2:]
+                if verify_include(path):
+                    include_path = path
+                    break
+
+        # Parse -L flag for library path (or use default)
+        lib_path = None
+        for flag in libs.split():
+            if flag.startswith('-L'):
+                lib_path = flag[2:]
+                break
+
+        # If no -L flag, try to get libdir
+        if not lib_path:
+            try:
+                lib_path = subprocess.check_output(
+                    ['pkg-config', '--variable=libdir', pkg_config_name],
+                    stderr=subprocess.DEVNULL
+                ).decode().strip()
+            except:
+                pass
+
+        # If we found include but not lib, use system default
+        if include_path and not lib_path:
+            for lp in ['/usr/lib/x86_64-linux-gnu', '/usr/lib', '/usr/local/lib']:
+                if os.path.exists(lp):
+                    lib_path = lp
+                    break
+
+        if include_path and lib_path:
+            return include_path, lib_path
+    except:
+        pass
+
+    # Try Homebrew (macOS)
     try:
         brew_prefix = subprocess.check_output(
             ['brew', '--prefix', brew_name],
@@ -35,12 +100,12 @@ def find_library(name, brew_name=None, pkg_config_name=None):
         include_path = os.path.join(brew_prefix, 'include')
         lib_path = os.path.join(brew_prefix, 'lib')
 
-        if os.path.exists(include_path) and os.path.exists(lib_path):
+        if os.path.exists(include_path) and os.path.exists(lib_path) and verify_include(include_path):
             return include_path, lib_path
     except:
         pass
 
-    # Try common system locations
+    # Try common system locations (verify headers exist)
     possible_paths = [
         '/usr/local',
         '/usr',
@@ -50,25 +115,8 @@ def find_library(name, brew_name=None, pkg_config_name=None):
         include_path = os.path.join(base_path, 'include')
         lib_path = os.path.join(base_path, 'lib')
 
-        if os.path.exists(include_path) and os.path.exists(lib_path):
+        if os.path.exists(include_path) and os.path.exists(lib_path) and verify_include(include_path):
             return include_path, lib_path
-
-    # Try pkg-config
-    try:
-        include_path = subprocess.check_output(
-            ['pkg-config', '--variable=includedir', pkg_config_name],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
-
-        lib_path = subprocess.check_output(
-            ['pkg-config', '--variable=libdir', pkg_config_name],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
-
-        if include_path and lib_path:
-            return include_path, lib_path
-    except:
-        pass
 
     return None, None
 
@@ -106,7 +154,7 @@ if not webp_include:
     )
 print(f"  libwebp: {webp_include}")
 
-curl_include, curl_lib = find_library('curl', 'curl', 'libcurl')
+curl_include, curl_lib = find_library('curl', 'curl', 'libcurl', header_subdir='curl')
 if not curl_include:
     raise RuntimeError(
         "Could not find libcurl installation.\n"
@@ -203,7 +251,7 @@ class BuildExt(build_ext):
 
 setup(
     name='turboloader',
-    version='2.3.0',
+    version='2.3.1',
     author='TurboLoader Contributors',
     description='High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support',
     long_description=open('README.md').read() if os.path.exists('README.md') else '',

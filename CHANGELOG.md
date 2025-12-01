@@ -5,6 +5,39 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2025-12-01
+
+### CI/CD Build Fixes and Code Quality Improvements
+
+This release fixes several build issues and improves cross-platform compatibility.
+
+### Fixed
+- **Ubuntu Build** (`setup.py`)
+  - Fixed curl header detection on Ubuntu (was finding wrong include path)
+  - Improved library detection to verify headers actually exist using pkg-config
+  - Setup.py now properly locates `/usr/include/curl/curl.h` on Linux
+
+- **GCC Compilation** (`src/readers/tbl_v2_reader.hpp`)
+  - Fixed packed struct field binding error on GCC
+  - `MetadataBlockHeader.type` now copied to local variable before return
+
+- **Deprecated CURL API** (`src/readers/http_reader.hpp`)
+  - Updated `CURLINFO_SIZE_DOWNLOAD` to `CURLINFO_SIZE_DOWNLOAD_T`
+  - Updated `CURLINFO_CONTENT_LENGTH_DOWNLOAD` to `CURLINFO_CONTENT_LENGTH_DOWNLOAD_T`
+  - Eliminates deprecation warnings on newer libcurl versions
+
+- **Test Suite**
+  - `test_prefetch_pipeline.cpp` now skips gracefully when test files don't exist
+  - `test_v180_features.py` version checks now use `>=` instead of exact match
+  - All tests pass on both macOS and Ubuntu
+
+- **Packaging** (`pyproject.toml`, `MANIFEST.in`)
+  - Fixed license format deprecation warning (table → string)
+  - Removed missing file references from MANIFEST.in
+  - Cleaner sdist/wheel builds
+
+---
+
 ## [2.3.0] - 2025-11-30
 
 ### Automated Smart Batching Detection

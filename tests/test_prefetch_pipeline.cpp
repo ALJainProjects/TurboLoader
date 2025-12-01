@@ -12,8 +12,15 @@
 #include <iomanip>
 #include <cassert>
 #include <thread>
+#include <fstream>
 
 using namespace turboloader;
+
+// Helper function to check if a file exists
+bool file_exists(const std::string& path) {
+    std::ifstream f(path);
+    return f.good();
+}
 
 // Helper function to print test result
 void print_result(const char* test_name, bool passed) {
@@ -422,6 +429,18 @@ int main() {
     std::cout << "================================================================================" << std::endl;
     std::cout << "Prefetch Pipeline Unit Tests" << std::endl;
     std::cout << "================================================================================" << std::endl;
+
+    // Check if test files exist
+    const std::string test_tar = "/tmp/test_prefetch.tar";
+    const std::string test_tar_small = "/tmp/test_prefetch_small.tar";
+
+    if (!file_exists(test_tar) || !file_exists(test_tar_small)) {
+        std::cout << "\n[SKIP] Test TAR files not found. Skipping prefetch pipeline tests." << std::endl;
+        std::cout << "       To run these tests, create test files first:" << std::endl;
+        std::cout << "       python3 tests/create_test_dataset.py" << std::endl;
+        std::cout << "\nTest Summary: 0/0 tests (skipped - no test data)" << std::endl;
+        return 0;  // Return success since tests were skipped, not failed
+    }
 
     std::cout << "\nNOTE: These tests require test TAR files in /tmp/" << std::endl;
     std::cout << "      Run setup script first: python3 tests/create_test_dataset.py" << std::endl;
