@@ -82,9 +82,24 @@ public:
 
         std::lock_guard<std::mutex> lock(mutex_);
 
-        // Always add - the bucket manager will flush when ready
+        // Check capacity - reject if at capacity
+        if (samples_.size() >= capacity_) {
+            return false;
+        }
+
         samples_.push_back(sample);
         return true;
+    }
+
+    /**
+     * @brief Force add sample to bucket (ignores capacity check)
+     *
+     * Used by SmartBatcher when bucket is full but we need to add anyway
+     * to prevent sample loss. Bucket will be flushed soon.
+     */
+    void force_add(const SampleType& sample) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        samples_.push_back(sample);
     }
 
     /**
@@ -180,6 +195,10 @@ public:
     /**
      * @brief Add sample to appropriate bucket
      * @return true if sample was added to a bucket
+     *
+     * Note: If bucket is full, sample is still added (bucket grows as needed
+     * since we flush full buckets in get_ready_batches). This ensures no sample
+     * loss when using two-phase collection.
      */
     bool add_sample(const SampleType& sample, size_t width, size_t height) {
         auto* bucket = get_or_create_bucket(width, height);
@@ -187,9 +206,15 @@ public:
             return false;
         }
 
-        return bucket->try_add(sample, width, height,
-                              config_.bucket_width_step,
-                              config_.bucket_height_step);
+        // Try to add - if bucket is full, force add anyway
+        // (we'll flush full buckets in get_ready_batches)
+        if (!bucket->try_add(sample, width, height,
+                            config_.bucket_width_step,
+                            config_.bucket_height_step)) {
+            // Bucket is full - force add using internal method
+            bucket->force_add(sample);
+        }
+        return true;
     }
 
     /**

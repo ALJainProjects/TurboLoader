@@ -172,7 +172,7 @@ struct UnifiedPipelineConfig {
     bool parquet_use_mmap = true;               // Memory-mapped I/O
 
     // ===== Smart Batching (enabled by default in v2.0.0) =====
-    bool enable_smart_batching = false;         // Size-based sample grouping (experimental, disabled by default)
+    bool enable_smart_batching = true;          // Size-based sample grouping (reduces memory waste)
     size_t bucket_width_step = 32;              // Group images with width ± this value
     size_t bucket_height_step = 32;             // Group images with height ± this value
     size_t min_bucket_size = 16;                // Minimum samples before creating batch
@@ -692,6 +692,7 @@ public:
             // TAR mode with optional Smart Batching
             if (config_.enable_smart_batching && smart_batcher_) {
                 // Smart Batching mode: Collect samples into batcher, return sized batches
+                // Uses two-phase collection to prevent TOCTOU race conditions
 
                 // First check if we have pending batches from previous iteration
                 {
@@ -706,42 +707,60 @@ public:
                     }
                 }
 
-                // Keep trying until we get a batch or everything is truly finished
-                const int max_attempts = 1000;  // Prevent infinite loop
-                for (int attempt = 0; attempt < max_attempts; ++attempt) {
-                    // Collect samples from worker queues into smart batcher
-                    size_t samples_collected = 0;
-                    size_t max_collect = config_.batch_size * 4;
-                    while (samples_collected < max_collect) {
-                        bool got_sample = false;
-                        for (auto& worker : tar_workers_) {
-                            UnifiedSample sample;
-                            if (worker->get_queue()->try_pop(sample)) {
-                                smart_batcher_->add_sample(sample, sample.width, sample.height);
-                                got_sample = true;
-                                samples_collected++;
-                            }
-                        }
-                        if (!got_sample) break;
-                    }
+                // Two-phase collection to fix race condition:
+                // Phase 1: Collect while workers are running
+                // Phase 2: After workers finish, guaranteed final drain
 
-                    // Check if all workers are done AND all queues are empty
-                    bool all_queues_empty = true;
+                const int max_attempts = 10000;  // Prevent infinite loop
+                for (int attempt = 0; attempt < max_attempts; ++attempt) {
+
+                    // Phase 1: Check if all workers have finished FIRST
                     bool all_workers_done = true;
                     for (const auto& worker : tar_workers_) {
                         if (!worker->is_finished()) {
                             all_workers_done = false;
-                        }
-                        if (!worker->get_queue()->empty()) {
-                            all_queues_empty = false;
+                            break;
                         }
                     }
 
-                    // Get ready or final batches from smart batcher
+                    // Collect ALL available samples from worker queues into smart batcher
+                    // This drain is atomic - we keep going until queues are truly empty
+                    size_t samples_collected_this_round = 0;
+                    bool any_queue_had_data;
+                    do {
+                        any_queue_had_data = false;
+                        for (auto& worker : tar_workers_) {
+                            UnifiedSample sample;
+                            while (worker->get_queue()->try_pop(sample)) {
+                                smart_batcher_->add_sample(sample, sample.width, sample.height);
+                                samples_collected_this_round++;
+                                any_queue_had_data = true;
+                            }
+                        }
+                    } while (any_queue_had_data);  // Keep draining until no data in any queue
+
+                    // Get ready batches (or flush if workers are done and we've drained)
                     std::vector<std::vector<UnifiedSample>> ready_batches;
-                    if (all_workers_done && all_queues_empty) {
+
+                    if (all_workers_done) {
+                        // Phase 2: Workers are done - do ONE more drain to catch any stragglers
+                        // (Workers set is_finished=true AFTER their last queue push)
+                        bool found_more;
+                        do {
+                            found_more = false;
+                            for (auto& worker : tar_workers_) {
+                                UnifiedSample sample;
+                                while (worker->get_queue()->try_pop(sample)) {
+                                    smart_batcher_->add_sample(sample, sample.width, sample.height);
+                                    found_more = true;
+                                }
+                            }
+                        } while (found_more);
+
+                        // Now flush all remaining samples from smart batcher
                         ready_batches = smart_batcher_->flush_all();
                     } else {
+                        // Workers still running - only get ready (full) batches
                         ready_batches = smart_batcher_->get_ready_batches();
                     }
 
@@ -761,12 +780,12 @@ public:
                         break;  // Got a batch, exit retry loop
                     }
 
-                    // If workers are done, queues empty, and batcher empty, we're done
-                    if (all_workers_done && all_queues_empty && smart_batcher_->empty()) {
-                        break;  // Truly finished
+                    // Check if we're truly finished
+                    if (all_workers_done && smart_batcher_->empty()) {
+                        break;  // Truly finished - no more samples anywhere
                     }
 
-                    // Workers still running or samples in transit - yield and retry
+                    // Workers still running - yield and retry
                     std::this_thread::yield();
                 }
             } else {
