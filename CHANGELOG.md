@@ -5,6 +5,43 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2025-11-30
+
+### Automated Smart Batching Detection
+
+This release introduces automatic detection of when smart batching is beneficial, based on image size variation.
+
+### Added
+- **Auto Smart Batching Detection** (`src/pipeline/pipeline.hpp`)
+  - New `auto_smart_batching` parameter (default: `true`)
+  - Samples up to 100 images from TAR file during initialization
+  - Detects if images have varying dimensions
+  - **Automatically enables smart batching only when sizes vary**
+  - **Skips smart batching for uniform-size datasets** (better performance)
+
+- **Smart Batching Status API**
+  - `loader.smart_batching_enabled()` - check if smart batching is active
+  - Useful for debugging and understanding auto-detection decisions
+
+### Changed
+- **Smart Batching Default Behavior**
+  - Previously: Always enabled by default
+  - Now: Auto-detected based on image size variation
+  - Uniform-size datasets: ~2x faster (no bucket overhead)
+  - Mixed-size datasets: Smart batching activated automatically
+
+### Python API
+- `auto_smart_batching` (bool): Auto-detect if smart batching is beneficial (default: True)
+- `enable_smart_batching` (bool): Manual override (ignored if auto_smart_batching=True)
+- `loader.smart_batching_enabled()`: Check if smart batching is active
+
+### Performance
+- Uniform-size datasets: **36K+ img/s** (no smart batching overhead)
+- Mixed-size datasets: **18K+ img/s** (smart batching auto-enabled)
+- Both modes: 100% sample recovery
+
+---
+
 ## [2.2.0] - 2025-11-30
 
 ### Smart Batching Race Condition Fix

@@ -97,6 +97,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <algorithm>
+#include <set>
 
 namespace turboloader {
 
@@ -171,8 +172,9 @@ struct UnifiedPipelineConfig {
     bool parquet_use_threads = true;            // Multi-threaded reading
     bool parquet_use_mmap = true;               // Memory-mapped I/O
 
-    // ===== Smart Batching (enabled by default in v2.0.0) =====
-    bool enable_smart_batching = true;          // Size-based sample grouping (reduces memory waste)
+    // ===== Smart Batching (auto-detected in v2.3.0) =====
+    bool auto_smart_batching = true;            // Auto-detect if smart batching is beneficial
+    bool enable_smart_batching = false;         // Manual override (ignored if auto_smart_batching=true)
     size_t bucket_width_step = 32;              // Group images with width ± this value
     size_t bucket_height_step = 32;             // Group images with height ± this value
     size_t min_bucket_size = 16;                // Minimum samples before creating batch
@@ -564,18 +566,12 @@ public:
             // Just validate the config here
         }
 
-        // Initialize Smart Batching (NEW in v1.5.1)
-        if (config_.enable_smart_batching) {
-            pipeline::SmartBatchConfig sb_config;
-            sb_config.bucket_width_step = config_.bucket_width_step;
-            sb_config.bucket_height_step = config_.bucket_height_step;
-            sb_config.min_bucket_size = config_.min_bucket_size;
-            sb_config.max_bucket_size = config_.max_bucket_size;
-            sb_config.enable_dynamic_buckets = config_.enable_dynamic_buckets;
-            sb_config.max_buckets = config_.max_buckets;
-            sb_config.strict_sizing = config_.strict_sizing;
-            smart_batcher_ = std::make_unique<pipeline::SmartBatcher<UnifiedSample>>(sb_config);
+        // Smart Batching initialization is deferred to start() for auto-detection
+        // If auto_smart_batching is disabled, use manual enable_smart_batching setting
+        if (!config_.auto_smart_batching && config_.enable_smart_batching) {
+            init_smart_batcher();
         }
+        // Otherwise, smart_batcher_ will be initialized in start() after size detection
 
         // Initialize
         initialize();
@@ -628,6 +624,14 @@ public:
                     config_.cache_l2_gb,
                     config_.cache_dir
                 );
+            }
+
+            // Auto-detect if smart batching is beneficial (NEW in v2.3.0)
+            if (config_.auto_smart_batching && !smart_batcher_) {
+                bool needs_smart_batching = detect_size_variation(remote_tar_data);
+                if (needs_smart_batching) {
+                    init_smart_batcher();
+                }
             }
 
             // Create workers with per-worker lock-free queues
@@ -690,7 +694,7 @@ public:
 
         if (config_.format == DataFormat::TAR) {
             // TAR mode with optional Smart Batching
-            if (config_.enable_smart_batching && smart_batcher_) {
+            if (smart_batching_active_ && smart_batcher_) {
                 // Smart Batching mode: Collect samples into batcher, return sized batches
                 // Uses two-phase collection to prevent TOCTOU race conditions
 
@@ -841,8 +845,8 @@ public:
                     return false;
                 }
             }
-            // Also check smart batcher if enabled
-            if (config_.enable_smart_batching && smart_batcher_ && !smart_batcher_->empty()) {
+            // Also check smart batcher if active
+            if (smart_batching_active_ && smart_batcher_ && !smart_batcher_->empty()) {
                 return false;
             }
             // Check for pending smart batches
@@ -923,6 +927,81 @@ private:
 #else
         throw std::runtime_error("Video support requires FFmpeg (-DHAVE_FFMPEG)");
 #endif
+    }
+
+    /**
+     * @brief Detect if images in the TAR have varying sizes (NEW in v2.3.0)
+     *
+     * Samples up to 100 consecutive images from the start and checks if dimensions vary.
+     * Returns true if smart batching would be beneficial.
+     */
+    bool detect_size_variation(std::shared_ptr<std::vector<uint8_t>> remote_tar_data) {
+        // Create a temporary reader to sample images
+        std::unique_ptr<TarReader> temp_reader;
+        if (remote_tar_data) {
+            temp_reader = std::make_unique<TarReader>(remote_tar_data, 0, 1);
+        } else {
+            temp_reader = std::make_unique<TarReader>(config_.data_path, 0, 1);
+        }
+
+        const size_t max_samples = 100;  // Sample up to 100 images
+        const size_t min_samples_for_detection = 10;  // Need at least 10 to decide
+
+        std::set<std::pair<int, int>> unique_sizes;
+        size_t sampled = 0;
+
+        JPEGDecoder decoder;
+
+        // Sample consecutive images from the start (catches size patterns)
+        size_t total = temp_reader->num_samples();
+        size_t samples_to_check = std::min(max_samples, total);
+
+        for (size_t i = 0; i < samples_to_check; ++i) {
+            auto jpeg_data = temp_reader->get_sample(i);
+
+            // Try to decode to get dimensions
+            std::vector<uint8_t> rgb_buffer;
+            int width = 0, height = 0, channels = 0;
+
+            try {
+                decoder.decode(jpeg_data, rgb_buffer, width, height, channels);
+                if (width > 0 && height > 0) {
+                    unique_sizes.insert({width, height});
+                    sampled++;
+
+                    // Early exit: if we found 2+ sizes, smart batching is beneficial
+                    if (unique_sizes.size() > 1) {
+                        return true;
+                    }
+                }
+            } catch (...) {
+                // Skip corrupted images
+                continue;
+            }
+        }
+
+        // If we sampled enough images and found multiple sizes, enable smart batching
+        if (sampled >= min_samples_for_detection && unique_sizes.size() > 1) {
+            return true;  // Multiple sizes detected - smart batching beneficial
+        }
+
+        return false;  // All same size or not enough samples - skip smart batching
+    }
+
+    /**
+     * @brief Initialize smart batcher with current config
+     */
+    void init_smart_batcher() {
+        pipeline::SmartBatchConfig sb_config;
+        sb_config.bucket_width_step = config_.bucket_width_step;
+        sb_config.bucket_height_step = config_.bucket_height_step;
+        sb_config.min_bucket_size = config_.min_bucket_size;
+        sb_config.max_bucket_size = config_.max_bucket_size;
+        sb_config.enable_dynamic_buckets = config_.enable_dynamic_buckets;
+        sb_config.max_buckets = config_.max_buckets;
+        sb_config.strict_sizing = config_.strict_sizing;
+        smart_batcher_ = std::make_unique<pipeline::SmartBatcher<UnifiedSample>>(sb_config);
+        smart_batching_active_ = true;
     }
 
     void init_tabular_decoder() {
@@ -1048,10 +1127,11 @@ private:
     std::atomic<size_t> samples_processed_;
     std::atomic<size_t> batches_produced_;
 
-    // Smart Batching (NEW in v1.5.1)
+    // Smart Batching (NEW in v1.5.1, auto-detection in v2.3.0)
     std::unique_ptr<pipeline::SmartBatcher<UnifiedSample>> smart_batcher_;
     std::deque<std::vector<UnifiedSample>> pending_smart_batches_;  // Queue of ready batches
     mutable std::mutex pending_batches_mutex_;
+    bool smart_batching_active_ = false;  // True if smart batching is actually in use
 
     // Distributed Training (NEW in v1.7.1)
     size_t distributed_start_idx_;
@@ -1076,6 +1156,16 @@ public:
      */
     bool cache_enabled() const {
         return tiered_cache_ != nullptr;
+    }
+
+    /**
+     * @brief Check if smart batching is active (NEW in v2.3.0)
+     *
+     * Returns true if smart batching is currently being used.
+     * With auto_smart_batching=true, this is determined by image size variation.
+     */
+    bool smart_batching_enabled() const {
+        return smart_batching_active_;
     }
 };
 

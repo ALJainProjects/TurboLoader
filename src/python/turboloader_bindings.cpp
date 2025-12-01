@@ -87,7 +87,8 @@ public:
      * @param cache_l1_mb L1 memory cache size in MB (default: 512)
      * @param cache_l2_gb L2 disk cache size in GB (default: 0 = disabled)
      * @param cache_dir L2 disk cache directory (default: /tmp/turboloader_cache)
-     * @param enable_smart_batching Enable smart batching for reduced padding (default: true)
+     * @param auto_smart_batching Auto-detect if smart batching is beneficial (NEW in v2.3.0, default: true)
+     * @param enable_smart_batching Manual override for smart batching (ignored if auto_smart_batching=true)
      * @param prefetch_batches Number of batches to prefetch (default: 4)
      */
     DataLoader(
@@ -104,6 +105,7 @@ public:
         size_t cache_l1_mb = 512,
         size_t cache_l2_gb = 0,
         const std::string& cache_dir = "/tmp/turboloader_cache",
+        bool auto_smart_batching = true,
         bool enable_smart_batching = false,
         size_t prefetch_batches = 4
     ) {
@@ -126,7 +128,8 @@ public:
         config_.cache_l2_gb = cache_l2_gb;
         config_.cache_dir = cache_dir;
 
-        // Smart Batching (NEW in v2.1.0 - exposed in Python)
+        // Smart Batching (NEW in v2.3.0 - auto-detection)
+        config_.auto_smart_batching = auto_smart_batching;
         config_.enable_smart_batching = enable_smart_batching;
         config_.prefetch_batches = prefetch_batches;
 
@@ -170,6 +173,19 @@ public:
             return true;
         }
         return pipeline_->is_finished();
+    }
+
+    /**
+     * @brief Check if smart batching is active (NEW in v2.3.0)
+     *
+     * With auto_smart_batching=True, this tells you if smart batching
+     * was enabled based on image size variation detection.
+     */
+    bool smart_batching_enabled() const {
+        if (!pipeline_) {
+            return false;
+        }
+        return pipeline_->smart_batching_enabled();
     }
 
     /**
@@ -331,7 +347,7 @@ PYBIND11_MODULE(_turboloader, m) {
 
     // DataLoader class (PyTorch-compatible)
     py::class_<DataLoader>(m, "DataLoader")
-        .def(py::init<const std::string&, size_t, size_t, bool, bool, int, int, bool, int, bool, size_t, size_t, const std::string&, bool, size_t>(),
+        .def(py::init<const std::string&, size_t, size_t, bool, bool, int, int, bool, int, bool, size_t, size_t, const std::string&, bool, bool, size_t>(),
              py::arg("data_path"),
              py::arg("batch_size") = 32,
              py::arg("num_workers") = 4,
@@ -345,7 +361,8 @@ PYBIND11_MODULE(_turboloader, m) {
              py::arg("cache_l1_mb") = 512,
              py::arg("cache_l2_gb") = 0,
              py::arg("cache_dir") = "/tmp/turboloader_cache",
-             py::arg("enable_smart_batching") = true,
+             py::arg("auto_smart_batching") = true,
+             py::arg("enable_smart_batching") = false,
              py::arg("prefetch_batches") = 4,
              "Create TurboLoader DataLoader (PyTorch-compatible)\n\n"
              "Args:\n"
@@ -363,29 +380,28 @@ PYBIND11_MODULE(_turboloader, m) {
              "    cache_l1_mb (int): L1 memory cache size in MB (default: 512)\n"
              "    cache_l2_gb (int): L2 disk cache size in GB, 0=disabled (default: 0)\n"
              "    cache_dir (str): L2 disk cache directory (default: /tmp/turboloader_cache)\n"
-             "    enable_smart_batching (bool): Enable smart batching for reduced padding (NEW in v2.1.0, default: True)\n"
+             "    auto_smart_batching (bool): Auto-detect if smart batching is beneficial (NEW in v2.3.0, default: True)\n"
+             "    enable_smart_batching (bool): Manual override for smart batching, ignored if auto_smart_batching=True (default: False)\n"
              "    prefetch_batches (int): Number of batches to prefetch (default: 4)\n\n"
              "Returns:\n"
              "    DataLoader: Iterable that yields batches\n\n"
              "Example:\n"
-             "    >>> # Single-node training\n"
+             "    >>> # Single-node training (auto smart batching detects if sizes vary)\n"
              "    >>> loader = turboloader.DataLoader('imagenet.tar', batch_size=128, num_workers=8)\n"
              "    >>> for batch in loader:\n"
              "    >>>     images = [sample['image'] for sample in batch]  # NumPy arrays\n"
              "    >>>     # Train your model...\n\n"
-             "    >>> # With caching (NEW in v2.0.0) - 5-10x faster for subsequent epochs\n"
+             "    >>> # Force smart batching OFF (for uniform-size datasets)\n"
              "    >>> loader = turboloader.DataLoader(\n"
              "    >>>     'imagenet.tar',\n"
-             "    >>>     batch_size=128,\n"
-             "    >>>     num_workers=8,\n"
-             "    >>>     enable_cache=True,\n"
-             "    >>>     cache_l1_mb=1024,  # 1GB L1 memory cache\n"
-             "    >>>     cache_l2_gb=10     # 10GB L2 disk cache\n"
-             "    >>> )\n\n"
-             "    >>> # Disable smart batching for benchmarking\n"
-             "    >>> loader = turboloader.DataLoader(\n"
-             "    >>>     'imagenet.tar',\n"
+             "    >>>     auto_smart_batching=False,\n"
              "    >>>     enable_smart_batching=False\n"
+             "    >>> )\n\n"
+             "    >>> # Force smart batching ON\n"
+             "    >>> loader = turboloader.DataLoader(\n"
+             "    >>>     'imagenet.tar',\n"
+             "    >>>     auto_smart_batching=False,\n"
+             "    >>>     enable_smart_batching=True\n"
              "    >>> )"
         )
         .def("next_batch", &DataLoader::next_batch,
@@ -403,6 +419,12 @@ PYBIND11_MODULE(_turboloader, m) {
              "Check if all data has been processed\n\n"
              "Returns:\n"
              "    bool: True if pipeline finished")
+        .def("smart_batching_enabled", &DataLoader::smart_batching_enabled,
+             "Check if smart batching is active (NEW in v2.3.0)\n\n"
+             "With auto_smart_batching=True, this returns True if smart batching\n"
+             "was enabled based on image size variation detection.\n\n"
+             "Returns:\n"
+             "    bool: True if smart batching is currently active")
         .def("stop", &DataLoader::stop,
              "Stop the pipeline and clean up resources")
         .def("__enter__", &DataLoader::enter,
