@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboloader"
-version = "2.3.11"
+version = "2.3.12"
 description = "Production-ready ML data loading library with distributed training support, SIMD-accelerated transforms, pipe operator composition, HDF5/TFRecord/Zarr support, and GPU transforms. Built with C++17 for maximum performance."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Arnav Jain", email = "arnav@example.com"}
@@ -33,7 +33,6 @@ classifiers = [
     "Operating System :: MacOS :: MacOS X",
     "Programming Language :: C++",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

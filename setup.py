@@ -367,7 +367,7 @@ else:
 
 setup(
     name="turboloader",
-    version="2.3.11",
+    version="2.3.12",
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",
@@ -382,7 +382,7 @@ setup(
         "torch": ["torch>=1.10.0"],
         "dev": ["pytest", "black", "mypy"],
     },
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
@@ -390,7 +390,6 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Programming Language :: C++",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
