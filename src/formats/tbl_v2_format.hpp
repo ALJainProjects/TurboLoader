@@ -334,7 +334,8 @@ inline const char* format_to_string_v2(SampleFormat format) {
 
 // Implementation of checksum methods
 inline void TblHeaderV2::calculate_checksum() {
-    uint32_t saved_checksum = checksum;
+    // Save and zero checksum field, then calculate CRC over struct
+    (void)checksum;  // Previous value not needed, will be overwritten
     checksum = 0;
     checksum = calculate_crc32(reinterpret_cast<const uint8_t*>(this), sizeof(TblHeaderV2));
 }

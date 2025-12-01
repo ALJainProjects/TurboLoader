@@ -148,7 +148,7 @@ private:
     }
 #endif
 
-    float alpha_;
+    [[maybe_unused]] float alpha_;  // Used to initialize beta distribution
     float last_lambda_ = 1.0f;
     std::mt19937 rng_;
     std::gamma_distribution<double> beta_dist_;

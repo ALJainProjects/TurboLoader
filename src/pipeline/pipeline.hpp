@@ -516,8 +516,9 @@ private:
     std::atomic<size_t> samples_processed_;
 
     // Distributed Training (NEW in v1.7.1)
-    size_t distributed_start_idx_;
-    size_t distributed_end_idx_;
+    // Reserved for future per-worker distributed training
+    [[maybe_unused]] size_t distributed_start_idx_;
+    [[maybe_unused]] size_t distributed_end_idx_;
 
     // Caching (NEW in v2.0.0)
     cache::TieredCache* cache_;
@@ -729,7 +730,6 @@ public:
 
                     // Collect ALL available samples from worker queues into smart batcher
                     // This drain is atomic - we keep going until queues are truly empty
-                    size_t samples_collected_this_round = 0;
                     bool any_queue_had_data;
                     do {
                         any_queue_had_data = false;
@@ -737,7 +737,6 @@ public:
                             UnifiedSample sample;
                             while (worker->get_queue()->try_pop(sample)) {
                                 smart_batcher_->add_sample(sample, sample.width, sample.height);
-                                samples_collected_this_round++;
                                 any_queue_had_data = true;
                             }
                         }

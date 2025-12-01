@@ -24,9 +24,9 @@ public:
     PadTransform(int pad_left, int pad_top, int pad_right, int pad_bottom,
                 PaddingMode mode = PaddingMode::CONSTANT,
                 uint8_t value = 0)
-        : pad_left_(pad_left), pad_top_(pad_top),
+        : padding_(0), pad_left_(pad_left), pad_top_(pad_top),
           pad_right_(pad_right), pad_bottom_(pad_bottom),
-          padding_(0), mode_(mode), value_(value) {}
+          mode_(mode), value_(value) {}
 
     std::unique_ptr<ImageData> apply(const ImageData& input) override {
         int left = (padding_ > 0) ? padding_ : pad_left_;

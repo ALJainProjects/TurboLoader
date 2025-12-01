@@ -824,10 +824,6 @@ inline void resize_bilinear_rgb_neon(const uint8_t* src, uint8_t* dst,
         float dy = src_y - y0;
         float inv_dy = 1.0f - dy;
 
-        // Preload NEON constants for this row
-        float32x4_t dy_vec = vdupq_n_f32(dy);
-        float32x4_t inv_dy_vec = vdupq_n_f32(inv_dy);
-
         int x = 0;
         // Process 4 pixels at a time
         for (; x + 4 <= dst_width; x += 4) {
@@ -835,11 +831,6 @@ inline void resize_bilinear_rgb_neon(const uint8_t* src, uint8_t* dst,
             for (int i = 0; i < 4; ++i) {
                 src_x[i] = (x + i) * x_ratio;
             }
-
-            float32x4_t src_x_vec = vld1q_f32(src_x);
-            int32x4_t x0_vec = vcvtq_s32_f32(src_x_vec);
-            float32x4_t dx_vec = vsubq_f32(src_x_vec, vcvtq_f32_s32(x0_vec));
-            float32x4_t inv_dx_vec = vsubq_f32(vdupq_n_f32(1.0f), dx_vec);
 
             for (int c = 0; c < 3; ++c) {
                 float vals[4];
