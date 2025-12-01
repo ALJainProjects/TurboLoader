@@ -44,16 +44,11 @@ import turboloader
 
 def setup_dist(rank, world_size):
     """Initialize distributed training environment."""
-    os.environ['MASTER_ADDR'] = os.environ.get('MASTER_ADDR', 'localhost')
-    os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', '12355')
+    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+    os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12355")
 
     # Initialize process group
-    dist.init_process_group(
-        backend='nccl',
-        init_method='env://',
-        world_size=world_size,
-        rank=rank
-    )
+    dist.init_process_group(backend="nccl", init_method="env://", world_size=world_size, rank=rank)
 
     # Set device
     torch.cuda.set_device(rank)
@@ -72,19 +67,14 @@ def train_worker(rank, world_size, args):
     setup_dist(rank, world_size)
 
     # Set device
-    device = torch.device(f'cuda:{rank}')
+    device = torch.device(f"cuda:{rank}")
 
     # Create model
     model = resnet50(num_classes=args.num_classes)
     model = model.to(device)
 
     # Wrap with DDP
-    model = DDP(
-        model,
-        device_ids=[rank],
-        output_device=rank,
-        find_unused_parameters=False
-    )
+    model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=False)
 
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -92,14 +82,11 @@ def train_worker(rank, world_size, args):
         model.parameters(),
         lr=args.lr * world_size,  # Scale learning rate with world size
         momentum=0.9,
-        weight_decay=1e-4
+        weight_decay=1e-4,
     )
 
     # Learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=args.epochs
-    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     # Create TurboLoader with distributed sharding
     loader = turboloader.DataLoader(
@@ -108,18 +95,20 @@ def train_worker(rank, world_size, args):
         num_workers=args.num_workers,
         shuffle=True,
         enable_distributed=True,  # Enable automatic sharding
-        drop_last=True  # Ensure equal batches across GPUs
+        drop_last=True,  # Ensure equal batches across GPUs
     )
 
     # Create transforms
-    transforms = turboloader.Compose([
-        turboloader.Resize(256, 256),
-        turboloader.RandomCrop(224, 224),
-        turboloader.RandomHorizontalFlip(0.5),
-        turboloader.ColorJitter(0.2, 0.2, 0.2, 0.1),
-        turboloader.ImageNetNormalize(),
-        turboloader.ToTensor()
-    ])
+    transforms = turboloader.Compose(
+        [
+            turboloader.Resize(256, 256),
+            turboloader.RandomCrop(224, 224),
+            turboloader.RandomHorizontalFlip(0.5),
+            turboloader.ColorJitter(0.2, 0.2, 0.2, 0.1),
+            turboloader.ImageNetNormalize(),
+            turboloader.ToTensor(),
+        ]
+    )
 
     # Training loop
     for epoch in range(args.epochs):
@@ -137,9 +126,9 @@ def train_worker(rank, world_size, args):
             labels = []
 
             for sample in batch:
-                img = transforms.apply(sample['image'])
+                img = transforms.apply(sample["image"])
                 images.append(torch.from_numpy(img).float())
-                labels.append(sample.get('label', 0))
+                labels.append(sample.get("label", 0))
 
             # Stack into batch tensors
             images = torch.stack(images).to(device, non_blocking=True)
@@ -164,16 +153,18 @@ def train_worker(rank, world_size, args):
             # Log progress (only rank 0)
             if rank == 0 and batch_idx % args.log_interval == 0:
                 avg_loss = running_loss / (batch_idx + 1)
-                acc = 100. * correct / total
-                print(f'[Rank {rank}] Epoch {epoch} [{batch_idx}/{num_batches}] '
-                      f'Loss: {avg_loss:.3f} Acc: {acc:.2f}%')
+                acc = 100.0 * correct / total
+                print(
+                    f"[Rank {rank}] Epoch {epoch} [{batch_idx}/{num_batches}] "
+                    f"Loss: {avg_loss:.3f} Acc: {acc:.2f}%"
+                )
 
         # End of epoch
         epoch_time = time.time() - epoch_start
 
         # Synchronize metrics across all ranks
         avg_loss = torch.tensor(running_loss / num_batches).to(device)
-        acc = torch.tensor(100. * correct / total).to(device)
+        acc = torch.tensor(100.0 * correct / total).to(device)
 
         dist.all_reduce(avg_loss, op=dist.ReduceOp.AVG)
         dist.all_reduce(acc, op=dist.ReduceOp.AVG)
@@ -182,11 +173,11 @@ def train_worker(rank, world_size, args):
         if rank == 0:
             samples_per_sec = total * world_size / epoch_time
             print(f'\n{"="*70}')
-            print(f'Epoch {epoch} Summary:')
-            print(f'  Loss: {avg_loss.item():.4f}')
-            print(f'  Accuracy: {acc.item():.2f}%')
-            print(f'  Time: {epoch_time:.2f}s')
-            print(f'  Throughput: {samples_per_sec:.1f} samples/sec')
+            print(f"Epoch {epoch} Summary:")
+            print(f"  Loss: {avg_loss.item():.4f}")
+            print(f"  Accuracy: {acc.item():.2f}%")
+            print(f"  Time: {epoch_time:.2f}s")
+            print(f"  Throughput: {samples_per_sec:.1f} samples/sec")
             print(f'  Learning Rate: {optimizer.param_groups[0]["lr"]:.6f}')
             print(f'{"="*70}\n')
 
@@ -196,17 +187,17 @@ def train_worker(rank, world_size, args):
         # Save checkpoint (only rank 0)
         if rank == 0 and (epoch + 1) % args.save_interval == 0:
             checkpoint = {
-                'epoch': epoch,
-                'model_state_dict': model.module.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'loss': avg_loss.item(),
-                'accuracy': acc.item(),
+                "epoch": epoch,
+                "model_state_dict": model.module.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "loss": avg_loss.item(),
+                "accuracy": acc.item(),
             }
-            checkpoint_path = f'{args.checkpoint_dir}/checkpoint_epoch_{epoch}.pt'
+            checkpoint_path = f"{args.checkpoint_dir}/checkpoint_epoch_{epoch}.pt"
             os.makedirs(args.checkpoint_dir, exist_ok=True)
             torch.save(checkpoint, checkpoint_path)
-            print(f'[Rank {rank}] Saved checkpoint: {checkpoint_path}')
+            print(f"[Rank {rank}] Saved checkpoint: {checkpoint_path}")
 
         # Synchronize before next epoch
         dist.barrier()
@@ -214,8 +205,8 @@ def train_worker(rank, world_size, args):
     # Final cleanup
     if rank == 0:
         print(f'\n{"="*70}')
-        print('Training completed!')
-        print(f'Final accuracy: {acc.item():.2f}%')
+        print("Training completed!")
+        print(f"Final accuracy: {acc.item():.2f}%")
         print(f'{"="*70}')
 
     cleanup_dist()
@@ -223,81 +214,46 @@ def train_worker(rank, world_size, args):
 
 def main():
     """Main function."""
-    parser = argparse.ArgumentParser(
-        description='PyTorch DDP Training with TurboLoader'
+    parser = argparse.ArgumentParser(description="PyTorch DDP Training with TurboLoader")
+    parser.add_argument(
+        "--data-path", type=str, required=True, help="Path to training data (TAR or TBL format)"
     )
     parser.add_argument(
-        '--data-path',
-        type=str,
-        required=True,
-        help='Path to training data (TAR or TBL format)'
+        "--batch-size", type=int, default=128, help="Per-GPU batch size (default: 128)"
     )
     parser.add_argument(
-        '--batch-size',
-        type=int,
-        default=128,
-        help='Per-GPU batch size (default: 128)'
-    )
-    parser.add_argument(
-        '--num-workers',
+        "--num-workers",
         type=int,
         default=4,
-        help='Number of data loading workers per GPU (default: 4)'
+        help="Number of data loading workers per GPU (default: 4)",
     )
     parser.add_argument(
-        '--epochs',
-        type=int,
-        default=90,
-        help='Number of training epochs (default: 90)'
+        "--epochs", type=int, default=90, help="Number of training epochs (default: 90)"
+    )
+    parser.add_argument("--lr", type=float, default=0.1, help="Base learning rate (default: 0.1)")
+    parser.add_argument(
+        "--num-classes", type=int, default=1000, help="Number of classes (default: 1000)"
     )
     parser.add_argument(
-        '--lr',
-        type=float,
-        default=0.1,
-        help='Base learning rate (default: 0.1)'
+        "--gpus", type=int, default=None, help="Number of GPUs (default: all available)"
     )
     parser.add_argument(
-        '--num-classes',
-        type=int,
-        default=1000,
-        help='Number of classes (default: 1000)'
+        "--log-interval", type=int, default=100, help="Logging interval in batches (default: 100)"
     )
     parser.add_argument(
-        '--gpus',
-        type=int,
-        default=None,
-        help='Number of GPUs (default: all available)'
-    )
-    parser.add_argument(
-        '--log-interval',
-        type=int,
-        default=100,
-        help='Logging interval in batches (default: 100)'
-    )
-    parser.add_argument(
-        '--save-interval',
+        "--save-interval",
         type=int,
         default=10,
-        help='Checkpoint save interval in epochs (default: 10)'
+        help="Checkpoint save interval in epochs (default: 10)",
     )
     parser.add_argument(
-        '--checkpoint-dir',
+        "--checkpoint-dir",
         type=str,
-        default='./checkpoints',
-        help='Checkpoint directory (default: ./checkpoints)'
+        default="./checkpoints",
+        help="Checkpoint directory (default: ./checkpoints)",
     )
-    parser.add_argument(
-        '--nodes',
-        type=int,
-        default=1,
-        help='Number of nodes (default: 1)'
-    )
-    parser.add_argument(
-        '--node-rank',
-        type=int,
-        default=0,
-        help='Node rank (default: 0)'
-    )
+    parser.add_argument("--nodes", type=int, default=1, help="Number of nodes (default: 1)")
+    parser.add_argument("--node-rank", type=int, default=0, help="Node rank (default: 0)")
 
     args = parser.parse_args()
 
@@ -329,13 +285,8 @@ def main():
     print("=" * 70 + "\n")
 
     # Spawn training processes
-    mp.spawn(
-        train_worker,
-        args=(world_size, args),
-        nprocs=args.gpus,
-        join=True
-    )
+    mp.spawn(train_worker, args=(world_size, args), nprocs=args.gpus, join=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

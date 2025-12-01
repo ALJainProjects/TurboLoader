@@ -27,6 +27,7 @@ import os
 import sys
 import numpy as np
 
+
 def check_v110_features():
     """Check which v1.1.0 features are available"""
     print("=" * 80)
@@ -67,6 +68,7 @@ def check_v110_features():
     print()
 
     return True
+
 
 def step1_convert_to_tbl(tar_path: str, tbl_path: str):
     """
@@ -114,8 +116,9 @@ def step1_convert_to_tbl(tar_path: str, tbl_path: str):
     except AttributeError:
         # Use command-line tool
         import subprocess
+
         print("Using command-line converter...")
-        result = subprocess.run(['tar_to_tbl', tar_path, tbl_path], capture_output=True, text=True)
+        result = subprocess.run(["tar_to_tbl", tar_path, tbl_path], capture_output=True, text=True)
         if result.returncode != 0:
             print(f"ERROR: {result.stderr}")
             return None
@@ -136,6 +139,7 @@ def step1_convert_to_tbl(tar_path: str, tbl_path: str):
 
     return tbl_path
 
+
 def step2_create_simd_pipeline():
     """
     Step 2: Create SIMD-accelerated transform pipeline
@@ -151,10 +155,10 @@ def step2_create_simd_pipeline():
 
     # Create transforms (all SIMD-accelerated)
     transforms = {
-        'resize': turboloader.Resize(224, 224, turboloader.InterpolationMode.BILINEAR),
-        'flip': turboloader.RandomHorizontalFlip(p=0.5),
-        'color_jitter': turboloader.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-        'normalize': turboloader.ImageNetNormalize(to_float=True),
+        "resize": turboloader.Resize(224, 224, turboloader.InterpolationMode.BILINEAR),
+        "flip": turboloader.RandomHorizontalFlip(p=0.5),
+        "color_jitter": turboloader.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        "normalize": turboloader.ImageNetNormalize(to_float=True),
     }
 
     print("Created SIMD transforms:")
@@ -178,7 +182,10 @@ def step2_create_simd_pipeline():
 
     return transforms
 
-def step3_benchmark_full_pipeline(dataset_path: str, transforms: dict, num_workers: int = 8, batch_size: int = 64):
+
+def step3_benchmark_full_pipeline(
+    dataset_path: str, transforms: dict, num_workers: int = 8, batch_size: int = 64
+):
     """
     Step 3: Benchmark complete v1.1.0 pipeline
 
@@ -203,12 +210,12 @@ def step3_benchmark_full_pipeline(dataset_path: str, transforms: dict, num_worke
         if i >= 2:
             break
         for sample in batch:
-            img = sample['image']
+            img = sample["image"]
             # Apply all transforms
-            img = transforms['resize'].apply(img)
-            img = transforms['flip'].apply(img)
-            img = transforms['color_jitter'].apply(img)
-            img = transforms['normalize'].apply(img)
+            img = transforms["resize"].apply(img)
+            img = transforms["flip"].apply(img)
+            img = transforms["color_jitter"].apply(img)
+            img = transforms["normalize"].apply(img)
 
     # Benchmark
     print("Running benchmark...")
@@ -219,13 +226,13 @@ def step3_benchmark_full_pipeline(dataset_path: str, transforms: dict, num_worke
     for batch in loader:
         total_batches += 1
         for sample in batch:
-            img = sample['image']
+            img = sample["image"]
 
             # Apply full SIMD pipeline
-            img = transforms['resize'].apply(img)
-            img = transforms['flip'].apply(img)
-            img = transforms['color_jitter'].apply(img)
-            img = transforms['normalize'].apply(img)
+            img = transforms["resize"].apply(img)
+            img = transforms["flip"].apply(img)
+            img = transforms["color_jitter"].apply(img)
+            img = transforms["normalize"].apply(img)
 
             total_images += 1
 
@@ -262,6 +269,7 @@ def step3_benchmark_full_pipeline(dataset_path: str, transforms: dict, num_worke
 
     return throughput
 
+
 def step4_pytorch_integration(dataset_path: str, transforms: dict):
     """
     Step 4: PyTorch integration example
@@ -280,8 +288,7 @@ def step4_pytorch_integration(dataset_path: str, transforms: dict):
 
         # Create tensor converter
         to_tensor = turboloader.ToTensor(
-            format=turboloader.TensorFormat.PYTORCH_CHW,
-            normalize=True
+            format=turboloader.TensorFormat.PYTORCH_CHW, normalize=True
         )
 
         # Simulate training loop
@@ -300,13 +307,13 @@ def step4_pytorch_integration(dataset_path: str, transforms: dict):
                 images = []
 
                 for sample in batch:
-                    img = sample['image']
+                    img = sample["image"]
 
                     # Apply SIMD transforms
-                    img = transforms['resize'].apply(img)
-                    img = transforms['flip'].apply(img)
-                    img = transforms['color_jitter'].apply(img)
-                    img = transforms['normalize'].apply(img)
+                    img = transforms["resize"].apply(img)
+                    img = transforms["flip"].apply(img)
+                    img = transforms["color_jitter"].apply(img)
+                    img = transforms["normalize"].apply(img)
 
                     # Convert to PyTorch tensor (CHW format)
                     img = to_tensor.apply(img)
@@ -330,7 +337,9 @@ def step4_pytorch_integration(dataset_path: str, transforms: dict):
             epoch_time = time.time() - epoch_start
             epoch_throughput = sample_count / epoch_time
 
-            print(f"  Processed {sample_count} images in {epoch_time:.2f}s ({epoch_throughput:.1f} img/s)")
+            print(
+                f"  Processed {sample_count} images in {epoch_time:.2f}s ({epoch_throughput:.1f} img/s)"
+            )
 
         print()
         print("✅ PyTorch integration complete")
@@ -343,6 +352,7 @@ def step4_pytorch_integration(dataset_path: str, transforms: dict):
         print("Install with: pip install torch")
         print("=" * 80)
         print()
+
 
 def main():
     """
@@ -370,7 +380,7 @@ def main():
         sys.exit(1)
 
     tar_path = sys.argv[1]
-    tbl_path = tar_path.replace('.tar', '.tbl')
+    tbl_path = tar_path.replace(".tar", ".tbl")
 
     if not os.path.exists(tar_path):
         print(f"ERROR: Dataset not found: {tar_path}")
@@ -432,6 +442,7 @@ def main():
     print()
     print("Ready for production ML training!")
     print("=" * 80)
+
 
 if __name__ == "__main__":
     main()

@@ -64,6 +64,7 @@ import turboloader
 
 class AverageMeter:
     """Computes and stores the average and current value."""
+
     def __init__(self):
         self.reset()
 
@@ -82,15 +83,10 @@ class AverageMeter:
 
 def setup_dist(rank, world_size):
     """Initialize distributed training."""
-    os.environ['MASTER_ADDR'] = os.environ.get('MASTER_ADDR', 'localhost')
-    os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', '12355')
+    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+    os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12355")
 
-    dist.init_process_group(
-        backend='nccl',
-        init_method='env://',
-        world_size=world_size,
-        rank=rank
-    )
+    dist.init_process_group(backend="nccl", init_method="env://", world_size=world_size, rank=rank)
     torch.cuda.set_device(rank)
 
 
@@ -116,13 +112,13 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 
-def save_checkpoint(state, is_best, checkpoint_dir, filename='checkpoint.pt'):
+def save_checkpoint(state, is_best, checkpoint_dir, filename="checkpoint.pt"):
     """Save checkpoint and best model."""
     checkpoint_path = os.path.join(checkpoint_dir, filename)
     torch.save(state, checkpoint_path)
 
     if is_best:
-        best_path = os.path.join(checkpoint_dir, 'model_best.pt')
+        best_path = os.path.join(checkpoint_dir, "model_best.pt")
         torch.save(state, best_path)
 
 
@@ -137,14 +133,16 @@ def train_epoch(loader, model, criterion, optimizer, scaler, epoch, device, args
     model.train()
 
     # Transforms
-    transforms = turboloader.Compose([
-        turboloader.Resize(256, 256),
-        turboloader.RandomCrop(224, 224),
-        turboloader.RandomHorizontalFlip(0.5),
-        turboloader.ColorJitter(0.4, 0.4, 0.4, 0.1),
-        turboloader.ImageNetNormalize(),
-        turboloader.ToTensor()
-    ])
+    transforms = turboloader.Compose(
+        [
+            turboloader.Resize(256, 256),
+            turboloader.RandomCrop(224, 224),
+            turboloader.RandomHorizontalFlip(0.5),
+            turboloader.ColorJitter(0.4, 0.4, 0.4, 0.1),
+            turboloader.ImageNetNormalize(),
+            turboloader.ToTensor(),
+        ]
+    )
 
     end = time.time()
 
@@ -157,9 +155,9 @@ def train_epoch(loader, model, criterion, optimizer, scaler, epoch, device, args
         labels = []
 
         for sample in batch:
-            img = transforms.apply(sample['image'])
+            img = transforms.apply(sample["image"])
             images.append(torch.from_numpy(img).float())
-            labels.append(sample['label'])
+            labels.append(sample["label"])
 
         images = torch.stack(images).to(device, non_blocking=True)
         labels = torch.tensor(labels, dtype=torch.long).to(device, non_blocking=True)
@@ -197,19 +195,21 @@ def train_epoch(loader, model, criterion, optimizer, scaler, epoch, device, args
         # Log to TensorBoard
         if writer and batch_idx % args.log_interval == 0:
             global_step = epoch * len(loader) + batch_idx
-            writer.add_scalar('train/loss', losses.avg, global_step)
-            writer.add_scalar('train/acc1', top1.avg, global_step)
-            writer.add_scalar('train/acc5', top5.avg, global_step)
-            writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], global_step)
+            writer.add_scalar("train/loss", losses.avg, global_step)
+            writer.add_scalar("train/acc1", top1.avg, global_step)
+            writer.add_scalar("train/acc5", top5.avg, global_step)
+            writer.add_scalar("train/lr", optimizer.param_groups[0]["lr"], global_step)
 
         # Print progress
         if batch_idx % args.log_interval == 0:
-            print(f'Epoch [{epoch}][{batch_idx}/{len(loader)}]\t'
-                  f'Time {batch_time.avg:.3f}\t'
-                  f'Data {data_time.avg:.3f}\t'
-                  f'Loss {losses.avg:.4f}\t'
-                  f'Acc@1 {top1.avg:.2f}\t'
-                  f'Acc@5 {top5.avg:.2f}')
+            print(
+                f"Epoch [{epoch}][{batch_idx}/{len(loader)}]\t"
+                f"Time {batch_time.avg:.3f}\t"
+                f"Data {data_time.avg:.3f}\t"
+                f"Loss {losses.avg:.4f}\t"
+                f"Acc@1 {top1.avg:.2f}\t"
+                f"Acc@5 {top5.avg:.2f}"
+            )
 
     return losses.avg, top1.avg, top5.avg
 
@@ -224,12 +224,14 @@ def validate(loader, model, criterion, device, args):
     model.eval()
 
     # Validation transforms (deterministic)
-    transforms = turboloader.Compose([
-        turboloader.Resize(256, 256),
-        turboloader.CenterCrop(224, 224),
-        turboloader.ImageNetNormalize(),
-        turboloader.ToTensor()
-    ])
+    transforms = turboloader.Compose(
+        [
+            turboloader.Resize(256, 256),
+            turboloader.CenterCrop(224, 224),
+            turboloader.ImageNetNormalize(),
+            turboloader.ToTensor(),
+        ]
+    )
 
     end = time.time()
 
@@ -240,9 +242,9 @@ def validate(loader, model, criterion, device, args):
             labels = []
 
             for sample in batch:
-                img = transforms.apply(sample['image'])
+                img = transforms.apply(sample["image"])
                 images.append(torch.from_numpy(img).float())
-                labels.append(sample['label'])
+                labels.append(sample["label"])
 
             images = torch.stack(images).to(device, non_blocking=True)
             labels = torch.tensor(labels, dtype=torch.long).to(device, non_blocking=True)
@@ -262,7 +264,7 @@ def validate(loader, model, criterion, device, args):
             batch_time.update(time.time() - end)
             end = time.time()
 
-    print(f'Validation: Loss {losses.avg:.4f} Acc@1 {top1.avg:.2f} Acc@5 {top5.avg:.2f}')
+    print(f"Validation: Loss {losses.avg:.4f} Acc@1 {top1.avg:.2f} Acc@5 {top5.avg:.2f}")
 
     return losses.avg, top1.avg, top5.avg
 
@@ -275,7 +277,7 @@ def train_worker(rank, world_size, args):
     if world_size > 1:
         setup_dist(rank, world_size)
 
-    device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
 
     # Create model
     model = resnet50(num_classes=args.num_classes)
@@ -290,7 +292,7 @@ def train_worker(rank, world_size, args):
         model.parameters(),
         lr=args.lr * world_size,  # Scale with world size
         momentum=0.9,
-        weight_decay=args.weight_decay
+        weight_decay=args.weight_decay,
     )
 
     # Learning rate scheduler with warmup
@@ -309,7 +311,7 @@ def train_worker(rank, world_size, args):
     # TensorBoard writer (rank 0 only)
     writer = None
     if rank == 0:
-        log_dir = os.path.join(args.log_dir, time.strftime('%Y%m%d-%H%M%S'))
+        log_dir = os.path.join(args.log_dir, time.strftime("%Y%m%d-%H%M%S"))
         writer = SummaryWriter(log_dir)
 
     # Resume from checkpoint
@@ -320,13 +322,13 @@ def train_worker(rank, world_size, args):
         if os.path.isfile(args.resume):
             print(f"Loading checkpoint: {args.resume}")
             checkpoint = torch.load(args.resume, map_location=device)
-            start_epoch = checkpoint['epoch'] + 1
-            best_acc1 = checkpoint.get('best_acc1', 0.0)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            start_epoch = checkpoint["epoch"] + 1
+            best_acc1 = checkpoint.get("best_acc1", 0.0)
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             if args.amp:
-                scaler.load_state_dict(checkpoint['scaler_state_dict'])
+                scaler.load_state_dict(checkpoint["scaler_state_dict"])
             print(f"Resumed from epoch {checkpoint['epoch']}")
 
     # Create dataloaders
@@ -336,7 +338,7 @@ def train_worker(rank, world_size, args):
         num_workers=args.num_workers,
         shuffle=True,
         enable_distributed=(world_size > 1),
-        drop_last=True
+        drop_last=True,
     )
 
     val_loader = turboloader.DataLoader(
@@ -344,20 +346,19 @@ def train_worker(rank, world_size, args):
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         shuffle=False,
-        enable_distributed=(world_size > 1)
+        enable_distributed=(world_size > 1),
     )
 
     # Training loop
     for epoch in range(start_epoch, args.epochs):
         print(f'\n{"="*70}')
-        print(f'Epoch {epoch}/{args.epochs}')
+        print(f"Epoch {epoch}/{args.epochs}")
         print(f'Learning Rate: {optimizer.param_groups[0]["lr"]:.6f}')
         print(f'{"="*70}')
 
         # Train
         train_loss, train_acc1, train_acc5 = train_epoch(
-            train_loader, model, criterion, optimizer, scaler,
-            epoch, device, args, writer
+            train_loader, model, criterion, optimizer, scaler, epoch, device, args, writer
         )
 
         # Validate
@@ -368,11 +369,11 @@ def train_worker(rank, world_size, args):
 
         # Log to TensorBoard
         if writer:
-            writer.add_scalar('epoch/train_loss', train_loss, epoch)
-            writer.add_scalar('epoch/train_acc1', train_acc1, epoch)
-            writer.add_scalar('epoch/val_loss', val_loss, epoch)
-            writer.add_scalar('epoch/val_acc1', val_acc1, epoch)
-            writer.add_scalar('epoch/lr', optimizer.param_groups[0]['lr'], epoch)
+            writer.add_scalar("epoch/train_loss", train_loss, epoch)
+            writer.add_scalar("epoch/train_acc1", train_acc1, epoch)
+            writer.add_scalar("epoch/val_loss", val_loss, epoch)
+            writer.add_scalar("epoch/val_acc1", val_acc1, epoch)
+            writer.add_scalar("epoch/lr", optimizer.param_groups[0]["lr"], epoch)
 
         # Save checkpoint (rank 0 only)
         if rank == 0:
@@ -380,25 +381,26 @@ def train_worker(rank, world_size, args):
             best_acc1 = max(val_acc1, best_acc1)
 
             checkpoint = {
-                'epoch': epoch,
-                'model_state_dict': model.module.state_dict() if world_size > 1 else model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'scaler_state_dict': scaler.state_dict() if args.amp else None,
-                'best_acc1': best_acc1,
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'val_acc1': val_acc1,
-                'args': vars(args)
+                "epoch": epoch,
+                "model_state_dict": (
+                    model.module.state_dict() if world_size > 1 else model.state_dict()
+                ),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "scaler_state_dict": scaler.state_dict() if args.amp else None,
+                "best_acc1": best_acc1,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "val_acc1": val_acc1,
+                "args": vars(args),
             }
 
             os.makedirs(args.checkpoint_dir, exist_ok=True)
             save_checkpoint(
-                checkpoint, is_best, args.checkpoint_dir,
-                f'checkpoint_epoch_{epoch}.pt'
+                checkpoint, is_best, args.checkpoint_dir, f"checkpoint_epoch_{epoch}.pt"
             )
 
-            print(f'Checkpoint saved. Best Acc@1: {best_acc1:.2f}%')
+            print(f"Checkpoint saved. Best Acc@1: {best_acc1:.2f}%")
 
         # Synchronize
         if world_size > 1:
@@ -407,8 +409,8 @@ def train_worker(rank, world_size, args):
     # Final results
     if rank == 0:
         print(f'\n{"="*70}')
-        print('Training Complete!')
-        print(f'Best Validation Acc@1: {best_acc1:.2f}%')
+        print("Training Complete!")
+        print(f"Best Validation Acc@1: {best_acc1:.2f}%")
         print(f'{"="*70}')
 
         if writer:
@@ -420,23 +422,25 @@ def train_worker(rank, world_size, args):
 
 def main():
     """Main function."""
-    parser = argparse.ArgumentParser(description='ImageNet ResNet50 Training')
-    parser.add_argument('--train-data', type=str, required=True, help='Training data path')
-    parser.add_argument('--val-data', type=str, required=True, help='Validation data path')
-    parser.add_argument('--batch-size', type=int, default=256, help='Per-GPU batch size')
-    parser.add_argument('--num-workers', type=int, default=8, help='Workers per GPU')
-    parser.add_argument('--epochs', type=int, default=90, help='Number of epochs')
-    parser.add_argument('--lr', type=float, default=0.1, help='Base learning rate')
-    parser.add_argument('--weight-decay', type=float, default=1e-4, help='Weight decay')
-    parser.add_argument('--warmup-epochs', type=int, default=5, help='Warmup epochs')
-    parser.add_argument('--num-classes', type=int, default=1000, help='Number of classes')
-    parser.add_argument('--gpus', type=int, default=None, help='Number of GPUs')
-    parser.add_argument('--amp', action='store_true', help='Use mixed precision')
-    parser.add_argument('--clip-grad', type=float, default=None, help='Gradient clipping')
-    parser.add_argument('--log-interval', type=int, default=100, help='Log interval')
-    parser.add_argument('--log-dir', type=str, default='./runs', help='TensorBoard log dir')
-    parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints', help='Checkpoint dir')
-    parser.add_argument('--resume', type=str, default=None, help='Resume from checkpoint')
+    parser = argparse.ArgumentParser(description="ImageNet ResNet50 Training")
+    parser.add_argument("--train-data", type=str, required=True, help="Training data path")
+    parser.add_argument("--val-data", type=str, required=True, help="Validation data path")
+    parser.add_argument("--batch-size", type=int, default=256, help="Per-GPU batch size")
+    parser.add_argument("--num-workers", type=int, default=8, help="Workers per GPU")
+    parser.add_argument("--epochs", type=int, default=90, help="Number of epochs")
+    parser.add_argument("--lr", type=float, default=0.1, help="Base learning rate")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay")
+    parser.add_argument("--warmup-epochs", type=int, default=5, help="Warmup epochs")
+    parser.add_argument("--num-classes", type=int, default=1000, help="Number of classes")
+    parser.add_argument("--gpus", type=int, default=None, help="Number of GPUs")
+    parser.add_argument("--amp", action="store_true", help="Use mixed precision")
+    parser.add_argument("--clip-grad", type=float, default=None, help="Gradient clipping")
+    parser.add_argument("--log-interval", type=int, default=100, help="Log interval")
+    parser.add_argument("--log-dir", type=str, default="./runs", help="TensorBoard log dir")
+    parser.add_argument(
+        "--checkpoint-dir", type=str, default="./checkpoints", help="Checkpoint dir"
+    )
+    parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint")
 
     args = parser.parse_args()
 
@@ -471,5 +475,5 @@ def main():
         train_worker(0, world_size, args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

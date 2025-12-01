@@ -10,6 +10,7 @@ import numpy as np
 try:
     import torch
     import torchvision.transforms as T
+
     PYTORCH_AVAILABLE = True
 except ImportError:
     PYTORCH_AVAILABLE = False
@@ -17,6 +18,7 @@ except ImportError:
 
 try:
     import turboloader as tl
+
     TURBOLOADER_AVAILABLE = True
 except ImportError:
     TURBOLOADER_AVAILABLE = False
@@ -28,8 +30,9 @@ def create_test_image(height=100, width=100, channels=3):
     return np.random.randint(0, 256, (height, width, channels), dtype=np.uint8)
 
 
-@unittest.skipIf(not PYTORCH_AVAILABLE or not TURBOLOADER_AVAILABLE,
-                 "PyTorch or TurboLoader not available")
+@unittest.skipIf(
+    not PYTORCH_AVAILABLE or not TURBOLOADER_AVAILABLE, "PyTorch or TurboLoader not available"
+)
 class TestPyTorchTransforms(unittest.TestCase):
     """Test TurboLoader transforms against PyTorch/torchvision."""
 
@@ -108,13 +111,7 @@ class TestPyTorchTransforms(unittest.TestCase):
     def test_color_jitter(self):
         """Test color jitter."""
         # TurboLoader
-        tl_jitter = tl.ColorJitter(
-            brightness=0.5,
-            contrast=0.5,
-            saturation=0.5,
-            hue=0.1,
-            seed=42
-        )
+        tl_jitter = tl.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.1, seed=42)
         tl_output = tl_jitter.apply(self.test_image)
 
         self.assertEqual(tl_output.shape, self.test_image.shape)
@@ -163,12 +160,7 @@ class TestPyTorchTransforms(unittest.TestCase):
         """Test random affine."""
         # TurboLoader
         tl_affine = tl.RandomAffine(
-            degrees=15,
-            translate_x=0.1,
-            translate_y=0.1,
-            scale_min=0.9,
-            scale_max=1.1,
-            seed=42
+            degrees=15, translate_x=0.1, translate_y=0.1, scale_min=0.9, scale_max=1.1, seed=42
         )
         tl_output = tl_affine.apply(self.test_image)
 
@@ -178,11 +170,7 @@ class TestPyTorchTransforms(unittest.TestCase):
         """Test random crop with padding."""
         # TurboLoader
         tl_crop = tl.RandomCrop(
-            width=80,
-            height=80,
-            padding=10,
-            pad_mode=tl.PaddingMode.CONSTANT,
-            seed=42
+            width=80, height=80, padding=10, pad_mode=tl.PaddingMode.CONSTANT, seed=42
         )
         tl_output = tl_crop.apply(self.test_image)
 
@@ -209,12 +197,12 @@ class TestPyTorchTransforms(unittest.TestCase):
         """Test PyTorch tensor format conversion."""
         # This would require actual tensor conversion implementation
         # For now, just check the enum exists
-        self.assertTrue(hasattr(tl, 'TensorFormat'))
-        self.assertTrue(hasattr(tl.TensorFormat, 'PYTORCH_CHW'))
+        self.assertTrue(hasattr(tl, "TensorFormat"))
+        self.assertTrue(hasattr(tl.TensorFormat, "PYTORCH_CHW"))
 
     def test_tensor_format_tensorflow(self):
         """Test TensorFlow tensor format."""
-        self.assertTrue(hasattr(tl.TensorFormat, 'TENSORFLOW_HWC'))
+        self.assertTrue(hasattr(tl.TensorFormat, "TENSORFLOW_HWC"))
 
     def test_determinism(self):
         """Test that transforms with same seed are deterministic."""
@@ -276,7 +264,7 @@ class TestSIMDUtilities(unittest.TestCase):
     def test_simd_available(self):
         """Check SIMD availability."""
         features = tl.features()
-        self.assertTrue(features['simd_acceleration'])
+        self.assertTrue(features["simd_acceleration"])
 
     def test_convert_formats(self):
         """Test data format conversions."""
@@ -288,5 +276,5 @@ class TestSIMDUtilities(unittest.TestCase):
         self.assertTrue(True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

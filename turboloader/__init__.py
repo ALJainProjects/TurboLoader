@@ -1,6 +1,6 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.3.1 - CI/CD Build Fixes and Code Quality Improvements
+v2.3.2 - CI/CD Build Fixes, Code Quality, and Black Formatting
 
 New in v2.0.0:
 - Tiered Caching: L1 memory (LRU) + L2 disk cache for 5-10x faster subsequent epochs
@@ -46,58 +46,117 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.3.1"
+__version__ = "2.3.2"
 
 # Import C++ extension module
 try:
     from _turboloader import (
         # Core DataLoader
-        DataLoader, version, features,
+        DataLoader,
+        version,
+        features,
         # TBL v2 Format
-        TblReaderV2, TblWriterV2,
-        SampleFormat, MetadataType,
+        TblReaderV2,
+        TblWriterV2,
+        SampleFormat,
+        MetadataType,
         # Smart Batching
         SmartBatchConfig,
         # Transform Composition
-        Compose, ComposedTransforms,
+        Compose,
+        ComposedTransforms,
         # Transforms (all SIMD-accelerated transforms)
-        Resize, CenterCrop, RandomCrop,
-        RandomHorizontalFlip, RandomVerticalFlip,
-        ColorJitter, GaussianBlur, Grayscale,
-        Normalize, ImageNetNormalize, ToTensor,
-        Pad, RandomRotation, RandomAffine,
-        RandomPerspective, RandomPosterize, RandomSolarize,
-        RandomErasing, AutoAugment, AutoAugmentPolicy,
+        Resize,
+        CenterCrop,
+        RandomCrop,
+        RandomHorizontalFlip,
+        RandomVerticalFlip,
+        ColorJitter,
+        GaussianBlur,
+        Grayscale,
+        Normalize,
+        ImageNetNormalize,
+        ToTensor,
+        Pad,
+        RandomRotation,
+        RandomAffine,
+        RandomPerspective,
+        RandomPosterize,
+        RandomSolarize,
+        RandomErasing,
+        AutoAugment,
+        AutoAugmentPolicy,
         # Modern Augmentations (v1.8.0)
-        MixUp, CutMix, Mosaic, RandAugment, GridMask,
+        MixUp,
+        CutMix,
+        Mosaic,
+        RandAugment,
+        GridMask,
         # Logging (v1.8.0)
-        LogLevel, enable_logging, disable_logging, set_log_level, set_log_output,
+        LogLevel,
+        enable_logging,
+        disable_logging,
+        set_log_level,
+        set_log_output,
         # Enums
-        InterpolationMode, PaddingMode, TensorFormat,
+        InterpolationMode,
+        PaddingMode,
+        TensorFormat,
     )
+
     __all__ = [
-        'DataLoader', 'version', 'features', '__version__',
+        "DataLoader",
+        "version",
+        "features",
+        "__version__",
         # TBL v2
-        'TblReaderV2', 'TblWriterV2', 'SampleFormat', 'MetadataType',
+        "TblReaderV2",
+        "TblWriterV2",
+        "SampleFormat",
+        "MetadataType",
         # Smart Batching
-        'SmartBatchConfig',
+        "SmartBatchConfig",
         # Transform Composition
-        'Compose', 'ComposedTransforms',
+        "Compose",
+        "ComposedTransforms",
         # Transforms
-        'Resize', 'CenterCrop', 'RandomCrop',
-        'RandomHorizontalFlip', 'RandomVerticalFlip',
-        'ColorJitter', 'GaussianBlur', 'Grayscale',
-        'Normalize', 'ImageNetNormalize', 'ToTensor',
-        'Pad', 'RandomRotation', 'RandomAffine',
-        'RandomPerspective', 'RandomPosterize', 'RandomSolarize',
-        'RandomErasing', 'AutoAugment', 'AutoAugmentPolicy',
+        "Resize",
+        "CenterCrop",
+        "RandomCrop",
+        "RandomHorizontalFlip",
+        "RandomVerticalFlip",
+        "ColorJitter",
+        "GaussianBlur",
+        "Grayscale",
+        "Normalize",
+        "ImageNetNormalize",
+        "ToTensor",
+        "Pad",
+        "RandomRotation",
+        "RandomAffine",
+        "RandomPerspective",
+        "RandomPosterize",
+        "RandomSolarize",
+        "RandomErasing",
+        "AutoAugment",
+        "AutoAugmentPolicy",
         # Modern Augmentations (v1.8.0)
-        'MixUp', 'CutMix', 'Mosaic', 'RandAugment', 'GridMask',
+        "MixUp",
+        "CutMix",
+        "Mosaic",
+        "RandAugment",
+        "GridMask",
         # Logging (v1.8.0)
-        'LogLevel', 'enable_logging', 'disable_logging', 'set_log_level', 'set_log_output',
+        "LogLevel",
+        "enable_logging",
+        "disable_logging",
+        "set_log_level",
+        "set_log_output",
         # Enums
-        'InterpolationMode', 'PaddingMode', 'TensorFormat',
+        "InterpolationMode",
+        "PaddingMode",
+        "TensorFormat",
     ]
 except ImportError:
     # Fallback for development/documentation builds
-    __all__ = ['__version__']
+    __all__ = ["__version__"]

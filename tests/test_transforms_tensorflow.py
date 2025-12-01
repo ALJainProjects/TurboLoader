@@ -7,6 +7,7 @@ import numpy as np
 
 try:
     import tensorflow as tf
+
     TENSORFLOW_AVAILABLE = True
 except ImportError:
     TENSORFLOW_AVAILABLE = False
@@ -14,6 +15,7 @@ except ImportError:
 
 try:
     import turboloader as tl
+
     TURBOLOADER_AVAILABLE = True
 except ImportError:
     TURBOLOADER_AVAILABLE = False
@@ -25,8 +27,9 @@ def create_test_image(height=100, width=100, channels=3):
     return np.random.randint(0, 256, (height, width, channels), dtype=np.uint8)
 
 
-@unittest.skipIf(not TENSORFLOW_AVAILABLE or not TURBOLOADER_AVAILABLE,
-                 "TensorFlow or TurboLoader not available")
+@unittest.skipIf(
+    not TENSORFLOW_AVAILABLE or not TURBOLOADER_AVAILABLE, "TensorFlow or TurboLoader not available"
+)
 class TestTensorFlowIntegration(unittest.TestCase):
     """Test TurboLoader with TensorFlow."""
 
@@ -65,8 +68,8 @@ class TestTensorFlowIntegration(unittest.TestCase):
 
     def test_tensor_format_enum(self):
         """Test TensorFlow tensor format enum."""
-        self.assertTrue(hasattr(tl, 'TensorFormat'))
-        self.assertTrue(hasattr(tl.TensorFormat, 'TENSORFLOW_HWC'))
+        self.assertTrue(hasattr(tl, "TensorFormat"))
+        self.assertTrue(hasattr(tl.TensorFormat, "TENSORFLOW_HWC"))
 
     def test_normalization(self):
         """Test normalization for TensorFlow."""
@@ -81,9 +84,11 @@ class TestTensorFlowIntegration(unittest.TestCase):
 
     def test_resize_modes(self):
         """Test different resize interpolation modes."""
-        for mode in [tl.InterpolationMode.NEAREST,
-                     tl.InterpolationMode.BILINEAR,
-                     tl.InterpolationMode.BICUBIC]:
+        for mode in [
+            tl.InterpolationMode.NEAREST,
+            tl.InterpolationMode.BILINEAR,
+            tl.InterpolationMode.BICUBIC,
+        ]:
             tl_resize = tl.Resize(64, 64, mode)
             output = tl_resize.apply(self.test_image)
             self.assertEqual(output.shape, (64, 64, 3))
@@ -130,5 +135,6 @@ class TestTensorFlowIntegration(unittest.TestCase):
         # TurboLoader should be competitive
         self.assertLess(tl_time, tf_time * 2.0)  # At most 2x slower
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main(verbosity=2)

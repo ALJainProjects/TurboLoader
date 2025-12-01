@@ -21,6 +21,7 @@ import os
 import time
 import sys
 
+
 def convert_tar_to_tbl(tar_path: str, tbl_path: str):
     """
     Convert TAR archive to TBL binary format
@@ -66,7 +67,8 @@ def convert_tar_to_tbl(tar_path: str, tbl_path: str):
         # If convert_tar_to_tbl is not available in Python API, use command-line tool
         print("Note: Using command-line converter (tar_to_tbl)")
         import subprocess
-        result = subprocess.run(['tar_to_tbl', tar_path, tbl_path], capture_output=True, text=True)
+
+        result = subprocess.run(["tar_to_tbl", tar_path, tbl_path], capture_output=True, text=True)
         if result.returncode != 0:
             print(f"ERROR: Conversion failed: {result.stderr}")
             return False
@@ -92,6 +94,7 @@ def convert_tar_to_tbl(tar_path: str, tbl_path: str):
     print()
 
     return True
+
 
 def demonstrate_random_access(tbl_path: str):
     """
@@ -120,6 +123,7 @@ def demonstrate_random_access(tbl_path: str):
 
     # Test random access performance
     import random
+
     sample_indices = random.sample(range(total_samples), min(10, total_samples))
 
     print(f"Accessing {len(sample_indices)} random samples...")
@@ -135,7 +139,7 @@ def demonstrate_random_access(tbl_path: str):
     for i, batch in enumerate(loader):
         if i in sample_indices:
             for sample in batch:
-                img = sample['image']
+                img = sample["image"]
                 count += 1
                 print(f"  Sample {i}: {img.shape} - {img.dtype}")
         if count >= len(sample_indices):
@@ -148,6 +152,7 @@ def demonstrate_random_access(tbl_path: str):
     print(f"Average: {elapsed*1000/count:.2f} ms per sample (O(1) with mmap)")
     print("=" * 80)
     print()
+
 
 def compare_tbl_vs_tar(tar_path: str, tbl_path: str, num_workers: int = 8):
     """
@@ -220,6 +225,7 @@ def compare_tbl_vs_tar(tar_path: str, tbl_path: str, num_workers: int = 8):
     print("  ✅ Multi-format support in metadata")
     print("=" * 80)
 
+
 def main():
     """
     Main TBL conversion workflow demonstration
@@ -244,7 +250,7 @@ def main():
         sys.exit(1)
 
     tar_path = sys.argv[1]
-    tbl_path = tar_path.replace('.tar', '.tbl')
+    tbl_path = tar_path.replace(".tar", ".tbl")
 
     # Step 1: Convert TAR to TBL
     if not convert_tar_to_tbl(tar_path, tbl_path):
@@ -265,6 +271,7 @@ def main():
     print("You can now use it with TurboLoader:")
     print(f"  loader = turboloader.DataLoader('{tbl_path}', batch_size=64, num_workers=8)")
     print()
+
 
 if __name__ == "__main__":
     main()

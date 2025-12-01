@@ -27,18 +27,19 @@ import argparse
 
 # Attempt to import all libraries
 LIBRARIES_AVAILABLE = {
-    'turboloader': False,
-    'torch': False,
-    'tensorflow': False,
-    'ffcv': False,
-    'nvidia_dali': False,
+    "turboloader": False,
+    "torch": False,
+    "tensorflow": False,
+    "ffcv": False,
+    "nvidia_dali": False,
 }
 
 try:
     import turboloader
-    LIBRARIES_AVAILABLE['turboloader'] = True
+
+    LIBRARIES_AVAILABLE["turboloader"] = True
     # Debug: Check if Compose is available
-    if not hasattr(turboloader, 'Compose'):
+    if not hasattr(turboloader, "Compose"):
         print(f"WARNING: turboloader.Compose not available. Module path: {turboloader.__file__}")
         print(f"Available attributes: {[x for x in dir(turboloader) if not x.startswith('_')]}")
 except ImportError as e:
@@ -50,13 +51,15 @@ try:
     import torch.optim as optim
     from torch.utils.data import DataLoader, Dataset
     import torchvision.transforms as T
-    LIBRARIES_AVAILABLE['torch'] = True
+
+    LIBRARIES_AVAILABLE["torch"] = True
 except ImportError:
     print("WARNING: PyTorch not available")
 
 try:
     import tensorflow as tf
-    LIBRARIES_AVAILABLE['tensorflow'] = True
+
+    LIBRARIES_AVAILABLE["tensorflow"] = True
 except (ImportError, AttributeError) as e:
     print(f"WARNING: TensorFlow not available - {type(e).__name__}: {e}")
 
@@ -64,7 +67,8 @@ try:
     from ffcv.loader import Loader, OrderOption
     from ffcv.writer import DatasetWriter
     from ffcv.fields import RGBImageField, IntField
-    LIBRARIES_AVAILABLE['ffcv'] = True
+
+    LIBRARIES_AVAILABLE["ffcv"] = True
 except ImportError:
     print("WARNING: FFCV not available")
 
@@ -73,7 +77,8 @@ try:
     from nvidia.dali.pipeline import Pipeline
     import nvidia.dali.ops as ops
     import nvidia.dali.types as types
-    LIBRARIES_AVAILABLE['nvidia_dali'] = True
+
+    LIBRARIES_AVAILABLE["nvidia_dali"] = True
 except ImportError:
     print("WARNING: NVIDIA DALI not available")
 
@@ -93,13 +98,13 @@ class BenchmarkResults:
 
     def print_table(self):
         """Print formatted results table"""
-        print("\n" + "="*100)
+        print("\n" + "=" * 100)
         print("COMPREHENSIVE BENCHMARK RESULTS")
-        print("="*100)
+        print("=" * 100)
 
         for category, libraries in self.results.items():
             print(f"\n{category}")
-            print("-"*100)
+            print("-" * 100)
 
             # Find all metrics
             all_metrics = set()
@@ -129,31 +134,33 @@ class BenchmarkResults:
                         print(f"{'N/A':>18}  ", end="")
                 print()
 
-        print("\n" + "="*100)
+        print("\n" + "=" * 100)
 
     def save_json(self, path: str):
         """Save results to JSON"""
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(self.results, f, indent=2)
         print(f"\nResults saved to: {path}")
 
 
-def benchmark_data_loading(tar_path: str, results: BenchmarkResults, num_workers: int = 4,
-                           batch_size: int = 32, num_batches: int = 100):
+def benchmark_data_loading(
+    tar_path: str,
+    results: BenchmarkResults,
+    num_workers: int = 4,
+    batch_size: int = 32,
+    num_batches: int = 100,
+):
     """Benchmark pure data loading speed (no transforms)"""
-    print("\n" + "="*100)
+    print("\n" + "=" * 100)
     print("BENCHMARK 1: Data Loading Speed (no transforms)")
-    print("="*100)
+    print("=" * 100)
 
     # TurboLoader
-    if LIBRARIES_AVAILABLE['turboloader'] and LIBRARIES_AVAILABLE['torch']:
+    if LIBRARIES_AVAILABLE["turboloader"] and LIBRARIES_AVAILABLE["torch"]:
         print("\nTesting TurboLoader...")
         try:
             loader = turboloader.DataLoader(
-                tar_path,
-                batch_size=batch_size,
-                num_workers=num_workers,
-                shuffle=False
+                tar_path, batch_size=batch_size, num_workers=num_workers, shuffle=False
             )
 
             start = time.time()
@@ -175,7 +182,7 @@ def benchmark_data_loading(tar_path: str, results: BenchmarkResults, num_workers
             print(f"  ERROR: {e}")
 
     # PyTorch DataLoader
-    if LIBRARIES_AVAILABLE['torch']:
+    if LIBRARIES_AVAILABLE["torch"]:
         print("\nTesting PyTorch DataLoader...")
         try:
             import tarfile
@@ -185,8 +192,12 @@ def benchmark_data_loading(tar_path: str, results: BenchmarkResults, num_workers
             class TarDataset(Dataset):
                 def __init__(self, tar_path):
                     self.tar_path = tar_path
-                    self.tar = tarfile.open(tar_path, 'r')
-                    self.members = [m for m in self.tar.getmembers() if m.name.endswith(('.jpg', '.jpeg', '.png'))]
+                    self.tar = tarfile.open(tar_path, "r")
+                    self.members = [
+                        m
+                        for m in self.tar.getmembers()
+                        if m.name.endswith((".jpg", ".jpeg", ".png"))
+                    ]
 
                 def __len__(self):
                     return len(self.members)
@@ -198,8 +209,13 @@ def benchmark_data_loading(tar_path: str, results: BenchmarkResults, num_workers
                     return np.array(img, dtype=np.float32) / 255.0
 
             dataset = TarDataset(tar_path)
-            loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers,
-                              shuffle=False, pin_memory=True)
+            loader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                shuffle=False,
+                pin_memory=True,
+            )
 
             start = time.time()
             images_loaded = 0
@@ -218,27 +234,28 @@ def benchmark_data_loading(tar_path: str, results: BenchmarkResults, num_workers
             print(f"  ERROR: {e}")
 
     # TensorFlow tf.data
-    if LIBRARIES_AVAILABLE['tensorflow']:
+    if LIBRARIES_AVAILABLE["tensorflow"]:
         print("\nTesting TensorFlow tf.data...")
         try:
             import tarfile
 
             def load_tar_images():
-                tar = tarfile.open(tar_path, 'r')
+                tar = tarfile.open(tar_path, "r")
                 for member in tar.getmembers():
-                    if member.name.endswith(('.jpg', '.jpeg', '.png')):
+                    if member.name.endswith((".jpg", ".jpeg", ".png")):
                         f = tar.extractfile(member)
                         img_bytes = f.read()
                         yield img_bytes
 
             dataset = tf.data.Dataset.from_generator(
-                load_tar_images,
-                output_signature=tf.TensorSpec(shape=(), dtype=tf.string)
+                load_tar_images, output_signature=tf.TensorSpec(shape=(), dtype=tf.string)
             )
-            dataset = dataset.map(lambda x: tf.image.decode_jpeg(x, channels=3),
-                                num_parallel_calls=tf.data.AUTOTUNE)
-            dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 255.0,
-                                num_parallel_calls=tf.data.AUTOTUNE)
+            dataset = dataset.map(
+                lambda x: tf.image.decode_jpeg(x, channels=3), num_parallel_calls=tf.data.AUTOTUNE
+            )
+            dataset = dataset.map(
+                lambda x: tf.cast(x, tf.float32) / 255.0, num_parallel_calls=tf.data.AUTOTUNE
+            )
             dataset = dataset.batch(batch_size)
             dataset = dataset.prefetch(tf.data.AUTOTUNE)
 
@@ -257,30 +274,39 @@ def benchmark_data_loading(tar_path: str, results: BenchmarkResults, num_workers
             print(f"  ERROR: {e}")
 
 
-def benchmark_transforms(tar_path: str, results: BenchmarkResults, num_workers: int = 4,
-                        batch_size: int = 32, num_batches: int = 100):
+def benchmark_transforms(
+    tar_path: str,
+    results: BenchmarkResults,
+    num_workers: int = 4,
+    batch_size: int = 32,
+    num_batches: int = 100,
+):
     """Benchmark data loading + transforms/augmentation"""
-    print("\n" + "="*100)
-    print("BENCHMARK 2: Data Loading + Transforms (RandomResizedCrop, RandomHorizontalFlip, Normalize)")
-    print("="*100)
+    print("\n" + "=" * 100)
+    print(
+        "BENCHMARK 2: Data Loading + Transforms (RandomResizedCrop, RandomHorizontalFlip, Normalize)"
+    )
+    print("=" * 100)
 
     # TurboLoader with SIMD transforms
-    if LIBRARIES_AVAILABLE['turboloader'] and LIBRARIES_AVAILABLE['torch']:
+    if LIBRARIES_AVAILABLE["turboloader"] and LIBRARIES_AVAILABLE["torch"]:
         print("\nTesting TurboLoader (SIMD transforms)...")
         try:
-            transforms = turboloader.Compose([
-                turboloader.Resize(256, 256),
-                turboloader.RandomCrop(224, 224),
-                turboloader.RandomHorizontalFlip(0.5),
-                turboloader.ImageNetNormalize()
-            ])
+            transforms = turboloader.Compose(
+                [
+                    turboloader.Resize(256, 256),
+                    turboloader.RandomCrop(224, 224),
+                    turboloader.RandomHorizontalFlip(0.5),
+                    turboloader.ImageNetNormalize(),
+                ]
+            )
 
             loader = turboloader.DataLoader(
                 tar_path,
                 batch_size=batch_size,
                 num_workers=num_workers,
                 shuffle=True,
-                transform=transforms
+                transform=transforms,
             )
 
             start = time.time()
@@ -302,26 +328,32 @@ def benchmark_transforms(tar_path: str, results: BenchmarkResults, num_workers: 
             print(f"  ERROR: {e}")
 
     # PyTorch with torchvision transforms
-    if LIBRARIES_AVAILABLE['torch']:
+    if LIBRARIES_AVAILABLE["torch"]:
         print("\nTesting PyTorch (torchvision transforms)...")
         try:
             import tarfile
             from PIL import Image
             import io
 
-            transform = T.Compose([
-                T.RandomResizedCrop(224),
-                T.RandomHorizontalFlip(0.5),
-                T.ToTensor(),
-                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
+            transform = T.Compose(
+                [
+                    T.RandomResizedCrop(224),
+                    T.RandomHorizontalFlip(0.5),
+                    T.ToTensor(),
+                    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]
+            )
 
             class TarDataset(Dataset):
                 def __init__(self, tar_path, transform):
                     self.tar_path = tar_path
                     self.transform = transform
-                    self.tar = tarfile.open(tar_path, 'r')
-                    self.members = [m for m in self.tar.getmembers() if m.name.endswith(('.jpg', '.jpeg', '.png'))]
+                    self.tar = tarfile.open(tar_path, "r")
+                    self.members = [
+                        m
+                        for m in self.tar.getmembers()
+                        if m.name.endswith((".jpg", ".jpeg", ".png"))
+                    ]
 
                 def __len__(self):
                     return len(self.members)
@@ -333,8 +365,13 @@ def benchmark_transforms(tar_path: str, results: BenchmarkResults, num_workers: 
                     return self.transform(img)
 
             dataset = TarDataset(tar_path, transform)
-            loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers,
-                              shuffle=True, pin_memory=True)
+            loader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                shuffle=True,
+                pin_memory=True,
+            )
 
             start = time.time()
             images_loaded = 0
@@ -353,7 +390,7 @@ def benchmark_transforms(tar_path: str, results: BenchmarkResults, num_workers: 
             print(f"  ERROR: {e}")
 
     # TensorFlow with tf.image
-    if LIBRARIES_AVAILABLE['tensorflow']:
+    if LIBRARIES_AVAILABLE["tensorflow"]:
         print("\nTesting TensorFlow (tf.image transforms)...")
         try:
             import tarfile
@@ -365,21 +402,22 @@ def benchmark_transforms(tar_path: str, results: BenchmarkResults, num_workers: 
                 return image
 
             def load_tar_images():
-                tar = tarfile.open(tar_path, 'r')
+                tar = tarfile.open(tar_path, "r")
                 for member in tar.getmembers():
-                    if member.name.endswith(('.jpg', '.jpeg', '.png')):
+                    if member.name.endswith((".jpg", ".jpeg", ".png")):
                         f = tar.extractfile(member)
                         img_bytes = f.read()
                         yield img_bytes
 
             dataset = tf.data.Dataset.from_generator(
-                load_tar_images,
-                output_signature=tf.TensorSpec(shape=(), dtype=tf.string)
+                load_tar_images, output_signature=tf.TensorSpec(shape=(), dtype=tf.string)
             )
-            dataset = dataset.map(lambda x: tf.image.decode_jpeg(x, channels=3),
-                                num_parallel_calls=tf.data.AUTOTUNE)
-            dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 255.0,
-                                num_parallel_calls=tf.data.AUTOTUNE)
+            dataset = dataset.map(
+                lambda x: tf.image.decode_jpeg(x, channels=3), num_parallel_calls=tf.data.AUTOTUNE
+            )
+            dataset = dataset.map(
+                lambda x: tf.cast(x, tf.float32) / 255.0, num_parallel_calls=tf.data.AUTOTUNE
+            )
             dataset = dataset.map(transform_tf, num_parallel_calls=tf.data.AUTOTUNE)
             dataset = dataset.batch(batch_size)
             dataset = dataset.prefetch(tf.data.AUTOTUNE)
@@ -399,33 +437,39 @@ def benchmark_transforms(tar_path: str, results: BenchmarkResults, num_workers: 
             print(f"  ERROR: {e}")
 
 
-def benchmark_end_to_end_training(tar_path: str, results: BenchmarkResults,
-                                  num_workers: int = 4, batch_size: int = 32,
-                                  num_epochs: int = 1):
+def benchmark_end_to_end_training(
+    tar_path: str,
+    results: BenchmarkResults,
+    num_workers: int = 4,
+    batch_size: int = 32,
+    num_epochs: int = 1,
+):
     """Benchmark end-to-end training throughput with ResNet18"""
-    print("\n" + "="*100)
+    print("\n" + "=" * 100)
     print("BENCHMARK 3: End-to-End Training (ResNet18, 1 epoch)")
-    print("="*100)
+    print("=" * 100)
 
     # TurboLoader + PyTorch
-    if LIBRARIES_AVAILABLE['turboloader'] and LIBRARIES_AVAILABLE['torch']:
+    if LIBRARIES_AVAILABLE["turboloader"] and LIBRARIES_AVAILABLE["torch"]:
         print("\nTesting TurboLoader + PyTorch...")
         try:
             from torchvision.models import resnet18
 
-            transforms = turboloader.Compose([
-                turboloader.Resize(256, 256),
-                turboloader.RandomCrop(224, 224),
-                turboloader.RandomHorizontalFlip(0.5),
-                turboloader.ImageNetNormalize()
-            ])
+            transforms = turboloader.Compose(
+                [
+                    turboloader.Resize(256, 256),
+                    turboloader.RandomCrop(224, 224),
+                    turboloader.RandomHorizontalFlip(0.5),
+                    turboloader.ImageNetNormalize(),
+                ]
+            )
 
             loader = turboloader.DataLoader(
                 tar_path,
                 batch_size=batch_size,
                 num_workers=num_workers,
                 shuffle=True,
-                transform=transforms
+                transform=transforms,
             )
 
             model = resnet18(num_classes=1000)
@@ -441,8 +485,8 @@ def benchmark_end_to_end_training(tar_path: str, results: BenchmarkResults,
             for epoch in range(num_epochs):
                 for batch in loader:
                     # batch is a dict with 'image' key containing numpy array
-                    if isinstance(batch, dict) and 'image' in batch:
-                        images_np = batch['image']
+                    if isinstance(batch, dict) and "image" in batch:
+                        images_np = batch["image"]
                     else:
                         images_np = batch
 
@@ -467,7 +511,7 @@ def benchmark_end_to_end_training(tar_path: str, results: BenchmarkResults,
             print(f"  ERROR: {e}")
 
     # PyTorch DataLoader + PyTorch
-    if LIBRARIES_AVAILABLE['torch']:
+    if LIBRARIES_AVAILABLE["torch"]:
         print("\nTesting PyTorch DataLoader + PyTorch...")
         try:
             import tarfile
@@ -475,19 +519,25 @@ def benchmark_end_to_end_training(tar_path: str, results: BenchmarkResults,
             import io
             from torchvision.models import resnet18
 
-            transform = T.Compose([
-                T.RandomResizedCrop(224),
-                T.RandomHorizontalFlip(0.5),
-                T.ToTensor(),
-                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
+            transform = T.Compose(
+                [
+                    T.RandomResizedCrop(224),
+                    T.RandomHorizontalFlip(0.5),
+                    T.ToTensor(),
+                    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]
+            )
 
             class TarDataset(Dataset):
                 def __init__(self, tar_path, transform):
                     self.tar_path = tar_path
                     self.transform = transform
-                    self.tar = tarfile.open(tar_path, 'r')
-                    self.members = [m for m in self.tar.getmembers() if m.name.endswith(('.jpg', '.jpeg', '.png'))]
+                    self.tar = tarfile.open(tar_path, "r")
+                    self.members = [
+                        m
+                        for m in self.tar.getmembers()
+                        if m.name.endswith((".jpg", ".jpeg", ".png"))
+                    ]
 
                 def __len__(self):
                     return len(self.members)
@@ -499,8 +549,13 @@ def benchmark_end_to_end_training(tar_path: str, results: BenchmarkResults,
                     return self.transform(img), 0
 
             dataset = TarDataset(tar_path, transform)
-            loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers,
-                              shuffle=True, pin_memory=True)
+            loader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                shuffle=True,
+                pin_memory=True,
+            )
 
             model = resnet18(num_classes=1000)
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -536,33 +591,37 @@ def benchmark_end_to_end_training(tar_path: str, results: BenchmarkResults,
 
 def benchmark_file_conversion(tar_path: str, results: BenchmarkResults):
     """Benchmark file format conversion speed and compression ratio"""
-    print("\n" + "="*100)
+    print("\n" + "=" * 100)
     print("BENCHMARK 4: File Format Conversion (TAR -> optimized formats)")
-    print("="*100)
+    print("=" * 100)
 
     tar_size = os.path.getsize(tar_path) / (1024 * 1024)  # MB
     print(f"\nOriginal TAR size: {tar_size:.2f} MB")
 
     # Count number of images
     import tarfile
-    with tarfile.open(tar_path, 'r') as tar:
-        num_images = len([m for m in tar.getmembers() if m.name.endswith(('.jpg', '.jpeg', '.png'))])
+
+    with tarfile.open(tar_path, "r") as tar:
+        num_images = len(
+            [m for m in tar.getmembers() if m.name.endswith((".jpg", ".jpeg", ".png"))]
+        )
     print(f"Number of images: {num_images}")
 
     # TAR -> TBL v2 (TurboLoader)
-    if LIBRARIES_AVAILABLE['turboloader']:
+    if LIBRARIES_AVAILABLE["turboloader"]:
         print("\nTesting TAR -> TBL v2 conversion...")
         try:
             import subprocess
-            tbl_path = tar_path.replace('.tar', '.tbl')
+
+            tbl_path = tar_path.replace(".tar", ".tbl")
 
             start = time.time()
             # Use tar_to_tbl converter
             result = subprocess.run(
-                ['./build/tar_to_tbl', tar_path, tbl_path],
+                ["./build/tar_to_tbl", tar_path, tbl_path],
                 capture_output=True,
                 text=True,
-                cwd='/Users/arnavjain/turboloader'
+                cwd="/Users/arnavjain/turboloader",
             )
             elapsed = time.time() - start
 
@@ -585,20 +644,24 @@ def benchmark_file_conversion(tar_path: str, results: BenchmarkResults):
             print(f"  ERROR: {e}")
 
     # TAR -> FFCV format
-    if LIBRARIES_AVAILABLE['ffcv'] and LIBRARIES_AVAILABLE['torch']:
+    if LIBRARIES_AVAILABLE["ffcv"] and LIBRARIES_AVAILABLE["torch"]:
         print("\nTesting TAR -> FFCV conversion...")
         try:
             import tarfile
             from PIL import Image
             import io
 
-            ffcv_path = tar_path.replace('.tar', '.beton')
+            ffcv_path = tar_path.replace(".tar", ".beton")
 
             # Create temporary dataset
             class TarDatasetFFCV(Dataset):
                 def __init__(self, tar_path):
-                    self.tar = tarfile.open(tar_path, 'r')
-                    self.members = [m for m in self.tar.getmembers() if m.name.endswith(('.jpg', '.jpeg', '.png'))]
+                    self.tar = tarfile.open(tar_path, "r")
+                    self.members = [
+                        m
+                        for m in self.tar.getmembers()
+                        if m.name.endswith((".jpg", ".jpeg", ".png"))
+                    ]
 
                 def __len__(self):
                     return len(self.members)
@@ -612,10 +675,7 @@ def benchmark_file_conversion(tar_path: str, results: BenchmarkResults):
             dataset = TarDatasetFFCV(tar_path)
 
             start = time.time()
-            writer = DatasetWriter(ffcv_path, {
-                'image': RGBImageField(),
-                'label': IntField()
-            })
+            writer = DatasetWriter(ffcv_path, {"image": RGBImageField(), "label": IntField()})
             writer.from_indexed_dataset(dataset)
             elapsed = time.time() - start
 
@@ -637,13 +697,20 @@ def benchmark_file_conversion(tar_path: str, results: BenchmarkResults):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Comprehensive TurboLoader Benchmark')
-    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
-                        help='Path to TAR file containing images')
-    parser.add_argument('--workers', type=int, default=4, help='Number of worker threads')
-    parser.add_argument('--batch-size', type=int, default=32, help='Batch size')
-    parser.add_argument('--num-batches', type=int, default=100, help='Number of batches to test')
-    parser.add_argument('--output', type=str, default='benchmark_results.json', help='Output JSON file')
+    parser = argparse.ArgumentParser(description="Comprehensive TurboLoader Benchmark")
+    parser.add_argument(
+        "--tar-path",
+        "-tp",
+        type=str,
+        default="/private/tmp/benchmark_datasets/bench_2k/dataset.tar",
+        help="Path to TAR file containing images",
+    )
+    parser.add_argument("--workers", type=int, default=4, help="Number of worker threads")
+    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
+    parser.add_argument("--num-batches", type=int, default=100, help="Number of batches to test")
+    parser.add_argument(
+        "--output", type=str, default="benchmark_results.json", help="Output JSON file"
+    )
 
     args = parser.parse_args()
 
@@ -651,9 +718,9 @@ def main():
         print(f"ERROR: TAR file not found: {args.tar_path}")
         sys.exit(1)
 
-    print("="*100)
+    print("=" * 100)
     print("COMPREHENSIVE TURBOLOADER BENCHMARK SUITE")
-    print("="*100)
+    print("=" * 100)
     print(f"\nDataset: {args.tar_path}")
     print(f"Workers: {args.workers}")
     print(f"Batch size: {args.batch_size}")
@@ -668,12 +735,16 @@ def main():
 
     # Run benchmarks
     try:
-        benchmark_data_loading(args.tar_path, results, args.workers, args.batch_size, args.num_batches)
+        benchmark_data_loading(
+            args.tar_path, results, args.workers, args.batch_size, args.num_batches
+        )
     except Exception as e:
         print(f"\nERROR in data loading benchmark: {e}")
 
     try:
-        benchmark_transforms(args.tar_path, results, args.workers, args.batch_size, args.num_batches)
+        benchmark_transforms(
+            args.tar_path, results, args.workers, args.batch_size, args.num_batches
+        )
     except Exception as e:
         print(f"\nERROR in transforms benchmark: {e}")
 
@@ -691,9 +762,9 @@ def main():
     results.print_table()
     results.save_json(args.output)
 
-    print("\n" + "="*100)
+    print("\n" + "=" * 100)
     print("BENCHMARK COMPLETE")
-    print("="*100)
+    print("=" * 100)
 
 
 if __name__ == "__main__":

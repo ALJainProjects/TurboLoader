@@ -25,12 +25,14 @@ class TestVersion:
     def test_version_is_210(self):
         """Verify version is 2.1.0"""
         import turboloader
+
         assert turboloader.__version__ == "2.1.0"
 
     def test_version_function(self):
         """Test version() function returns correct version"""
         try:
             import turboloader
+
             assert turboloader.version() == "2.1.0"
         except (ImportError, AttributeError):
             pytest.skip("C++ module not built")
@@ -62,9 +64,9 @@ class TestPipeOperator:
             import turboloader
 
             pipeline = (
-                turboloader.Resize(224, 224) |
-                turboloader.RandomHorizontalFlip(0.5) |
-                turboloader.ImageNetNormalize()
+                turboloader.Resize(224, 224)
+                | turboloader.RandomHorizontalFlip(0.5)
+                | turboloader.ImageNetNormalize()
             )
 
             result = pipeline.apply(sample_image)
@@ -94,10 +96,9 @@ class TestPipeOperator:
             import turboloader
 
             # Using Compose
-            compose_pipeline = turboloader.Compose([
-                turboloader.Resize(224, 224),
-                turboloader.CenterCrop(200, 200)
-            ])
+            compose_pipeline = turboloader.Compose(
+                [turboloader.Resize(224, 224), turboloader.CenterCrop(200, 200)]
+            )
 
             # Using pipe operator
             pipe_pipeline = turboloader.Resize(224, 224) | turboloader.CenterCrop(200, 200)
@@ -116,9 +117,9 @@ class TestPipeOperator:
             import turboloader
 
             pipeline = (
-                turboloader.Resize(224, 224) |
-                turboloader.RandomHorizontalFlip(0.5) |
-                turboloader.ImageNetNormalize()
+                turboloader.Resize(224, 224)
+                | turboloader.RandomHorizontalFlip(0.5)
+                | turboloader.ImageNetNormalize()
             )
 
             assert len(pipeline) == 3
@@ -146,6 +147,7 @@ class TestNewFeatures:
         """Test features() includes new v2.0.0 features"""
         try:
             import turboloader
+
             features = turboloader.features()
 
             assert features["version"] == "2.1.0"
@@ -176,6 +178,7 @@ class TestExistingTransforms:
         """Test Resize transform"""
         try:
             import turboloader
+
             resize = turboloader.Resize(128, 128)
             result = resize.apply(sample_image)
             assert result.shape == (128, 128, 3)
@@ -186,6 +189,7 @@ class TestExistingTransforms:
         """Test CenterCrop transform"""
         try:
             import turboloader
+
             crop = turboloader.CenterCrop(128, 128)
             result = crop.apply(sample_image)
             assert result.shape == (128, 128, 3)
@@ -196,6 +200,7 @@ class TestExistingTransforms:
         """Test RandomHorizontalFlip transform"""
         try:
             import turboloader
+
             flip = turboloader.RandomHorizontalFlip(1.0)  # Always flip
             result = flip.apply(sample_image)
             assert result.shape == sample_image.shape
@@ -208,6 +213,7 @@ class TestExistingTransforms:
         """Test ColorJitter transform"""
         try:
             import turboloader
+
             jitter = turboloader.ColorJitter(0.2, 0.2, 0.2, 0.1)
             result = jitter.apply(sample_image)
             assert result.shape == sample_image.shape
@@ -218,6 +224,7 @@ class TestExistingTransforms:
         """Test Normalize transform"""
         try:
             import turboloader
+
             normalize = turboloader.ImageNetNormalize()
             result = normalize.apply(sample_image)
             assert result.shape == sample_image.shape
@@ -237,7 +244,8 @@ class TestModernAugmentations:
         """Test MixUp class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'MixUp')
+
+            assert hasattr(turboloader, "MixUp")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -245,7 +253,8 @@ class TestModernAugmentations:
         """Test CutMix class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'CutMix')
+
+            assert hasattr(turboloader, "CutMix")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -253,7 +262,8 @@ class TestModernAugmentations:
         """Test Mosaic class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'Mosaic')
+
+            assert hasattr(turboloader, "Mosaic")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -261,7 +271,8 @@ class TestModernAugmentations:
         """Test RandAugment class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'RandAugment')
+
+            assert hasattr(turboloader, "RandAugment")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -269,7 +280,8 @@ class TestModernAugmentations:
         """Test GridMask class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'GridMask')
+
+            assert hasattr(turboloader, "GridMask")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -286,9 +298,8 @@ class TestPipeOperatorWithModernAugmentations:
         try:
             import turboloader
 
-            pipeline = (
-                turboloader.Resize(224, 224) |
-                turboloader.RandAugment(num_ops=2, magnitude=9)
+            pipeline = turboloader.Resize(224, 224) | turboloader.RandAugment(
+                num_ops=2, magnitude=9
             )
 
             result = pipeline.apply(sample_image)
@@ -301,10 +312,9 @@ class TestPipeOperatorWithModernAugmentations:
         try:
             import turboloader
 
-            pipeline = (
-                turboloader.Resize(224, 224) |
-                turboloader.GridMask(d=0.5, ratio=0.6, p=1.0)  # Always apply
-            )
+            pipeline = turboloader.Resize(224, 224) | turboloader.GridMask(
+                d=0.5, ratio=0.6, p=1.0
+            )  # Always apply
 
             result = pipeline.apply(sample_image)
             assert result.shape == (224, 224, 3)
@@ -322,27 +332,57 @@ class TestAllExports:
 
             expected_exports = [
                 # Core
-                'DataLoader', 'version', 'features', '__version__',
+                "DataLoader",
+                "version",
+                "features",
+                "__version__",
                 # TBL v2
-                'TblReaderV2', 'TblWriterV2', 'SampleFormat', 'MetadataType',
+                "TblReaderV2",
+                "TblWriterV2",
+                "SampleFormat",
+                "MetadataType",
                 # Smart Batching
-                'SmartBatchConfig',
+                "SmartBatchConfig",
                 # Transform Composition
-                'Compose', 'ComposedTransforms',
+                "Compose",
+                "ComposedTransforms",
                 # Transforms
-                'Resize', 'CenterCrop', 'RandomCrop',
-                'RandomHorizontalFlip', 'RandomVerticalFlip',
-                'ColorJitter', 'GaussianBlur', 'Grayscale',
-                'Normalize', 'ImageNetNormalize', 'ToTensor',
-                'Pad', 'RandomRotation', 'RandomAffine',
-                'RandomPerspective', 'RandomPosterize', 'RandomSolarize',
-                'RandomErasing', 'AutoAugment', 'AutoAugmentPolicy',
+                "Resize",
+                "CenterCrop",
+                "RandomCrop",
+                "RandomHorizontalFlip",
+                "RandomVerticalFlip",
+                "ColorJitter",
+                "GaussianBlur",
+                "Grayscale",
+                "Normalize",
+                "ImageNetNormalize",
+                "ToTensor",
+                "Pad",
+                "RandomRotation",
+                "RandomAffine",
+                "RandomPerspective",
+                "RandomPosterize",
+                "RandomSolarize",
+                "RandomErasing",
+                "AutoAugment",
+                "AutoAugmentPolicy",
                 # Modern Augmentations (v1.8.0)
-                'MixUp', 'CutMix', 'Mosaic', 'RandAugment', 'GridMask',
+                "MixUp",
+                "CutMix",
+                "Mosaic",
+                "RandAugment",
+                "GridMask",
                 # Logging (v1.8.0)
-                'LogLevel', 'enable_logging', 'disable_logging', 'set_log_level', 'set_log_output',
+                "LogLevel",
+                "enable_logging",
+                "disable_logging",
+                "set_log_level",
+                "set_log_output",
                 # Enums
-                'InterpolationMode', 'PaddingMode', 'TensorFormat',
+                "InterpolationMode",
+                "PaddingMode",
+                "TensorFormat",
             ]
 
             for export in expected_exports:
@@ -359,15 +399,17 @@ def run_tests():
     print("=" * 70)
 
     # Run pytest
-    exit_code = pytest.main([
-        __file__,
-        '-v',
-        '--tb=short',
-        '-x',  # Stop on first failure
-    ])
+    exit_code = pytest.main(
+        [
+            __file__,
+            "-v",
+            "--tb=short",
+            "-x",  # Stop on first failure
+        ]
+    )
 
     return exit_code
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(run_tests())

@@ -42,10 +42,9 @@ except ImportError:
     sys.exit(1)
 
 
-def run_benchmark(tar_path: str,
-                  batch_size: int = 32,
-                  num_workers: int = 8,
-                  num_epochs: int = 3) -> Dict[str, Any]:
+def run_benchmark(
+    tar_path: str, batch_size: int = 32, num_workers: int = 8, num_epochs: int = 3
+) -> Dict[str, Any]:
     """
     Run TurboLoader benchmark.
 
@@ -58,15 +57,15 @@ def run_benchmark(tar_path: str,
     Returns:
         Dictionary with benchmark results
     """
-    print("="*80)
+    print("=" * 80)
     print("TURBOLOADER BENCHMARK")
-    print("="*80)
+    print("=" * 80)
     print(f"Dataset: {tar_path}")
     print(f"Batch size: {batch_size}")
     print(f"Num workers: {num_workers}")
     print(f"Epochs: {num_epochs}")
     print(f"Features: C++ pipeline, lock-free queues, SIMD transforms")
-    print("="*80)
+    print("=" * 80)
 
     # Track metrics
     epoch_times = []
@@ -83,10 +82,7 @@ def run_benchmark(tar_path: str,
     for epoch in range(num_epochs):
         # Create TurboLoader (fresh for each epoch to match PyTorch DataLoader behavior)
         loader = TurboDataLoader(
-            data_path=tar_path,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            shuffle=False
+            data_path=tar_path, batch_size=batch_size, num_workers=num_workers, shuffle=False
         )
 
         epoch_start = time.time()
@@ -105,9 +101,9 @@ def run_benchmark(tar_path: str,
 
             # Simulate model forward pass (access the data)
             for sample in batch:
-                if 'image' in sample:
+                if "image" in sample:
                     # Access image data
-                    img = sample['image']
+                    img = sample["image"]
                     if isinstance(img, np.ndarray):
                         _ = img.mean()
 
@@ -138,53 +134,64 @@ def run_benchmark(tar_path: str,
     total_time = time.time() - total_start
 
     # Calculate total samples
-    total_samples = sum([e * (sample_count // num_epochs) for e in range(num_epochs)]) if num_epochs > 0 else sample_count * num_epochs
+    total_samples = (
+        sum([e * (sample_count // num_epochs) for e in range(num_epochs)])
+        if num_epochs > 0
+        else sample_count * num_epochs
+    )
 
     # Calculate statistics
     results = {
-        'framework': 'TurboLoader',
-        'batch_size': batch_size,
-        'num_workers': num_workers,
-        'num_epochs': num_epochs,
-        'backend': 'C++ multi-threaded pipeline',
-        'total_time': total_time,
-        'epoch_times': epoch_times,
-        'avg_epoch_time': np.mean(epoch_times) if epoch_times else 0,
-        'std_epoch_time': np.std(epoch_times) if epoch_times else 0,
-        'avg_batch_time': np.mean(batch_times) if batch_times else 0,
-        'std_batch_time': np.std(batch_times) if batch_times else 0,
-        'throughput': (sample_count * num_epochs) / total_time if total_time > 0 else 0,
-        'peak_memory_mb': max(memory_usage) if memory_usage else initial_mem,
-        'avg_memory_mb': np.mean(memory_usage) if memory_usage else initial_mem,
+        "framework": "TurboLoader",
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "num_epochs": num_epochs,
+        "backend": "C++ multi-threaded pipeline",
+        "total_time": total_time,
+        "epoch_times": epoch_times,
+        "avg_epoch_time": np.mean(epoch_times) if epoch_times else 0,
+        "std_epoch_time": np.std(epoch_times) if epoch_times else 0,
+        "avg_batch_time": np.mean(batch_times) if batch_times else 0,
+        "std_batch_time": np.std(batch_times) if batch_times else 0,
+        "throughput": (sample_count * num_epochs) / total_time if total_time > 0 else 0,
+        "peak_memory_mb": max(memory_usage) if memory_usage else initial_mem,
+        "avg_memory_mb": np.mean(memory_usage) if memory_usage else initial_mem,
     }
 
     # Print summary
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("BENCHMARK RESULTS")
-    print("="*80)
+    print("=" * 80)
     print(f"Total time: {total_time:.2f}s")
-    print(f"Average epoch time: {results['avg_epoch_time']:.2f}s ± {results['std_epoch_time']:.2f}s")
-    print(f"Average batch time: {results['avg_batch_time']*1000:.2f}ms ± {results['std_batch_time']*1000:.2f}ms")
+    print(
+        f"Average epoch time: {results['avg_epoch_time']:.2f}s ± {results['std_epoch_time']:.2f}s"
+    )
+    print(
+        f"Average batch time: {results['avg_batch_time']*1000:.2f}ms ± {results['std_batch_time']*1000:.2f}ms"
+    )
     print(f"Throughput: {results['throughput']:.1f} images/sec")
     print(f"Peak memory: {results['peak_memory_mb']:.1f} MB")
     print(f"Average memory: {results['avg_memory_mb']:.1f} MB")
-    print("="*80)
+    print("=" * 80)
 
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(description='TurboLoader benchmark')
-    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
-                        help='Path to TAR file containing images')
-    parser.add_argument('--batch-size', '-b', type=int, default=32,
-                       help='Batch size (default: 32)')
-    parser.add_argument('--num-workers', '-w', type=int, default=8,
-                       help='Number of worker threads (default: 8)')
-    parser.add_argument('--epochs', '-e', type=int, default=3,
-                       help='Number of epochs (default: 3)')
-    parser.add_argument('--output', '-o', type=str,
-                       help='Output JSON file for results')
+    parser = argparse.ArgumentParser(description="TurboLoader benchmark")
+    parser.add_argument(
+        "--tar-path",
+        "-tp",
+        type=str,
+        default="/private/tmp/benchmark_datasets/bench_2k/dataset.tar",
+        help="Path to TAR file containing images",
+    )
+    parser.add_argument("--batch-size", "-b", type=int, default=32, help="Batch size (default: 32)")
+    parser.add_argument(
+        "--num-workers", "-w", type=int, default=8, help="Number of worker threads (default: 8)"
+    )
+    parser.add_argument("--epochs", "-e", type=int, default=3, help="Number of epochs (default: 3)")
+    parser.add_argument("--output", "-o", type=str, help="Output JSON file for results")
 
     args = parser.parse_args()
 
@@ -198,15 +205,15 @@ def main():
         tar_path=args.tar_path,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        num_epochs=args.epochs
+        num_epochs=args.epochs,
     )
 
     # Save results if requested
     if args.output:
-        with open(args.output, 'w') as f:
+        with open(args.output, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nResults saved to {args.output}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

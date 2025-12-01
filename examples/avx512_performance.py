@@ -20,6 +20,7 @@ import turboloader
 import time
 import numpy as np
 
+
 def check_simd_support():
     """Check what SIMD instruction sets are available"""
     features = turboloader.features()
@@ -38,6 +39,7 @@ def check_simd_support():
         print("❌ No SIMD support detected (scalar fallback)")
     print("=" * 80)
     print()
+
 
 def benchmark_resize_performance(dataset_path: str, num_workers: int = 8):
     """
@@ -63,7 +65,7 @@ def benchmark_resize_performance(dataset_path: str, num_workers: int = 8):
         if i >= 2:
             break
         for sample in batch:
-            _ = resize.apply(sample['image'])
+            _ = resize.apply(sample["image"])
 
     # Benchmark
     print("Running benchmark...")
@@ -72,7 +74,7 @@ def benchmark_resize_performance(dataset_path: str, num_workers: int = 8):
 
     for batch in loader:
         for sample in batch:
-            img = sample['image']
+            img = sample["image"]
             resized = resize.apply(img)
             total_images += 1
 
@@ -87,6 +89,7 @@ def benchmark_resize_performance(dataset_path: str, num_workers: int = 8):
     print()
 
     return throughput
+
 
 def benchmark_normalize_performance(dataset_path: str, num_workers: int = 8):
     """
@@ -110,7 +113,7 @@ def benchmark_normalize_performance(dataset_path: str, num_workers: int = 8):
         if i >= 2:
             break
         for sample in batch:
-            _ = normalize.apply(sample['image'])
+            _ = normalize.apply(sample["image"])
 
     # Benchmark
     print("Running benchmark...")
@@ -119,7 +122,7 @@ def benchmark_normalize_performance(dataset_path: str, num_workers: int = 8):
 
     for batch in loader:
         for sample in batch:
-            img = sample['image']
+            img = sample["image"]
             normalized = normalize.apply(img)
             total_images += 1
 
@@ -134,6 +137,7 @@ def benchmark_normalize_performance(dataset_path: str, num_workers: int = 8):
     print()
 
     return throughput
+
 
 def benchmark_full_pipeline(dataset_path: str, num_workers: int = 8):
     """
@@ -162,7 +166,7 @@ def benchmark_full_pipeline(dataset_path: str, num_workers: int = 8):
         if i >= 2:
             break
         for sample in batch:
-            img = sample['image']
+            img = sample["image"]
             img = resize.apply(img)
             img = flip.apply(img)
             img = color_jitter.apply(img)
@@ -175,7 +179,7 @@ def benchmark_full_pipeline(dataset_path: str, num_workers: int = 8):
 
     for batch in loader:
         for sample in batch:
-            img = sample['image']
+            img = sample["image"]
 
             # Apply full SIMD pipeline
             img = resize.apply(img)
@@ -196,6 +200,7 @@ def benchmark_full_pipeline(dataset_path: str, num_workers: int = 8):
     print()
 
     return throughput
+
 
 def demonstrate_simd_operations():
     """
@@ -263,6 +268,7 @@ def demonstrate_simd_operations():
     print("=" * 80)
     print()
 
+
 def main():
     """
     Main example demonstrating AVX-512 SIMD performance
@@ -314,6 +320,7 @@ def main():
         print("  1. Collect some images: mkdir images && cp /path/to/*.jpg images/")
         print("  2. Create TAR file: tar cf /tmp/benchmark_1000.tar images/*.jpg")
         print("  3. Re-run this example")
+
 
 if __name__ == "__main__":
     main()

@@ -42,12 +42,14 @@ class PILDataLoader:
     and batches them for training.
     """
 
-    def __init__(self,
-                 image_dir: str,
-                 batch_size: int = 32,
-                 shuffle: bool = False,
-                 num_epochs: int = 1,
-                 transform: bool = True):
+    def __init__(
+        self,
+        image_dir: str,
+        batch_size: int = 32,
+        shuffle: bool = False,
+        num_epochs: int = 1,
+        transform: bool = True,
+    ):
         """
         Initialize PIL DataLoader.
 
@@ -65,7 +67,7 @@ class PILDataLoader:
         self.transform = transform
 
         # Get all image files
-        self.image_files = sorted(self.image_dir.glob('*.jpg'))
+        self.image_files = sorted(self.image_dir.glob("*.jpg"))
         self.num_images = len(self.image_files)
 
         if self.num_images == 0:
@@ -90,7 +92,7 @@ class PILDataLoader:
             NumPy array (H, W, 3) with transformed image
         """
         # Load image
-        img = Image.open(img_path).convert('RGB')
+        img = Image.open(img_path).convert("RGB")
 
         if self.transform:
             # Resize to 224x224 (standard ImageNet size)
@@ -116,6 +118,7 @@ class PILDataLoader:
             # Shuffle if requested
             if self.shuffle:
                 import random
+
                 image_files = list(self.image_files)
                 random.shuffle(image_files)
             else:
@@ -123,7 +126,7 @@ class PILDataLoader:
 
             # Create batches
             for i in range(0, len(image_files), self.batch_size):
-                batch_files = image_files[i:i + self.batch_size]
+                batch_files = image_files[i : i + self.batch_size]
 
                 # Load and transform images
                 batch_images = []
@@ -137,10 +140,9 @@ class PILDataLoader:
                     yield batch
 
 
-def run_benchmark(image_dir: str,
-                  batch_size: int = 32,
-                  num_epochs: int = 3,
-                  shuffle: bool = False) -> Dict[str, Any]:
+def run_benchmark(
+    image_dir: str, batch_size: int = 32, num_epochs: int = 3, shuffle: bool = False
+) -> Dict[str, Any]:
     """
     Run PIL baseline benchmark.
 
@@ -153,14 +155,14 @@ def run_benchmark(image_dir: str,
     Returns:
         Dictionary with benchmark results
     """
-    print("="*80)
+    print("=" * 80)
     print("PIL BASELINE BENCHMARK")
-    print("="*80)
+    print("=" * 80)
     print(f"Dataset: {image_dir}")
     print(f"Batch size: {batch_size}")
     print(f"Epochs: {num_epochs}")
     print(f"Shuffle: {shuffle}")
-    print("="*80)
+    print("=" * 80)
 
     # Create dataloader
     loader = PILDataLoader(
@@ -168,7 +170,7 @@ def run_benchmark(image_dir: str,
         batch_size=batch_size,
         shuffle=shuffle,
         num_epochs=num_epochs,
-        transform=True
+        transform=True,
     )
 
     # Track metrics
@@ -216,48 +218,53 @@ def run_benchmark(image_dir: str,
 
     # Calculate statistics
     results = {
-        'framework': 'PIL Baseline',
-        'batch_size': batch_size,
-        'num_epochs': num_epochs,
-        'shuffle': shuffle,
-        'total_time': total_time,
-        'epoch_times': epoch_times,
-        'avg_epoch_time': np.mean(epoch_times),
-        'std_epoch_time': np.std(epoch_times),
-        'avg_batch_time': np.mean(batch_times),
-        'std_batch_time': np.std(batch_times),
-        'throughput': loader.num_images * num_epochs / total_time,
-        'peak_memory_mb': max(memory_usage) if memory_usage else 0,
-        'avg_memory_mb': np.mean(memory_usage) if memory_usage else 0,
+        "framework": "PIL Baseline",
+        "batch_size": batch_size,
+        "num_epochs": num_epochs,
+        "shuffle": shuffle,
+        "total_time": total_time,
+        "epoch_times": epoch_times,
+        "avg_epoch_time": np.mean(epoch_times),
+        "std_epoch_time": np.std(epoch_times),
+        "avg_batch_time": np.mean(batch_times),
+        "std_batch_time": np.std(batch_times),
+        "throughput": loader.num_images * num_epochs / total_time,
+        "peak_memory_mb": max(memory_usage) if memory_usage else 0,
+        "avg_memory_mb": np.mean(memory_usage) if memory_usage else 0,
     }
 
     # Print summary
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("BENCHMARK RESULTS")
-    print("="*80)
+    print("=" * 80)
     print(f"Total time: {total_time:.2f}s")
-    print(f"Average epoch time: {results['avg_epoch_time']:.2f}s ± {results['std_epoch_time']:.2f}s")
-    print(f"Average batch time: {results['avg_batch_time']*1000:.2f}ms ± {results['std_batch_time']*1000:.2f}ms")
+    print(
+        f"Average epoch time: {results['avg_epoch_time']:.2f}s ± {results['std_epoch_time']:.2f}s"
+    )
+    print(
+        f"Average batch time: {results['avg_batch_time']*1000:.2f}ms ± {results['std_batch_time']*1000:.2f}ms"
+    )
     print(f"Throughput: {results['throughput']:.1f} images/sec")
     print(f"Peak memory: {results['peak_memory_mb']:.1f} MB")
     print(f"Average memory: {results['avg_memory_mb']:.1f} MB")
-    print("="*80)
+    print("=" * 80)
 
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(description='PIL baseline benchmark')
-    parser.add_argument('--image-dir', '-dir', type=str, default="/private/tmp/benchmark_datasets/bench_2k/images/",
-                       help='Directory containing JPEG images')
-    parser.add_argument('--batch-size', '-b', type=int, default=32,
-                       help='Batch size (default: 32)')
-    parser.add_argument('--epochs', '-e', type=int, default=3,
-                       help='Number of epochs (default: 3)')
-    parser.add_argument('--shuffle', '-s', action='store_true',
-                       help='Shuffle data')
-    parser.add_argument('--output', '-o', type=str,
-                       help='Output JSON file for results')
+    parser = argparse.ArgumentParser(description="PIL baseline benchmark")
+    parser.add_argument(
+        "--image-dir",
+        "-dir",
+        type=str,
+        default="/private/tmp/benchmark_datasets/bench_2k/images/",
+        help="Directory containing JPEG images",
+    )
+    parser.add_argument("--batch-size", "-b", type=int, default=32, help="Batch size (default: 32)")
+    parser.add_argument("--epochs", "-e", type=int, default=3, help="Number of epochs (default: 3)")
+    parser.add_argument("--shuffle", "-s", action="store_true", help="Shuffle data")
+    parser.add_argument("--output", "-o", type=str, help="Output JSON file for results")
 
     args = parser.parse_args()
 
@@ -266,15 +273,15 @@ def main():
         image_dir=args.image_dir,
         batch_size=args.batch_size,
         num_epochs=args.epochs,
-        shuffle=args.shuffle
+        shuffle=args.shuffle,
     )
 
     # Save results if requested
     if args.output:
-        with open(args.output, 'w') as f:
+        with open(args.output, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nResults saved to {args.output}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -62,7 +62,7 @@ class TurboLoaderWrapper(IterableDataset):
         num_workers: int = 4,
         shuffle: bool = False,
         enable_distributed: bool = False,
-        transform=None
+        transform=None,
     ):
         super().__init__()
         self.data_path = data_path
@@ -96,7 +96,7 @@ class TurboLoaderWrapper(IterableDataset):
             labels = []
 
             for sample in batch:
-                img = sample['image']
+                img = sample["image"]
 
                 # Apply transforms if provided
                 if self.transform:
@@ -110,7 +110,7 @@ class TurboLoaderWrapper(IterableDataset):
                     img_tensor = img_tensor.permute(2, 0, 1)
 
                 images.append(img_tensor)
-                labels.append(sample.get('label', 0))
+                labels.append(sample.get("label", 0))
 
             # Stack into batch
             images = torch.stack(images)
@@ -130,7 +130,7 @@ class ImageNetDataModule(pl.LightningDataModule):
         val_path: Optional[str] = None,
         batch_size: int = 32,
         num_workers: int = 4,
-        img_size: int = 224
+        img_size: int = 224,
     ):
         super().__init__()
         self.train_path = train_path
@@ -145,18 +145,19 @@ class ImageNetDataModule(pl.LightningDataModule):
     def setup(self, stage: Optional[str] = None):
         """Setup datasets."""
         # Create transforms
-        self.train_transform = turboloader.Compose([
-            turboloader.Resize(256, 256),
-            turboloader.RandomCrop(self.img_size, self.img_size),
-            turboloader.RandomHorizontalFlip(0.5),
-            turboloader.ColorJitter(0.2, 0.2, 0.2, 0.1),
-            turboloader.ImageNetNormalize()
-        ])
+        self.train_transform = turboloader.Compose(
+            [
+                turboloader.Resize(256, 256),
+                turboloader.RandomCrop(self.img_size, self.img_size),
+                turboloader.RandomHorizontalFlip(0.5),
+                turboloader.ColorJitter(0.2, 0.2, 0.2, 0.1),
+                turboloader.ImageNetNormalize(),
+            ]
+        )
 
-        self.val_transform = turboloader.Compose([
-            turboloader.Resize(self.img_size, self.img_size),
-            turboloader.ImageNetNormalize()
-        ])
+        self.val_transform = turboloader.Compose(
+            [turboloader.Resize(self.img_size, self.img_size), turboloader.ImageNetNormalize()]
+        )
 
     def train_dataloader(self):
         """Create training DataLoader."""
@@ -166,14 +167,12 @@ class ImageNetDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             shuffle=True,
             enable_distributed=True,  # Enable for multi-GPU
-            transform=self.train_transform
+            transform=self.train_transform,
         )
 
         # Wrap in PyTorch DataLoader (batch_size=None since batching is done by TurboLoader)
         return TorchDataLoader(
-            dataset,
-            batch_size=None,
-            num_workers=0  # TurboLoader handles workers
+            dataset, batch_size=None, num_workers=0  # TurboLoader handles workers
         )
 
     def val_dataloader(self):
@@ -184,14 +183,10 @@ class ImageNetDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             shuffle=False,
             enable_distributed=True,
-            transform=self.val_transform
+            transform=self.val_transform,
         )
 
-        return TorchDataLoader(
-            dataset,
-            batch_size=None,
-            num_workers=0
-        )
+        return TorchDataLoader(dataset, batch_size=None, num_workers=0)
 
 
 class ResNetClassifier(pl.LightningModule):
@@ -204,13 +199,14 @@ class ResNetClassifier(pl.LightningModule):
         num_classes: int = 1000,
         learning_rate: float = 0.1,
         momentum: float = 0.9,
-        weight_decay: float = 1e-4
+        weight_decay: float = 1e-4,
     ):
         super().__init__()
         self.save_hyperparameters()
 
         # Use pretrained ResNet-18
         from torchvision.models import resnet18
+
         self.model = resnet18(num_classes=num_classes)
 
         self.criterion = nn.CrossEntropyLoss()
@@ -228,8 +224,8 @@ class ResNetClassifier(pl.LightningModule):
         acc = (outputs.argmax(dim=1) == labels).float().mean()
 
         # Log metrics
-        self.log('train_loss', loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log('train_acc', acc, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_acc", acc, prog_bar=True, on_step=True, on_epoch=True)
 
         return loss
 
@@ -243,8 +239,8 @@ class ResNetClassifier(pl.LightningModule):
         acc = (outputs.argmax(dim=1) == labels).float().mean()
 
         # Log metrics
-        self.log('val_loss', loss, prog_bar=True, on_epoch=True)
-        self.log('val_acc', acc, prog_bar=True, on_epoch=True)
+        self.log("val_loss", loss, prog_bar=True, on_epoch=True)
+        self.log("val_acc", acc, prog_bar=True, on_epoch=True)
 
         return loss
 
@@ -254,51 +250,59 @@ class ResNetClassifier(pl.LightningModule):
             self.parameters(),
             lr=self.hparams.learning_rate,
             momentum=self.hparams.momentum,
-            weight_decay=self.hparams.weight_decay
+            weight_decay=self.hparams.weight_decay,
         )
 
         # Cosine annealing scheduler
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs
+            optimizer, T_max=self.trainer.max_epochs
         )
 
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch"
-            }
+            "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
         }
 
 
 def main():
     """Main training function."""
-    parser = argparse.ArgumentParser(description='PyTorch Lightning + TurboLoader Example')
-    parser.add_argument('--data-path', type=str, required=True,
-                        help='Path to training data (TAR or TBL format)')
-    parser.add_argument('--val-path', type=str, default=None,
-                        help='Path to validation data (default: use training data)')
-    parser.add_argument('--batch-size', type=int, default=256,
-                        help='Batch size per GPU (default: 256)')
-    parser.add_argument('--num-workers', type=int, default=4,
-                        help='Number of data loading workers (default: 4)')
-    parser.add_argument('--num-classes', type=int, default=1000,
-                        help='Number of classes (default: 1000)')
-    parser.add_argument('--img-size', type=int, default=224,
-                        help='Input image size (default: 224)')
-    parser.add_argument('--epochs', type=int, default=90,
-                        help='Number of training epochs (default: 90)')
-    parser.add_argument('--lr', type=float, default=0.1,
-                        help='Learning rate (default: 0.1)')
-    parser.add_argument('--gpus', type=int, default=1,
-                        help='Number of GPUs (default: 1)')
-    parser.add_argument('--strategy', type=str, default='auto',
-                        help='Training strategy: auto, ddp, ddp_spawn (default: auto)')
-    parser.add_argument('--precision', type=str, default='32',
-                        help='Training precision: 32, 16, bf16 (default: 32)')
-    parser.add_argument('--log-dir', type=str, default='./lightning_logs',
-                        help='TensorBoard log directory')
+    parser = argparse.ArgumentParser(description="PyTorch Lightning + TurboLoader Example")
+    parser.add_argument(
+        "--data-path", type=str, required=True, help="Path to training data (TAR or TBL format)"
+    )
+    parser.add_argument(
+        "--val-path",
+        type=str,
+        default=None,
+        help="Path to validation data (default: use training data)",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=256, help="Batch size per GPU (default: 256)"
+    )
+    parser.add_argument(
+        "--num-workers", type=int, default=4, help="Number of data loading workers (default: 4)"
+    )
+    parser.add_argument(
+        "--num-classes", type=int, default=1000, help="Number of classes (default: 1000)"
+    )
+    parser.add_argument("--img-size", type=int, default=224, help="Input image size (default: 224)")
+    parser.add_argument(
+        "--epochs", type=int, default=90, help="Number of training epochs (default: 90)"
+    )
+    parser.add_argument("--lr", type=float, default=0.1, help="Learning rate (default: 0.1)")
+    parser.add_argument("--gpus", type=int, default=1, help="Number of GPUs (default: 1)")
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        default="auto",
+        help="Training strategy: auto, ddp, ddp_spawn (default: auto)",
+    )
+    parser.add_argument(
+        "--precision", type=str, default="32", help="Training precision: 32, 16, bf16 (default: 32)"
+    )
+    parser.add_argument(
+        "--log-dir", type=str, default="./lightning_logs", help="TensorBoard log directory"
+    )
 
     args = parser.parse_args()
 
@@ -308,38 +312,32 @@ def main():
         val_path=args.val_path,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        img_size=args.img_size
+        img_size=args.img_size,
     )
 
     # Create model
-    model = ResNetClassifier(
-        num_classes=args.num_classes,
-        learning_rate=args.lr
-    )
+    model = ResNetClassifier(num_classes=args.num_classes, learning_rate=args.lr)
 
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_acc',
-        mode='max',
-        save_top_k=3,
-        filename='resnet18-{epoch:02d}-{val_acc:.2f}'
+        monitor="val_acc", mode="max", save_top_k=3, filename="resnet18-{epoch:02d}-{val_acc:.2f}"
     )
 
-    lr_monitor = LearningRateMonitor(logging_interval='step')
+    lr_monitor = LearningRateMonitor(logging_interval="step")
 
     # Setup logger
-    logger = TensorBoardLogger(args.log_dir, name='turboloader_resnet18')
+    logger = TensorBoardLogger(args.log_dir, name="turboloader_resnet18")
 
     # Create trainer
     trainer = pl.Trainer(
         max_epochs=args.epochs,
-        accelerator='gpu' if args.gpus > 0 else 'cpu',
+        accelerator="gpu" if args.gpus > 0 else "cpu",
         devices=args.gpus if args.gpus > 0 else 1,
         strategy=args.strategy,
         precision=args.precision,
         callbacks=[checkpoint_callback, lr_monitor],
         logger=logger,
-        log_every_n_steps=50
+        log_every_n_steps=50,
     )
 
     # Train!
@@ -362,5 +360,5 @@ def main():
     print("=" * 70)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

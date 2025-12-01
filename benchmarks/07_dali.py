@@ -47,7 +47,9 @@ try:
     from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 except ImportError:
     print("Error: NVIDIA DALI not installed")
-    print("Install with: pip install --extra-index-url https://developer.download.nvidia.com/compute/redist nvidia-dali-cuda110")
+    print(
+        "Install with: pip install --extra-index-url https://developer.download.nvidia.com/compute/redist nvidia-dali-cuda110"
+    )
     print("Note: DALI requires CUDA for GPU acceleration")
     sys.exit(1)
 
@@ -69,18 +71,18 @@ def extract_tar_to_images(tar_path: str, output_dir: str) -> str:
     print(f"Extracting TAR to: {output_dir}")
     extract_start = time.time()
 
-    with tarfile.open(tar_path, 'r') as tar:
+    with tarfile.open(tar_path, "r") as tar:
         tar.extractall(output_path)
 
     extract_time = time.time() - extract_start
-    image_files = list(output_path.glob('*.jpg'))
+    image_files = list(output_path.glob("*.jpg"))
     print(f"Extracted {len(image_files)} images in {extract_time:.2f}s")
 
     return str(output_path)
 
 
 @pipeline_def
-def create_dali_pipeline(data_dir, device='cpu', shard_id=0, num_shards=1):
+def create_dali_pipeline(data_dir, device="cpu", shard_id=0, num_shards=1):
     """
     Create DALI pipeline for image loading and preprocessing.
 
@@ -99,14 +101,14 @@ def create_dali_pipeline(data_dir, device='cpu', shard_id=0, num_shards=1):
         random_shuffle=False,
         shard_id=shard_id,
         num_shards=num_shards,
-        name='Reader'
+        name="Reader",
     )
 
     # Decode JPEG (can use GPU if device='mixed')
-    if device == 'gpu' or device == 'mixed':
-        images = fn.decoders.image(images, device='mixed', output_type=types.RGB)
+    if device == "gpu" or device == "mixed":
+        images = fn.decoders.image(images, device="mixed", output_type=types.RGB)
     else:
-        images = fn.decoders.image(images, device='cpu', output_type=types.RGB)
+        images = fn.decoders.image(images, device="cpu", output_type=types.RGB)
 
     # Resize and crop
     images = fn.resize(images, resize_shorter=256, device=device)
@@ -123,12 +125,14 @@ def create_dali_pipeline(data_dir, device='cpu', shard_id=0, num_shards=1):
     return images, labels
 
 
-def run_benchmark(tar_path: str,
-                  batch_size: int = 32,
-                  num_workers: int = 8,
-                  num_epochs: int = 3,
-                  device: str = 'cpu',
-                  work_dir: str = "/tmp/dali_benchmark") -> Dict[str, Any]:
+def run_benchmark(
+    tar_path: str,
+    batch_size: int = 32,
+    num_workers: int = 8,
+    num_epochs: int = 3,
+    device: str = "cpu",
+    work_dir: str = "/tmp/dali_benchmark",
+) -> Dict[str, Any]:
     """
     Run NVIDIA DALI benchmark.
 
@@ -143,16 +147,16 @@ def run_benchmark(tar_path: str,
     Returns:
         Dictionary with benchmark results
     """
-    print("="*80)
+    print("=" * 80)
     print("NVIDIA DALI BENCHMARK")
-    print("="*80)
+    print("=" * 80)
     print(f"TAR file: {tar_path}")
     print(f"Batch size: {batch_size}")
     print(f"Num workers: {num_workers}")
     print(f"Epochs: {num_epochs}")
     print(f"Device: {device}")
     print(f"Features: GPU-accelerated decoding (if available), pipeline architecture")
-    print("="*80)
+    print("=" * 80)
 
     # Setup working directory
     work_path = Path(work_dir)
@@ -166,7 +170,7 @@ def run_benchmark(tar_path: str,
     extraction_time = time.time() - extract_start
 
     # Count images for dataset size
-    image_files = sorted(image_dir.glob('*.jpg'))
+    image_files = sorted(image_dir.glob("*.jpg"))
     dataset_size = len(image_files)
 
     print(f"\nCreating DALI pipeline...")
@@ -179,17 +183,17 @@ def run_benchmark(tar_path: str,
         batch_size=batch_size,
         num_threads=num_workers,
         device_id=0,
-        device=device
+        device=device,
     )
     pipe.build()
 
     # Create PyTorch iterator
     dali_iter = DALIGenericIterator(
         pipe,
-        ['images', 'labels'],
-        reader_name='Reader',
+        ["images", "labels"],
+        reader_name="Reader",
         last_batch_policy=LastBatchPolicy.PARTIAL,
-        auto_reset=True
+        auto_reset=True,
     )
 
     print(f"DALI pipeline created")
@@ -215,7 +219,7 @@ def run_benchmark(tar_path: str,
             batch_start = time.time()
 
             # Get images from DALI batch
-            batch_images = batch[0]['images']
+            batch_images = batch[0]["images"]
 
             # Simulate model forward pass
             _ = batch_images.mean()
@@ -249,61 +253,81 @@ def run_benchmark(tar_path: str,
 
     # Calculate statistics
     results = {
-        'framework': 'NVIDIA DALI',
-        'batch_size': batch_size,
-        'num_workers': num_workers,
-        'num_epochs': num_epochs,
-        'device': device,
-        'backend': 'GPU-accelerated pipeline (if GPU available)',
-        'extraction_time': extraction_time,
-        'total_time': total_time,
-        'total_time_with_extraction': total_time + extraction_time,
-        'epoch_times': epoch_times,
-        'avg_epoch_time': np.mean(epoch_times) if epoch_times else 0,
-        'std_epoch_time': np.std(epoch_times) if epoch_times else 0,
-        'avg_batch_time': np.mean(batch_times) if batch_times else 0,
-        'std_batch_time': np.std(batch_times) if batch_times else 0,
-        'throughput': sample_count * num_epochs / total_time if total_time > 0 else 0,
-        'throughput_with_extraction': sample_count * num_epochs / (total_time + extraction_time) if (total_time + extraction_time) > 0 else 0,
-        'peak_memory_mb': max(memory_usage) if memory_usage else 0,
-        'avg_memory_mb': np.mean(memory_usage) if memory_usage else 0,
+        "framework": "NVIDIA DALI",
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "num_epochs": num_epochs,
+        "device": device,
+        "backend": "GPU-accelerated pipeline (if GPU available)",
+        "extraction_time": extraction_time,
+        "total_time": total_time,
+        "total_time_with_extraction": total_time + extraction_time,
+        "epoch_times": epoch_times,
+        "avg_epoch_time": np.mean(epoch_times) if epoch_times else 0,
+        "std_epoch_time": np.std(epoch_times) if epoch_times else 0,
+        "avg_batch_time": np.mean(batch_times) if batch_times else 0,
+        "std_batch_time": np.std(batch_times) if batch_times else 0,
+        "throughput": sample_count * num_epochs / total_time if total_time > 0 else 0,
+        "throughput_with_extraction": (
+            sample_count * num_epochs / (total_time + extraction_time)
+            if (total_time + extraction_time) > 0
+            else 0
+        ),
+        "peak_memory_mb": max(memory_usage) if memory_usage else 0,
+        "avg_memory_mb": np.mean(memory_usage) if memory_usage else 0,
     }
 
     # Print summary
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("BENCHMARK RESULTS")
-    print("="*80)
+    print("=" * 80)
     print(f"Extraction time: {extraction_time:.2f}s")
     print(f"Training time: {total_time:.2f}s")
     print(f"Total time (with extraction): {total_time + extraction_time:.2f}s")
-    print(f"Average epoch time: {results['avg_epoch_time']:.2f}s ± {results['std_epoch_time']:.2f}s")
-    print(f"Average batch time: {results['avg_batch_time']*1000:.2f}ms ± {results['std_batch_time']*1000:.2f}ms")
+    print(
+        f"Average epoch time: {results['avg_epoch_time']:.2f}s ± {results['std_epoch_time']:.2f}s"
+    )
+    print(
+        f"Average batch time: {results['avg_batch_time']*1000:.2f}ms ± {results['std_batch_time']*1000:.2f}ms"
+    )
     print(f"Throughput (training only): {results['throughput']:.1f} images/sec")
     print(f"Throughput (with extraction): {results['throughput_with_extraction']:.1f} images/sec")
     print(f"Peak memory: {results['peak_memory_mb']:.1f} MB")
     print(f"Average memory: {results['avg_memory_mb']:.1f} MB")
-    print("="*80)
+    print("=" * 80)
 
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(description='NVIDIA DALI benchmark')
-    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
-                        help='Path to TAR file containing images')
-    parser.add_argument('--batch-size', '-b', type=int, default=32,
-                       help='Batch size (default: 32)')
-    parser.add_argument('--num-workers', '-w', type=int, default=8,
-                       help='Number of worker threads (default: 8)')
-    parser.add_argument('--epochs', '-e', type=int, default=3,
-                       help='Number of epochs (default: 3)')
-    parser.add_argument('--device', '-d', type=str, default='cpu',
-                       choices=['cpu', 'gpu', 'mixed'],
-                       help='Processing device (default: cpu)')
-    parser.add_argument('--work-dir', type=str, default='/tmp/dali_benchmark',
-                       help='Working directory (default: /tmp/dali_benchmark)')
-    parser.add_argument('--output', '-o', type=str,
-                       help='Output JSON file for results')
+    parser = argparse.ArgumentParser(description="NVIDIA DALI benchmark")
+    parser.add_argument(
+        "--tar-path",
+        "-tp",
+        type=str,
+        default="/private/tmp/benchmark_datasets/bench_2k/dataset.tar",
+        help="Path to TAR file containing images",
+    )
+    parser.add_argument("--batch-size", "-b", type=int, default=32, help="Batch size (default: 32)")
+    parser.add_argument(
+        "--num-workers", "-w", type=int, default=8, help="Number of worker threads (default: 8)"
+    )
+    parser.add_argument("--epochs", "-e", type=int, default=3, help="Number of epochs (default: 3)")
+    parser.add_argument(
+        "--device",
+        "-d",
+        type=str,
+        default="cpu",
+        choices=["cpu", "gpu", "mixed"],
+        help="Processing device (default: cpu)",
+    )
+    parser.add_argument(
+        "--work-dir",
+        type=str,
+        default="/tmp/dali_benchmark",
+        help="Working directory (default: /tmp/dali_benchmark)",
+    )
+    parser.add_argument("--output", "-o", type=str, help="Output JSON file for results")
 
     args = parser.parse_args()
 
@@ -313,10 +337,10 @@ def main():
         sys.exit(1)
 
     # Check GPU availability if requested
-    if args.device in ['gpu', 'mixed']:
+    if args.device in ["gpu", "mixed"]:
         if not torch.cuda.is_available():
             print("Warning: GPU requested but CUDA not available, falling back to CPU")
-            args.device = 'cpu'
+            args.device = "cpu"
 
     # Run benchmark
     results = run_benchmark(
@@ -325,15 +349,15 @@ def main():
         num_workers=args.num_workers,
         num_epochs=args.epochs,
         device=args.device,
-        work_dir=args.work_dir
+        work_dir=args.work_dir,
     )
 
     # Save results if requested
     if args.output:
-        with open(args.output, 'w') as f:
+        with open(args.output, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nResults saved to {args.output}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

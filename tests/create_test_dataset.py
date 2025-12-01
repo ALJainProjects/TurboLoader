@@ -17,7 +17,7 @@ def create_test_images(output_dir, num_images, size=(64, 64)):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     for i in range(num_images):
-        img = Image.new('RGB', size)
+        img = Image.new("RGB", size)
         pixels = img.load()
 
         # Fill with random colors
@@ -26,7 +26,7 @@ def create_test_images(output_dir, num_images, size=(64, 64)):
                 pixels[x, y] = (
                     random.randint(0, 255),
                     random.randint(0, 255),
-                    random.randint(0, 255)
+                    random.randint(0, 255),
                 )
 
         img.save(f"{output_dir}/{i:04d}.jpg", quality=85)

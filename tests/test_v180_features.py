@@ -23,16 +23,18 @@ class TestVersion:
     def test_version_is_190(self):
         """Verify version is >= 2.0.0 (v1.8.0 features require 2.x)"""
         import turboloader
+
         version = turboloader.__version__
-        major, minor, patch = map(int, version.split('.'))
+        major, minor, patch = map(int, version.split("."))
         assert major >= 2, f"Expected version >= 2.0.0, got {version}"
 
     def test_version_function(self):
         """Test version() function returns correct version"""
         try:
             import turboloader
+
             version = turboloader.version()
-            major, minor, patch = map(int, version.split('.'))
+            major, minor, patch = map(int, version.split("."))
             assert major >= 2, f"Expected version >= 2.0.0, got {version}"
         except (ImportError, AttributeError):
             pytest.skip("C++ module not built")
@@ -55,7 +57,8 @@ class TestModernAugmentations:
         """Test MixUp class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'MixUp')
+
+            assert hasattr(turboloader, "MixUp")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -63,7 +66,8 @@ class TestModernAugmentations:
         """Test CutMix class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'CutMix')
+
+            assert hasattr(turboloader, "CutMix")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -71,7 +75,8 @@ class TestModernAugmentations:
         """Test Mosaic class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'Mosaic')
+
+            assert hasattr(turboloader, "Mosaic")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -79,7 +84,8 @@ class TestModernAugmentations:
         """Test RandAugment class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'RandAugment')
+
+            assert hasattr(turboloader, "RandAugment")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -87,7 +93,8 @@ class TestModernAugmentations:
         """Test GridMask class is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'GridMask')
+
+            assert hasattr(turboloader, "GridMask")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -99,7 +106,8 @@ class TestLoggingFramework:
         """Test enable_logging function is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'enable_logging')
+
+            assert hasattr(turboloader, "enable_logging")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -107,7 +115,8 @@ class TestLoggingFramework:
         """Test disable_logging function is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'disable_logging')
+
+            assert hasattr(turboloader, "disable_logging")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -115,7 +124,8 @@ class TestLoggingFramework:
         """Test set_log_level function is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'set_log_level')
+
+            assert hasattr(turboloader, "set_log_level")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -123,7 +133,8 @@ class TestLoggingFramework:
         """Test set_log_output function is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'set_log_output')
+
+            assert hasattr(turboloader, "set_log_output")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -131,13 +142,14 @@ class TestLoggingFramework:
         """Test LogLevel enum is available"""
         try:
             import turboloader
-            assert hasattr(turboloader, 'LogLevel')
+
+            assert hasattr(turboloader, "LogLevel")
             # Check enum values
-            assert hasattr(turboloader.LogLevel, 'DEBUG')
-            assert hasattr(turboloader.LogLevel, 'INFO')
-            assert hasattr(turboloader.LogLevel, 'WARNING')
-            assert hasattr(turboloader.LogLevel, 'ERROR')
-            assert hasattr(turboloader.LogLevel, 'CRITICAL')
+            assert hasattr(turboloader.LogLevel, "DEBUG")
+            assert hasattr(turboloader.LogLevel, "INFO")
+            assert hasattr(turboloader.LogLevel, "WARNING")
+            assert hasattr(turboloader.LogLevel, "ERROR")
+            assert hasattr(turboloader.LogLevel, "CRITICAL")
         except ImportError:
             pytest.skip("C++ module not built")
 
@@ -145,6 +157,7 @@ class TestLoggingFramework:
         """Test enabling and disabling logging"""
         try:
             import turboloader
+
             # Should not raise
             turboloader.enable_logging()
             turboloader.disable_logging()
@@ -155,6 +168,7 @@ class TestLoggingFramework:
         """Test setting log level"""
         try:
             import turboloader
+
             turboloader.enable_logging()
             turboloader.set_log_level(turboloader.LogLevel.DEBUG)
             turboloader.set_log_level(turboloader.LogLevel.WARNING)
@@ -166,7 +180,8 @@ class TestLoggingFramework:
         """Test setting log output to file"""
         try:
             import turboloader
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.log') as f:
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".log") as f:
                 log_path = f.name
 
             try:
@@ -283,6 +298,7 @@ class TestExistingTransforms:
         """Test Resize transform"""
         try:
             import turboloader
+
             resize = turboloader.Resize(128, 128)
             result = resize.apply(sample_image)
             assert result.shape == (128, 128, 3)
@@ -293,6 +309,7 @@ class TestExistingTransforms:
         """Test CenterCrop transform"""
         try:
             import turboloader
+
             crop = turboloader.CenterCrop(128, 128)
             result = crop.apply(sample_image)
             assert result.shape == (128, 128, 3)
@@ -303,6 +320,7 @@ class TestExistingTransforms:
         """Test RandomHorizontalFlip transform"""
         try:
             import turboloader
+
             flip = turboloader.RandomHorizontalFlip(1.0)  # Always flip
             result = flip.apply(sample_image)
             assert result.shape == sample_image.shape
@@ -315,6 +333,7 @@ class TestExistingTransforms:
         """Test ColorJitter transform"""
         try:
             import turboloader
+
             jitter = turboloader.ColorJitter(0.2, 0.2, 0.2, 0.1)
             result = jitter.apply(sample_image)
             assert result.shape == sample_image.shape
@@ -325,6 +344,7 @@ class TestExistingTransforms:
         """Test Normalize transform"""
         try:
             import turboloader
+
             normalize = turboloader.ImageNetNormalize()
             result = normalize.apply(sample_image)
             assert result.shape == sample_image.shape
@@ -335,11 +355,14 @@ class TestExistingTransforms:
         """Test Compose (transform pipeline)"""
         try:
             import turboloader
-            pipeline = turboloader.Compose([
-                turboloader.Resize(224, 224),
-                turboloader.RandomHorizontalFlip(0.5),
-                turboloader.ImageNetNormalize()
-            ])
+
+            pipeline = turboloader.Compose(
+                [
+                    turboloader.Resize(224, 224),
+                    turboloader.RandomHorizontalFlip(0.5),
+                    turboloader.ImageNetNormalize(),
+                ]
+            )
             result = pipeline.apply(sample_image)
             assert result.shape == (224, 224, 3)
         except ImportError:
@@ -356,27 +379,57 @@ class TestAllExports:
 
             expected_exports = [
                 # Core
-                'DataLoader', 'version', 'features', '__version__',
+                "DataLoader",
+                "version",
+                "features",
+                "__version__",
                 # TBL v2
-                'TblReaderV2', 'TblWriterV2', 'SampleFormat', 'MetadataType',
+                "TblReaderV2",
+                "TblWriterV2",
+                "SampleFormat",
+                "MetadataType",
                 # Smart Batching
-                'SmartBatchConfig',
+                "SmartBatchConfig",
                 # Transform Composition
-                'Compose', 'ComposedTransforms',
+                "Compose",
+                "ComposedTransforms",
                 # Transforms
-                'Resize', 'CenterCrop', 'RandomCrop',
-                'RandomHorizontalFlip', 'RandomVerticalFlip',
-                'ColorJitter', 'GaussianBlur', 'Grayscale',
-                'Normalize', 'ImageNetNormalize', 'ToTensor',
-                'Pad', 'RandomRotation', 'RandomAffine',
-                'RandomPerspective', 'RandomPosterize', 'RandomSolarize',
-                'RandomErasing', 'AutoAugment', 'AutoAugmentPolicy',
+                "Resize",
+                "CenterCrop",
+                "RandomCrop",
+                "RandomHorizontalFlip",
+                "RandomVerticalFlip",
+                "ColorJitter",
+                "GaussianBlur",
+                "Grayscale",
+                "Normalize",
+                "ImageNetNormalize",
+                "ToTensor",
+                "Pad",
+                "RandomRotation",
+                "RandomAffine",
+                "RandomPerspective",
+                "RandomPosterize",
+                "RandomSolarize",
+                "RandomErasing",
+                "AutoAugment",
+                "AutoAugmentPolicy",
                 # Modern Augmentations (v1.8.0)
-                'MixUp', 'CutMix', 'Mosaic', 'RandAugment', 'GridMask',
+                "MixUp",
+                "CutMix",
+                "Mosaic",
+                "RandAugment",
+                "GridMask",
                 # Logging (v1.8.0)
-                'LogLevel', 'enable_logging', 'disable_logging', 'set_log_level', 'set_log_output',
+                "LogLevel",
+                "enable_logging",
+                "disable_logging",
+                "set_log_level",
+                "set_log_output",
                 # Enums
-                'InterpolationMode', 'PaddingMode', 'TensorFormat',
+                "InterpolationMode",
+                "PaddingMode",
+                "TensorFormat",
             ]
 
             for export in expected_exports:
@@ -393,15 +446,17 @@ def run_tests():
     print("=" * 70)
 
     # Run pytest
-    exit_code = pytest.main([
-        __file__,
-        '-v',
-        '--tb=short',
-        '-x',  # Stop on first failure
-    ])
+    exit_code = pytest.main(
+        [
+            __file__,
+            "-v",
+            "--tb=short",
+            "-x",  # Stop on first failure
+        ]
+    )
 
     return exit_code
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(run_tests())

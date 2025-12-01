@@ -10,11 +10,13 @@ import sys
 import os
 import subprocess
 
+
 class get_pybind_include(object):
     """Helper class to determine the pybind11 include path"""
 
     def __str__(self):
         import pybind11
+
         return pybind11.get_include()
 
 
@@ -42,80 +44,115 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
 
     # Try pkg-config first (most reliable on Linux)
     try:
-        cflags = subprocess.check_output(
-            ['pkg-config', '--cflags', pkg_config_name],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
+        cflags = (
+            subprocess.check_output(
+                ["pkg-config", "--cflags", pkg_config_name], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
 
-        libs = subprocess.check_output(
-            ['pkg-config', '--libs', pkg_config_name],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
+        libs = (
+            subprocess.check_output(
+                ["pkg-config", "--libs", pkg_config_name], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
 
         # Parse -I flag for include path
         include_path = None
         for flag in cflags.split():
-            if flag.startswith('-I'):
+            if flag.startswith("-I"):
                 path = flag[2:]
                 if verify_include(path):
                     include_path = path
                     break
 
+        # If no -I flag found, try to get includedir variable
+        if not include_path:
+            try:
+                inc_dir = (
+                    subprocess.check_output(
+                        ["pkg-config", "--variable=includedir", pkg_config_name],
+                        stderr=subprocess.DEVNULL,
+                    )
+                    .decode()
+                    .strip()
+                )
+                if inc_dir and verify_include(inc_dir):
+                    include_path = inc_dir
+            except Exception:
+                pass
+
         # Parse -L flag for library path (or use default)
         lib_path = None
         for flag in libs.split():
-            if flag.startswith('-L'):
+            if flag.startswith("-L"):
                 lib_path = flag[2:]
                 break
 
         # If no -L flag, try to get libdir
         if not lib_path:
             try:
-                lib_path = subprocess.check_output(
-                    ['pkg-config', '--variable=libdir', pkg_config_name],
-                    stderr=subprocess.DEVNULL
-                ).decode().strip()
-            except:
+                lib_path = (
+                    subprocess.check_output(
+                        ["pkg-config", "--variable=libdir", pkg_config_name],
+                        stderr=subprocess.DEVNULL,
+                    )
+                    .decode()
+                    .strip()
+                )
+            except Exception:
                 pass
 
         # If we found include but not lib, use system default
         if include_path and not lib_path:
-            for lp in ['/usr/lib/x86_64-linux-gnu', '/usr/lib', '/usr/local/lib']:
+            for lp in ["/usr/lib/x86_64-linux-gnu", "/usr/lib", "/usr/local/lib"]:
                 if os.path.exists(lp):
                     lib_path = lp
                     break
 
         if include_path and lib_path:
             return include_path, lib_path
-    except:
+    except Exception:
         pass
 
     # Try Homebrew (macOS)
     try:
-        brew_prefix = subprocess.check_output(
-            ['brew', '--prefix', brew_name],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
+        brew_prefix = (
+            subprocess.check_output(["brew", "--prefix", brew_name], stderr=subprocess.DEVNULL)
+            .decode()
+            .strip()
+        )
 
-        include_path = os.path.join(brew_prefix, 'include')
-        lib_path = os.path.join(brew_prefix, 'lib')
+        include_path = os.path.join(brew_prefix, "include")
+        lib_path = os.path.join(brew_prefix, "lib")
 
-        if os.path.exists(include_path) and os.path.exists(lib_path) and verify_include(include_path):
+        if (
+            os.path.exists(include_path)
+            and os.path.exists(lib_path)
+            and verify_include(include_path)
+        ):
             return include_path, lib_path
     except:
         pass
 
     # Try common system locations (verify headers exist)
     possible_paths = [
-        '/usr/local',
-        '/usr',
+        "/usr/local",
+        "/usr",
     ]
 
     for base_path in possible_paths:
-        include_path = os.path.join(base_path, 'include')
-        lib_path = os.path.join(base_path, 'lib')
+        include_path = os.path.join(base_path, "include")
+        lib_path = os.path.join(base_path, "lib")
 
-        if os.path.exists(include_path) and os.path.exists(lib_path) and verify_include(include_path):
+        if (
+            os.path.exists(include_path)
+            and os.path.exists(lib_path)
+            and verify_include(include_path)
+        ):
             return include_path, lib_path
 
     return None, None
@@ -124,7 +161,7 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
 # Find all required libraries
 print("Detecting dependencies...")
 
-jpeg_include, jpeg_lib = find_library('jpeg-turbo', 'jpeg-turbo', 'libjpeg')
+jpeg_include, jpeg_lib = find_library("jpeg-turbo", "jpeg-turbo", "libjpeg")
 if not jpeg_include:
     raise RuntimeError(
         "Could not find libjpeg-turbo installation.\n"
@@ -134,7 +171,7 @@ if not jpeg_include:
     )
 print(f"  libjpeg-turbo: {jpeg_include}")
 
-png_include, png_lib = find_library('libpng', 'libpng', 'libpng')
+png_include, png_lib = find_library("libpng", "libpng", "libpng")
 if not png_include:
     raise RuntimeError(
         "Could not find libpng installation.\n"
@@ -144,7 +181,7 @@ if not png_include:
     )
 print(f"  libpng: {png_include}")
 
-webp_include, webp_lib = find_library('webp', 'webp', 'libwebp')
+webp_include, webp_lib = find_library("webp", "webp", "libwebp")
 if not webp_include:
     raise RuntimeError(
         "Could not find libwebp installation.\n"
@@ -154,7 +191,7 @@ if not webp_include:
     )
 print(f"  libwebp: {webp_include}")
 
-curl_include, curl_lib = find_library('curl', 'curl', 'libcurl', header_subdir='curl')
+curl_include, curl_lib = find_library("curl", "curl", "libcurl", header_subdir="curl")
 if not curl_include:
     raise RuntimeError(
         "Could not find libcurl installation.\n"
@@ -164,7 +201,7 @@ if not curl_include:
     )
 print(f"  libcurl: {curl_include}")
 
-lz4_include, lz4_lib = find_library('lz4', 'lz4', 'liblz4')
+lz4_include, lz4_lib = find_library("lz4", "lz4", "liblz4")
 if not lz4_include:
     raise RuntimeError(
         "Could not find lz4 installation.\n"
@@ -176,9 +213,9 @@ print(f"  lz4: {lz4_include}")
 
 ext_modules = [
     Extension(
-        '_turboloader',
+        "_turboloader",
         sources=[
-            'src/python/turboloader_bindings.cpp',
+            "src/python/turboloader_bindings.cpp",
         ],
         include_dirs=[
             get_pybind_include(),
@@ -187,7 +224,7 @@ ext_modules = [
             webp_include,
             curl_include,
             lz4_include,
-            'src',  # For pipeline headers
+            "src",  # For pipeline headers
         ],
         library_dirs=[
             jpeg_lib,
@@ -197,18 +234,18 @@ ext_modules = [
             lz4_lib,
         ],
         libraries=[
-            'jpeg',
-            'png',
-            'webp',
-            'webpdemux',
-            'curl',
-            'lz4',
+            "jpeg",
+            "png",
+            "webp",
+            "webpdemux",
+            "curl",
+            "lz4",
         ],
-        language='c++',
+        language="c++",
         extra_compile_args=[
-            '-std=c++20',
-            '-O3',
-            '-fvisibility=hidden',
+            "-std=c++20",
+            "-O3",
+            "-fvisibility=hidden",
         ],
         extra_link_args=[],
     ),
@@ -229,19 +266,19 @@ class BuildExt(build_ext):
             opts = list(ext.extra_compile_args)
             link_opts = list(ext.extra_link_args)
 
-            if ct == 'unix':
+            if ct == "unix":
                 # macOS-specific flags
-                if system == 'darwin':
-                    opts.append('-mmacosx-version-min=10.15')
-                    link_opts.append('-mmacosx-version-min=10.15')
-                    if 'arm64' in arch:
-                        opts.append('-mcpu=apple-m1')
+                if system == "darwin":
+                    opts.append("-mmacosx-version-min=10.15")
+                    link_opts.append("-mmacosx-version-min=10.15")
+                    if "arm64" in arch:
+                        opts.append("-mcpu=apple-m1")
                 else:
                     # Linux - use march=native for x86
-                    if 'x86' in arch or 'amd64' in arch:
-                        opts.append('-march=native')
-            elif ct == 'msvc':
-                opts.append('/std:c++20')
+                    if "x86" in arch or "amd64" in arch:
+                        opts.append("-march=native")
+            elif ct == "msvc":
+                opts.append("/std:c++20")
 
             ext.extra_compile_args = opts
             ext.extra_link_args = link_opts
@@ -250,35 +287,35 @@ class BuildExt(build_ext):
 
 
 setup(
-    name='turboloader',
-    version='2.3.1',
-    author='TurboLoader Contributors',
-    description='High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support',
-    long_description=open('README.md').read() if os.path.exists('README.md') else '',
-    long_description_content_type='text/markdown',
+    name="turboloader",
+    version="2.3.2",
+    author="TurboLoader Contributors",
+    description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
+    long_description=open("README.md").read() if os.path.exists("README.md") else "",
+    long_description_content_type="text/markdown",
     ext_modules=ext_modules,
-    cmdclass={'build_ext': BuildExt},
+    cmdclass={"build_ext": BuildExt},
     install_requires=[
-        'pybind11>=2.10.0',
-        'numpy>=1.20.0',
+        "pybind11>=2.10.0",
+        "numpy>=1.20.0",
     ],
     extras_require={
-        'torch': ['torch>=1.10.0'],
-        'dev': ['pytest', 'black', 'mypy'],
+        "torch": ["torch>=1.10.0"],
+        "dev": ["pytest", "black", "mypy"],
     },
-    python_requires='>=3.8',
+    python_requires=">=3.8",
     classifiers=[
-        'Development Status :: 4 - Beta',
-        'Intended Audience :: Developers',
-        'Intended Audience :: Science/Research',
-        'License :: OSI Approved :: MIT License',
-        'Programming Language :: C++',
-        'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
-        'Programming Language :: Python :: 3.10',
-        'Programming Language :: Python :: 3.11',
-        'Topic :: Scientific/Engineering :: Artificial Intelligence',
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: C++",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     zip_safe=False,
 )

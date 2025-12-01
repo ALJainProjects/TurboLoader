@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
     import turboloader
+
     TURBOLOADER_AVAILABLE = True
 except ImportError:
     print("Warning: TurboLoader not installed. Using mock data.")
@@ -24,6 +25,7 @@ try:
     import torch
     from torch.utils.data import DataLoader, Dataset
     import torchvision.transforms as transforms
+
     PYTORCH_AVAILABLE = True
 except ImportError:
     print("Warning: PyTorch not installed")
@@ -31,6 +33,7 @@ except ImportError:
 
 try:
     import tensorflow as tf
+
     TENSORFLOW_AVAILABLE = True
 except ImportError:
     print("Warning: TensorFlow not installed")
@@ -39,15 +42,18 @@ except ImportError:
 
 class DummyDataset(Dataset):
     """Dummy dataset for PyTorch benchmarking"""
+
     def __init__(self, size=1000):
         self.size = size
-        self.transform = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        self.transform = transforms.Compose(
+            [
+                transforms.ToPILImage(),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ]
+        )
 
     def __len__(self):
         return self.size
@@ -55,6 +61,7 @@ class DummyDataset(Dataset):
     def __getitem__(self, idx):
         # Generate random image
         import numpy as np
+
         img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
         return self.transform(img), 0
 
@@ -87,9 +94,9 @@ def benchmark_turboloader(tar_path, num_workers=4, batch_size=32, num_batches=10
         throughput = images_processed / elapsed
 
         return {
-            'throughput': round(throughput, 2),
-            'elapsed': round(elapsed, 2),
-            'images': images_processed
+            "throughput": round(throughput, 2),
+            "elapsed": round(elapsed, 2),
+            "images": images_processed,
         }
     except Exception as e:
         print(f"Error benchmarking TurboLoader: {e}")
@@ -110,7 +117,7 @@ def benchmark_pytorch(num_workers=4, batch_size=32, num_batches=100):
             batch_size=batch_size,
             num_workers=num_workers,
             pin_memory=True,
-            persistent_workers=True if num_workers > 0 else False
+            persistent_workers=True if num_workers > 0 else False,
         )
 
         # Warmup
@@ -131,9 +138,9 @@ def benchmark_pytorch(num_workers=4, batch_size=32, num_batches=100):
         throughput = images_processed / elapsed
 
         return {
-            'throughput': round(throughput, 2),
-            'elapsed': round(elapsed, 2),
-            'images': images_processed
+            "throughput": round(throughput, 2),
+            "elapsed": round(elapsed, 2),
+            "images": images_processed,
         }
     except Exception as e:
         print(f"Error benchmarking PyTorch: {e}")
@@ -148,7 +155,7 @@ def generate_mock_data():
             "dataset_size": 5000,
             "image_size": "256x256",
             "version": "0.8.1",
-            "note": "Mock data for demonstration"
+            "note": "Mock data for demonstration",
         },
         "frameworks": [
             {
@@ -156,102 +163,78 @@ def generate_mock_data():
                 "throughput": 10146,
                 "memory": 245,
                 "cpu": 85,
-                "description": "C++20 with SIMD acceleration"
+                "description": "C++20 with SIMD acceleration",
             },
             {
                 "name": "PyTorch Optimized",
                 "throughput": 842,
                 "memory": 1890,
                 "cpu": 92,
-                "description": "PyTorch with persistent workers"
+                "description": "PyTorch with persistent workers",
             },
             {
                 "name": "PyTorch Naive",
                 "throughput": 215,
                 "memory": 2340,
                 "cpu": 78,
-                "description": "Basic PyTorch DataLoader"
+                "description": "Basic PyTorch DataLoader",
             },
             {
                 "name": "TensorFlow",
                 "throughput": 7680,
                 "memory": 892,
                 "cpu": 88,
-                "description": "TensorFlow tf.data pipeline"
+                "description": "TensorFlow tf.data pipeline",
             },
             {
                 "name": "FFCV",
                 "throughput": 8920,
                 "memory": 512,
                 "cpu": 90,
-                "description": "Fast Forward Computer Vision"
+                "description": "Fast Forward Computer Vision",
             },
             {
                 "name": "DALI",
                 "throughput": 6840,
                 "memory": 678,
                 "cpu": 87,
-                "description": "NVIDIA DALI"
+                "description": "NVIDIA DALI",
             },
             {
                 "name": "PIL Baseline",
                 "throughput": 128,
                 "memory": 3200,
                 "cpu": 65,
-                "description": "Pure Python PIL"
+                "description": "Pure Python PIL",
             },
             {
                 "name": "Torchvision",
                 "throughput": 456,
                 "memory": 1560,
                 "cpu": 72,
-                "description": "Torchvision transforms"
-            }
+                "description": "Torchvision transforms",
+            },
         ],
         "workers": {
             "workers": [1, 2, 4, 8, 16],
             "turboloader": [3421, 6234, 10146, 12340, 13120],
             "pytorch": [198, 356, 842, 1120, 1240],
-            "tensorflow": [2145, 4280, 7680, 8920, 9340]
+            "tensorflow": [2145, 4280, 7680, 8920, 9340],
         },
         "batchSize": {
             "sizes": [8, 16, 32, 64, 128, 256],
             "turboloader": [8234, 9456, 10146, 10890, 11120, 10980],
             "pytorch": [456, 678, 842, 920, 945, 890],
-            "tensorflow": [5234, 6789, 7680, 8234, 8456, 8120]
+            "tensorflow": [5234, 6789, 7680, 8234, 8456, 8120],
         },
         "transforms": [
-            {
-                "name": "RandomCrop",
-                "simd": True,
-                "speedup": "3.2x"
-            },
-            {
-                "name": "RandomHorizontalFlip",
-                "simd": True,
-                "speedup": "2.8x"
-            },
-            {
-                "name": "ColorJitter",
-                "simd": True,
-                "speedup": "4.1x"
-            },
-            {
-                "name": "Normalize",
-                "simd": True,
-                "speedup": "5.6x"
-            },
-            {
-                "name": "RandomRotation",
-                "simd": True,
-                "speedup": "2.9x"
-            },
-            {
-                "name": "AutoAugment",
-                "simd": True,
-                "speedup": "3.7x"
-            }
-        ]
+            {"name": "RandomCrop", "simd": True, "speedup": "3.2x"},
+            {"name": "RandomHorizontalFlip", "simd": True, "speedup": "2.8x"},
+            {"name": "ColorJitter", "simd": True, "speedup": "4.1x"},
+            {"name": "Normalize", "simd": True, "speedup": "5.6x"},
+            {"name": "RandomRotation", "simd": True, "speedup": "2.9x"},
+            {"name": "AutoAugment", "simd": True, "speedup": "3.7x"},
+        ],
     }
 
 
@@ -263,23 +246,15 @@ def run_comprehensive_benchmark(tar_path=None):
     print("=" * 80)
 
     results = {
-        "metadata": {
-            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "version": "0.8.1"
-        },
+        "metadata": {"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"), "version": "0.8.1"},
         "frameworks": [],
-        "workers": {
-            "workers": [1, 2, 4, 8],
-            "turboloader": [],
-            "pytorch": [],
-            "tensorflow": []
-        },
+        "workers": {"workers": [1, 2, 4, 8], "turboloader": [], "pytorch": [], "tensorflow": []},
         "batchSize": {
             "sizes": [8, 16, 32, 64, 128],
             "turboloader": [],
             "pytorch": [],
-            "tensorflow": []
-        }
+            "tensorflow": [],
+        },
     }
 
     # If no real benchmarks can be run, return mock data
@@ -291,22 +266,26 @@ def run_comprehensive_benchmark(tar_path=None):
     if tar_path and TURBOLOADER_AVAILABLE:
         result = benchmark_turboloader(tar_path, num_workers=4, batch_size=32)
         if result:
-            results["frameworks"].append({
-                "name": "TurboLoader",
-                "throughput": result['throughput'],
-                "memory": 245,  # Placeholder
-                "cpu": 85       # Placeholder
-            })
+            results["frameworks"].append(
+                {
+                    "name": "TurboLoader",
+                    "throughput": result["throughput"],
+                    "memory": 245,  # Placeholder
+                    "cpu": 85,  # Placeholder
+                }
+            )
 
     if PYTORCH_AVAILABLE:
         result = benchmark_pytorch(num_workers=4, batch_size=32)
         if result:
-            results["frameworks"].append({
-                "name": "PyTorch Optimized",
-                "throughput": result['throughput'],
-                "memory": 1890,
-                "cpu": 92
-            })
+            results["frameworks"].append(
+                {
+                    "name": "PyTorch Optimized",
+                    "throughput": result["throughput"],
+                    "memory": 1890,
+                    "cpu": 92,
+                }
+            )
 
     # Worker scaling benchmark
     print("\nBenchmarking worker scaling...")
@@ -314,12 +293,12 @@ def run_comprehensive_benchmark(tar_path=None):
         if tar_path and TURBOLOADER_AVAILABLE:
             result = benchmark_turboloader(tar_path, num_workers=num_workers, batch_size=32)
             if result:
-                results["workers"]["turboloader"].append(result['throughput'])
+                results["workers"]["turboloader"].append(result["throughput"])
 
         if PYTORCH_AVAILABLE:
             result = benchmark_pytorch(num_workers=num_workers, batch_size=32)
             if result:
-                results["workers"]["pytorch"].append(result['throughput'])
+                results["workers"]["pytorch"].append(result["throughput"])
 
     # Batch size scaling benchmark
     print("\nBenchmarking batch size scaling...")
@@ -327,12 +306,12 @@ def run_comprehensive_benchmark(tar_path=None):
         if tar_path and TURBOLOADER_AVAILABLE:
             result = benchmark_turboloader(tar_path, num_workers=4, batch_size=batch_size)
             if result:
-                results["batchSize"]["turboloader"].append(result['throughput'])
+                results["batchSize"]["turboloader"].append(result["throughput"])
 
         if PYTORCH_AVAILABLE:
             result = benchmark_pytorch(num_workers=4, batch_size=batch_size)
             if result:
-                results["batchSize"]["pytorch"].append(result['throughput'])
+                results["batchSize"]["pytorch"].append(result["throughput"])
 
     # If we don't have enough data, supplement with mock data
     if len(results["frameworks"]) < 3:
@@ -347,12 +326,22 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Generate benchmark data for web app")
-    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
-                        help='Path to TAR file containing images')
-    parser.add_argument('--output', type=str, default='benchmark_data.json',
-                       help='Output JSON file (default: benchmark_data.json)')
-    parser.add_argument('--mock', action='store_true',
-                       help='Generate mock data only (no real benchmarks)')
+    parser.add_argument(
+        "--tar-path",
+        "-tp",
+        type=str,
+        default="/private/tmp/benchmark_datasets/bench_2k/dataset.tar",
+        help="Path to TAR file containing images",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="benchmark_data.json",
+        help="Output JSON file (default: benchmark_data.json)",
+    )
+    parser.add_argument(
+        "--mock", action="store_true", help="Generate mock data only (no real benchmarks)"
+    )
 
     args = parser.parse_args()
 
@@ -364,7 +353,7 @@ def main():
 
     # Save to JSON
     output_path = Path(__file__).parent.parent / args.output
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(data, f, indent=2)
 
     print(f"\n{'=' * 80}")
@@ -378,10 +367,10 @@ def main():
     print(f"  - Worker configurations: {len(data['workers']['workers'])}")
     print(f"  - Batch sizes tested: {len(data['batchSize']['sizes'])}")
 
-    if data.get('frameworks'):
-        best = max(data['frameworks'], key=lambda x: x['throughput'])
+    if data.get("frameworks"):
+        best = max(data["frameworks"], key=lambda x: x["throughput"])
         print(f"\n  Best throughput: {best['name']} @ {best['throughput']:,.0f} img/s")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

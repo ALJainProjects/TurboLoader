@@ -27,9 +27,9 @@ def create_sample_image(width=100, height=100):
     for y in range(height):
         for x in range(width):
             image[y, x] = [
-                int((x / width) * 255),      # Red gradient
-                int((y / height) * 255),     # Green gradient
-                128                           # Constant blue
+                int((x / width) * 255),  # Red gradient
+                int((y / height) * 255),  # Green gradient
+                128,  # Constant blue
             ]
     return image
 
@@ -87,13 +87,7 @@ def demo_augmentation_transforms():
 
     # Color Jitter
     print("1. Color Jitter")
-    jitter = tl.ColorJitter(
-        brightness=0.5,
-        contrast=0.5,
-        saturation=0.5,
-        hue=0.1,
-        seed=42
-    )
+    jitter = tl.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.1, seed=42)
     jittered = jitter.apply(image)
     print(f"   Applied color jitter")
     save_image(jittered, "output_colorjitter.png")

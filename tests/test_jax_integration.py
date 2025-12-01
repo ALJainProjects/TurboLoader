@@ -12,7 +12,7 @@ import numpy as np
 from pathlib import Path
 
 # Add python directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'python'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 
 
 def create_test_tar(num_images=20):
@@ -20,36 +20,38 @@ def create_test_tar(num_images=20):
     try:
         from PIL import Image
     except ImportError:
-        raise ImportError("PIL is required for creating test images. Install it with: pip install Pillow")
+        raise ImportError(
+            "PIL is required for creating test images. Install it with: pip install Pillow"
+        )
 
     tmpdir = tempfile.mkdtemp()
-    tar_path = os.path.join(tmpdir, 'test.tar')
+    tar_path = os.path.join(tmpdir, "test.tar")
 
     # Create test images
-    images_dir = os.path.join(tmpdir, 'images')
+    images_dir = os.path.join(tmpdir, "images")
     os.makedirs(images_dir, exist_ok=True)
 
     for i in range(num_images):
         # Create a simple test image (random RGB) as JPEG
         img_data = np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)
-        img = Image.fromarray(img_data, mode='RGB')
-        img_path = os.path.join(images_dir, f'img_{i:04d}.jpg')
-        img.save(img_path, 'JPEG', quality=90)
+        img = Image.fromarray(img_data, mode="RGB")
+        img_path = os.path.join(images_dir, f"img_{i:04d}.jpg")
+        img.save(img_path, "JPEG", quality=90)
 
     # Create TAR
-    with tarfile.open(tar_path, 'w') as tar:
+    with tarfile.open(tar_path, "w") as tar:
         for i in range(num_images):
-            img_path = os.path.join(images_dir, f'img_{i:04d}.jpg')
-            tar.add(img_path, arcname=f'img_{i:04d}.jpg')
+            img_path = os.path.join(images_dir, f"img_{i:04d}.jpg")
+            tar.add(img_path, arcname=f"img_{i:04d}.jpg")
 
     return tar_path
 
 
 def test_jax_dataloader_basic():
     """Test basic JAXDataLoader functionality"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Test 1: Basic JAXDataLoader")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import jax
@@ -58,12 +60,7 @@ def test_jax_dataloader_basic():
 
         tar_path = create_test_tar(10)
 
-        loader = JAXDataLoader(
-            tar_path,
-            batch_size=4,
-            num_workers=2,
-            shuffle=False
-        )
+        loader = JAXDataLoader(tar_path, batch_size=4, num_workers=2, shuffle=False)
 
         print(f"  ✓ Created JAXDataLoader")
 
@@ -91,15 +88,16 @@ def test_jax_dataloader_basic():
     except Exception as e:
         print(f"  ✗ FAILED: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def test_jax_device_placement():
     """Test JAX device placement functionality"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Test 2: JAX Device Placement")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import jax
@@ -113,10 +111,7 @@ def test_jax_device_placement():
         print(f"  ✓ Available JAX devices: {len(devices)}")
 
         loader = JAXDataLoader(
-            tar_path,
-            batch_size=2,
-            num_workers=1,
-            device=devices[0]  # Place on first device
+            tar_path, batch_size=2, num_workers=1, device=devices[0]  # Place on first device
         )
 
         print(f"  ✓ Created loader with device placement")
@@ -126,7 +121,7 @@ def test_jax_device_placement():
             print(f"  ✓ Batch retrieved: images={images.shape}")
 
             # Check device placement
-            if hasattr(images, 'device'):
+            if hasattr(images, "device"):
                 print(f"  ✓ Images on device: {images.device()}")
 
             break
@@ -143,15 +138,16 @@ def test_jax_device_placement():
     except Exception as e:
         print(f"  ✗ FAILED: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def test_jax_sharding():
     """Test JAX sharding functionality"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Test 3: JAX Sharding")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import jax
@@ -172,7 +168,7 @@ def test_jax_sharding():
             batch_size=8,
             num_workers=2,
             devices=devices[:2],  # Use first 2 devices
-            shard_data=True
+            shard_data=True,
         )
 
         print(f"  ✓ Created loader with sharding across {len(devices[:2])} devices")
@@ -182,7 +178,7 @@ def test_jax_sharding():
             print(f"  ✓ Sharded batch retrieved: images={images.shape}")
 
             # Check if it's sharded
-            if hasattr(images, 'sharding'):
+            if hasattr(images, "sharding"):
                 print(f"  ✓ Data is sharded: {images.sharding}")
 
             break
@@ -199,15 +195,16 @@ def test_jax_sharding():
     except Exception as e:
         print(f"  ✗ FAILED: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def test_flax_training():
     """Test Flax model training with JAXDataLoader"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Test 4: Flax Model Training")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import jax
@@ -276,15 +273,16 @@ def test_flax_training():
     except Exception as e:
         print(f"  ✗ FAILED: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def test_jax_prefetch():
     """Test JAXDataLoader prefetch functionality"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Test 5: JAX Prefetch")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import jax
@@ -292,12 +290,7 @@ def test_jax_prefetch():
 
         tar_path = create_test_tar(12)
 
-        loader = JAXDataLoader(
-            tar_path,
-            batch_size=3,
-            num_workers=2,
-            prefetch=2  # Enable prefetch
-        )
+        loader = JAXDataLoader(tar_path, batch_size=3, num_workers=2, prefetch=2)  # Enable prefetch
 
         print("  ✓ Created JAXDataLoader with prefetch=2")
 
@@ -322,29 +315,30 @@ def test_jax_prefetch():
     except Exception as e:
         print(f"  ✗ FAILED: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def main():
     """Run all JAX integration tests"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TurboLoader JAX/Flax Integration Tests")
-    print("="*80)
+    print("=" * 80)
 
     results = {}
 
     # Run all tests
-    results['basic_dataloader'] = test_jax_dataloader_basic()
-    results['device_placement'] = test_jax_device_placement()
-    results['sharding'] = test_jax_sharding()
-    results['flax_training'] = test_flax_training()
-    results['prefetch'] = test_jax_prefetch()
+    results["basic_dataloader"] = test_jax_dataloader_basic()
+    results["device_placement"] = test_jax_device_placement()
+    results["sharding"] = test_jax_sharding()
+    results["flax_training"] = test_flax_training()
+    results["prefetch"] = test_jax_prefetch()
 
     # Summary
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Test Summary")
-    print("="*80)
+    print("=" * 80)
 
     passed = sum(1 for r in results.values() if r is True)
     failed = sum(1 for r in results.values() if r is False)
@@ -359,11 +353,11 @@ def main():
             print(f"  ⊘ {name}: SKIPPED")
 
     print(f"\nTotal: {passed} passed, {failed} failed, {skipped} skipped")
-    print("="*80)
+    print("=" * 80)
 
     # Return exit code
     return 1 if failed > 0 else 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

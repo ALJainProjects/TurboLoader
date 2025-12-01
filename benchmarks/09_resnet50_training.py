@@ -41,7 +41,7 @@ except ImportError:
 class ResNet50Trainer:
     """Trainer for ResNet-50 using TurboLoader"""
 
-    def __init__(self, num_classes: int = 10, device: str = 'cpu'):
+    def __init__(self, num_classes: int = 10, device: str = "cpu"):
         """Initialize trainer with ResNet-50 model"""
         self.device = torch.device(device)
 
@@ -53,27 +53,17 @@ class ResNet50Trainer:
         self.criterion = nn.CrossEntropyLoss()
 
         # Optimizer: SGD with momentum (standard for ResNet)
-        self.optimizer = optim.SGD(
-            self.model.parameters(),
-            lr=0.1,
-            momentum=0.9,
-            weight_decay=1e-4
-        )
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4)
 
         # Learning rate scheduler: step decay
-        self.scheduler = optim.lr_scheduler.StepLR(
-            self.optimizer,
-            step_size=2,
-            gamma=0.1
-        )
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=2, gamma=0.1)
 
         # Metrics
         self.train_losses: List[float] = []
         self.train_accuracies: List[float] = []
         self.epoch_times: List[float] = []
 
-    def train_epoch(self, tar_path: str, batch_size: int,
-                   num_workers: int, epoch: int) -> Dict:
+    def train_epoch(self, tar_path: str, batch_size: int, num_workers: int, epoch: int) -> Dict:
         """Train for one epoch using TurboLoader"""
         self.model.train()
 
@@ -82,7 +72,7 @@ class ResNet50Trainer:
             data_path=tar_path,
             batch_size=batch_size,
             num_workers=num_workers,
-            shuffle=True  # Shuffle for training
+            shuffle=True,  # Shuffle for training
         )
 
         epoch_start = time.time()
@@ -101,8 +91,8 @@ class ResNet50Trainer:
             batch_count += 1
 
             # Convert to PyTorch tensors
-            images = torch.from_numpy(batch['images']).float()
-            labels = torch.from_numpy(batch['labels']).long()
+            images = torch.from_numpy(batch["images"]).float()
+            labels = torch.from_numpy(batch["labels"]).long()
 
             # Move to device
             images = images.to(self.device)
@@ -139,34 +129,39 @@ class ResNet50Trainer:
         self.scheduler.step()
 
         return {
-            'epoch': epoch,
-            'loss': avg_loss,
-            'accuracy': accuracy,
-            'time': epoch_time,
-            'batches': batch_count,
-            'samples': total,
-            'learning_rate': self.scheduler.get_last_lr()[0]
+            "epoch": epoch,
+            "loss": avg_loss,
+            "accuracy": accuracy,
+            "time": epoch_time,
+            "batches": batch_count,
+            "samples": total,
+            "learning_rate": self.scheduler.get_last_lr()[0],
         }
 
     def get_summary(self) -> Dict:
         """Get training summary statistics"""
         return {
-            'total_epochs': len(self.epoch_times),
-            'total_time': sum(self.epoch_times),
-            'avg_epoch_time': np.mean(self.epoch_times),
-            'std_epoch_time': np.std(self.epoch_times),
-            'final_loss': self.train_losses[-1] if self.train_losses else 0.0,
-            'final_accuracy': self.train_accuracies[-1] if self.train_accuracies else 0.0,
-            'best_accuracy': max(self.train_accuracies) if self.train_accuracies else 0.0,
-            'epoch_times': self.epoch_times,
-            'losses': self.train_losses,
-            'accuracies': self.train_accuracies
+            "total_epochs": len(self.epoch_times),
+            "total_time": sum(self.epoch_times),
+            "avg_epoch_time": np.mean(self.epoch_times),
+            "std_epoch_time": np.std(self.epoch_times),
+            "final_loss": self.train_losses[-1] if self.train_losses else 0.0,
+            "final_accuracy": self.train_accuracies[-1] if self.train_accuracies else 0.0,
+            "best_accuracy": max(self.train_accuracies) if self.train_accuracies else 0.0,
+            "epoch_times": self.epoch_times,
+            "losses": self.train_losses,
+            "accuracies": self.train_accuracies,
         }
 
 
-def run_training_benchmark(tar_path: str, batch_size: int = 32,
-                          num_workers: int = 8, num_epochs: int = 5,
-                          num_classes: int = 10, device: str = 'cpu') -> Dict:
+def run_training_benchmark(
+    tar_path: str,
+    batch_size: int = 32,
+    num_workers: int = 8,
+    num_epochs: int = 5,
+    num_classes: int = 10,
+    device: str = "cpu",
+) -> Dict:
     """Run full training benchmark with ResNet-50"""
 
     print("=" * 80)
@@ -198,9 +193,7 @@ def run_training_benchmark(tar_path: str, batch_size: int = 32,
         print(f"Epoch {epoch}/{num_epochs}")
         print("-" * 40)
 
-        epoch_metrics = trainer.train_epoch(
-            tar_path, batch_size, num_workers, epoch
-        )
+        epoch_metrics = trainer.train_epoch(tar_path, batch_size, num_workers, epoch)
 
         print(f"  Loss: {epoch_metrics['loss']:.4f}")
         print(f"  Accuracy: {epoch_metrics['accuracy']:.2f}%")
@@ -226,27 +219,27 @@ def run_training_benchmark(tar_path: str, batch_size: int = 32,
 
     # Build results dictionary
     results = {
-        'framework': 'TurboLoader + PyTorch ResNet-50',
-        'model': 'ResNet-50',
-        'total_parameters': int(total_params),
-        'trainable_parameters': int(trainable_params),
-        'batch_size': batch_size,
-        'num_workers': num_workers,
-        'num_epochs': num_epochs,
-        'num_classes': num_classes,
-        'device': device,
-        'optimizer': 'SGD(lr=0.1, momentum=0.9, weight_decay=1e-4)',
-        'scheduler': 'StepLR(step_size=2, gamma=0.1)',
-        'loss_function': 'CrossEntropyLoss',
-        'total_time': summary['total_time'],
-        'avg_epoch_time': summary['avg_epoch_time'],
-        'std_epoch_time': summary['std_epoch_time'],
-        'epoch_times': summary['epoch_times'],
-        'final_loss': summary['final_loss'],
-        'final_accuracy': summary['final_accuracy'],
-        'best_accuracy': summary['best_accuracy'],
-        'losses_per_epoch': summary['losses'],
-        'accuracies_per_epoch': summary['accuracies']
+        "framework": "TurboLoader + PyTorch ResNet-50",
+        "model": "ResNet-50",
+        "total_parameters": int(total_params),
+        "trainable_parameters": int(trainable_params),
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "num_epochs": num_epochs,
+        "num_classes": num_classes,
+        "device": device,
+        "optimizer": "SGD(lr=0.1, momentum=0.9, weight_decay=1e-4)",
+        "scheduler": "StepLR(step_size=2, gamma=0.1)",
+        "loss_function": "CrossEntropyLoss",
+        "total_time": summary["total_time"],
+        "avg_epoch_time": summary["avg_epoch_time"],
+        "std_epoch_time": summary["std_epoch_time"],
+        "epoch_times": summary["epoch_times"],
+        "final_loss": summary["final_loss"],
+        "final_accuracy": summary["final_accuracy"],
+        "best_accuracy": summary["best_accuracy"],
+        "losses_per_epoch": summary["losses"],
+        "accuracies_per_epoch": summary["accuracies"],
     }
 
     return results
@@ -254,25 +247,29 @@ def run_training_benchmark(tar_path: str, batch_size: int = 32,
 
 def main():
     parser = argparse.ArgumentParser(
-        description='ResNet-50 training benchmark with TurboLoader',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        description="ResNet-50 training benchmark with TurboLoader",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
-                        help='Path to TAR file containing images')
-    parser.add_argument('--batch-size', type=int, default=32,
-                       help='Batch size for training')
-    parser.add_argument('--num-workers', type=int, default=8,
-                       help='Number of data loading workers')
-    parser.add_argument('--num-epochs', type=int, default=5,
-                       help='Number of training epochs')
-    parser.add_argument('--num-classes', type=int, default=10,
-                       help='Number of output classes')
-    parser.add_argument('--device', default='cpu',
-                       choices=['cpu', 'cuda', 'mps'],
-                       help='Device to use for training')
-    parser.add_argument('--output', type=str,
-                       default='benchmark_results/09_resnet50_training.json',
-                       help='Output JSON file for results')
+    parser.add_argument(
+        "--tar-path",
+        "-tp",
+        type=str,
+        default="/private/tmp/benchmark_datasets/bench_2k/dataset.tar",
+        help="Path to TAR file containing images",
+    )
+    parser.add_argument("--batch-size", type=int, default=32, help="Batch size for training")
+    parser.add_argument("--num-workers", type=int, default=8, help="Number of data loading workers")
+    parser.add_argument("--num-epochs", type=int, default=5, help="Number of training epochs")
+    parser.add_argument("--num-classes", type=int, default=10, help="Number of output classes")
+    parser.add_argument(
+        "--device", default="cpu", choices=["cpu", "cuda", "mps"], help="Device to use for training"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="benchmark_results/09_resnet50_training.json",
+        help="Output JSON file for results",
+    )
 
     args = parser.parse_args()
 
@@ -282,12 +279,12 @@ def main():
         sys.exit(1)
 
     # Check device availability
-    if args.device == 'cuda' and not torch.cuda.is_available():
+    if args.device == "cuda" and not torch.cuda.is_available():
         print("Warning: CUDA not available, falling back to CPU")
-        args.device = 'cpu'
-    elif args.device == 'mps' and not torch.backends.mps.is_available():
+        args.device = "cpu"
+    elif args.device == "mps" and not torch.backends.mps.is_available():
         print("Warning: MPS not available, falling back to CPU")
-        args.device = 'cpu'
+        args.device = "cpu"
 
     # Run benchmark
     results = run_training_benchmark(
@@ -296,18 +293,18 @@ def main():
         num_workers=args.num_workers,
         num_epochs=args.num_epochs,
         num_classes=args.num_classes,
-        device=args.device
+        device=args.device,
     )
 
     # Save results
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(results, f, indent=2)
 
     print(f"\nResults saved to: {output_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

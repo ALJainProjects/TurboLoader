@@ -5,11 +5,11 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.3.1] - 2025-12-01
+## [2.3.2] - 2025-12-01
 
-### CI/CD Build Fixes and Code Quality Improvements
+### CI/CD Build Fixes, Code Quality, and Black Formatting
 
-This release fixes several build issues and improves cross-platform compatibility.
+This release fixes several build issues and improves code quality with black formatting.
 
 ### Fixed
 - **Ubuntu Build** (`setup.py`)
@@ -35,6 +35,11 @@ This release fixes several build issues and improves cross-platform compatibilit
   - Fixed license format deprecation warning (table → string)
   - Removed missing file references from MANIFEST.in
   - Cleaner sdist/wheel builds
+
+### Changed
+- **Code Formatting**
+  - Applied black formatter to all Python files (33 files reformatted)
+  - Consistent code style across the entire codebase
 
 ---
 

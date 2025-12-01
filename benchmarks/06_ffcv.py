@@ -71,11 +71,11 @@ def extract_tar_to_images(tar_path: str, output_dir: str) -> str:
     print(f"Extracting TAR to: {output_dir}")
     extract_start = time.time()
 
-    with tarfile.open(tar_path, 'r') as tar:
+    with tarfile.open(tar_path, "r") as tar:
         tar.extractall(output_path)
 
     extract_time = time.time() - extract_start
-    image_files = list(output_path.glob('*.jpg'))
+    image_files = list(output_path.glob("*.jpg"))
     print(f"Extracted {len(image_files)} images in {extract_time:.2f}s")
 
     return str(output_path)
@@ -85,15 +85,16 @@ class ImageDataset(torch.utils.data.Dataset):
     """Simple PyTorch dataset for FFCV conversion"""
 
     def __init__(self, image_dir: str):
-        self.image_files = sorted(Path(image_dir).glob('*.jpg'))
+        self.image_files = sorted(Path(image_dir).glob("*.jpg"))
 
     def __len__(self):
         return len(self.image_files)
 
     def __getitem__(self, idx):
         from PIL import Image
+
         img_path = self.image_files[idx]
-        image = Image.open(img_path).convert('RGB')
+        image = Image.open(img_path).convert("RGB")
         label = 0  # Dummy label
         return image, label
 
@@ -117,11 +118,7 @@ def convert_to_beton(image_dir: str, beton_path: str, max_resolution: int = 256)
     convert_start = time.time()
 
     writer = DatasetWriter(
-        beton_path,
-        {
-            'image': RGBImageField(max_resolution=max_resolution),
-            'label': IntField()
-        }
+        beton_path, {"image": RGBImageField(max_resolution=max_resolution), "label": IntField()}
     )
 
     writer.from_indexed_dataset(dataset)
@@ -135,11 +132,13 @@ def convert_to_beton(image_dir: str, beton_path: str, max_resolution: int = 256)
     return convert_time
 
 
-def run_benchmark(tar_path: str,
-                  batch_size: int = 32,
-                  num_workers: int = 8,
-                  num_epochs: int = 3,
-                  work_dir: str = "/tmp/ffcv_benchmark") -> Dict[str, Any]:
+def run_benchmark(
+    tar_path: str,
+    batch_size: int = 32,
+    num_workers: int = 8,
+    num_epochs: int = 3,
+    work_dir: str = "/tmp/ffcv_benchmark",
+) -> Dict[str, Any]:
     """
     Run FFCV benchmark.
 
@@ -153,15 +152,15 @@ def run_benchmark(tar_path: str,
     Returns:
         Dictionary with benchmark results
     """
-    print("="*80)
+    print("=" * 80)
     print("FFCV BENCHMARK")
-    print("="*80)
+    print("=" * 80)
     print(f"TAR file: {tar_path}")
     print(f"Batch size: {batch_size}")
     print(f"Num workers: {num_workers}")
     print(f"Epochs: {num_epochs}")
     print(f"Features: .beton format, OS caching, JIT compilation")
-    print("="*80)
+    print("=" * 80)
 
     # Setup working directory
     work_path = Path(work_dir)
@@ -183,7 +182,7 @@ def run_benchmark(tar_path: str,
 
     # Define FFCV pipeline
     pipelines = {
-        'image': [
+        "image": [
             Resize(256),
             CenterCrop(224),
             ToTensor(),
@@ -191,10 +190,10 @@ def run_benchmark(tar_path: str,
             NormalizeImage(
                 mean=np.array([0.485, 0.456, 0.406]) * 255,
                 std=np.array([0.229, 0.224, 0.225]) * 255,
-                type=np.float32
-            )
+                type=np.float32,
+            ),
         ],
-        'label': [ToTensor()]
+        "label": [ToTensor()],
     }
 
     loader = Loader(
@@ -203,7 +202,7 @@ def run_benchmark(tar_path: str,
         num_workers=num_workers,
         order=OrderOption.SEQUENTIAL,
         pipelines=pipelines,
-        drop_last=False
+        drop_last=False,
     )
 
     # Get dataset size
@@ -263,60 +262,77 @@ def run_benchmark(tar_path: str,
 
     # Calculate statistics
     results = {
-        'framework': 'FFCV',
-        'batch_size': batch_size,
-        'num_workers': num_workers,
-        'num_epochs': num_epochs,
-        'backend': '.beton format, OS caching, JIT compilation',
-        'extraction_time': extraction_time,
-        'conversion_time': conversion_time,
-        'preprocessing_time': extraction_time + conversion_time,
-        'total_time': total_time,
-        'total_time_with_preprocessing': total_time + extraction_time + conversion_time,
-        'epoch_times': epoch_times,
-        'avg_epoch_time': np.mean(epoch_times) if epoch_times else 0,
-        'std_epoch_time': np.std(epoch_times) if epoch_times else 0,
-        'avg_batch_time': np.mean(batch_times) if batch_times else 0,
-        'std_batch_time': np.std(batch_times) if batch_times else 0,
-        'throughput': sample_count * num_epochs / total_time if total_time > 0 else 0,
-        'throughput_with_preprocessing': sample_count * num_epochs / (total_time + extraction_time + conversion_time) if (total_time + extraction_time + conversion_time) > 0 else 0,
-        'peak_memory_mb': max(memory_usage) if memory_usage else 0,
-        'avg_memory_mb': np.mean(memory_usage) if memory_usage else 0,
+        "framework": "FFCV",
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "num_epochs": num_epochs,
+        "backend": ".beton format, OS caching, JIT compilation",
+        "extraction_time": extraction_time,
+        "conversion_time": conversion_time,
+        "preprocessing_time": extraction_time + conversion_time,
+        "total_time": total_time,
+        "total_time_with_preprocessing": total_time + extraction_time + conversion_time,
+        "epoch_times": epoch_times,
+        "avg_epoch_time": np.mean(epoch_times) if epoch_times else 0,
+        "std_epoch_time": np.std(epoch_times) if epoch_times else 0,
+        "avg_batch_time": np.mean(batch_times) if batch_times else 0,
+        "std_batch_time": np.std(batch_times) if batch_times else 0,
+        "throughput": sample_count * num_epochs / total_time if total_time > 0 else 0,
+        "throughput_with_preprocessing": (
+            sample_count * num_epochs / (total_time + extraction_time + conversion_time)
+            if (total_time + extraction_time + conversion_time) > 0
+            else 0
+        ),
+        "peak_memory_mb": max(memory_usage) if memory_usage else 0,
+        "avg_memory_mb": np.mean(memory_usage) if memory_usage else 0,
     }
 
     # Print summary
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("BENCHMARK RESULTS")
-    print("="*80)
+    print("=" * 80)
     print(f"Extraction time: {extraction_time:.2f}s")
     print(f"Conversion time: {conversion_time:.2f}s")
     print(f"Training time: {total_time:.2f}s")
     print(f"Total time (with preprocessing): {total_time + extraction_time + conversion_time:.2f}s")
-    print(f"Average epoch time: {results['avg_epoch_time']:.2f}s ± {results['std_epoch_time']:.2f}s")
-    print(f"Average batch time: {results['avg_batch_time']*1000:.2f}ms ± {results['std_batch_time']*1000:.2f}ms")
+    print(
+        f"Average epoch time: {results['avg_epoch_time']:.2f}s ± {results['std_epoch_time']:.2f}s"
+    )
+    print(
+        f"Average batch time: {results['avg_batch_time']*1000:.2f}ms ± {results['std_batch_time']*1000:.2f}ms"
+    )
     print(f"Throughput (training only): {results['throughput']:.1f} images/sec")
-    print(f"Throughput (with preprocessing): {results['throughput_with_preprocessing']:.1f} images/sec")
+    print(
+        f"Throughput (with preprocessing): {results['throughput_with_preprocessing']:.1f} images/sec"
+    )
     print(f"Peak memory: {results['peak_memory_mb']:.1f} MB")
     print(f"Average memory: {results['avg_memory_mb']:.1f} MB")
-    print("="*80)
+    print("=" * 80)
 
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(description='FFCV benchmark')
-    parser.add_argument('--tar-path', '-tp', type=str, default='/private/tmp/benchmark_datasets/bench_2k/dataset.tar',
-                        help='Path to TAR file containing images')
-    parser.add_argument('--batch-size', '-b', type=int, default=32,
-                       help='Batch size (default: 32)')
-    parser.add_argument('--num-workers', '-w', type=int, default=8,
-                       help='Number of worker threads (default: 8)')
-    parser.add_argument('--epochs', '-e', type=int, default=3,
-                       help='Number of epochs (default: 3)')
-    parser.add_argument('--work-dir', type=str, default='/tmp/ffcv_benchmark',
-                       help='Working directory (default: /tmp/ffcv_benchmark)')
-    parser.add_argument('--output', '-o', type=str,
-                       help='Output JSON file for results')
+    parser = argparse.ArgumentParser(description="FFCV benchmark")
+    parser.add_argument(
+        "--tar-path",
+        "-tp",
+        type=str,
+        default="/private/tmp/benchmark_datasets/bench_2k/dataset.tar",
+        help="Path to TAR file containing images",
+    )
+    parser.add_argument("--batch-size", "-b", type=int, default=32, help="Batch size (default: 32)")
+    parser.add_argument(
+        "--num-workers", "-w", type=int, default=8, help="Number of worker threads (default: 8)"
+    )
+    parser.add_argument("--epochs", "-e", type=int, default=3, help="Number of epochs (default: 3)")
+    parser.add_argument(
+        "--work-dir",
+        type=str,
+        default="/tmp/ffcv_benchmark",
+        help="Working directory (default: /tmp/ffcv_benchmark)",
+    )
+    parser.add_argument("--output", "-o", type=str, help="Output JSON file for results")
 
     args = parser.parse_args()
 
@@ -331,15 +347,15 @@ def main():
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         num_epochs=args.epochs,
-        work_dir=args.work_dir
+        work_dir=args.work_dir,
     )
 
     # Save results if requested
     if args.output:
-        with open(args.output, 'w') as f:
+        with open(args.output, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nResults saved to {args.output}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

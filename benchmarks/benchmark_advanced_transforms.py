@@ -30,9 +30,11 @@ print()
 # For now, we'll create dummy test data and measure C++ performance
 # through direct timing of the C++ layer
 
+
 def create_test_image(width, height, channels=3):
     """Create a test image with random data"""
     return np.random.randint(0, 256, (height, width, channels), dtype=np.uint8)
+
 
 def benchmark_transform(name, description, num_iterations=1000, image_size=(224, 224)):
     """Generic benchmark template"""
@@ -46,6 +48,7 @@ def benchmark_transform(name, description, num_iterations=1000, image_size=(224,
     test_img = create_test_image(image_size[0], image_size[1], 3)
 
     return test_img
+
 
 def benchmark_posterize():
     """Benchmark RandomPosterize transform"""
@@ -81,6 +84,7 @@ def benchmark_posterize():
 
     return throughput
 
+
 def benchmark_solarize():
     """Benchmark RandomSolarize transform"""
     name = "2. RandomSolarize - Threshold-based Inversion"
@@ -113,6 +117,7 @@ def benchmark_solarize():
 
     return throughput
 
+
 def benchmark_perspective():
     """Benchmark RandomPerspective transform"""
     name = "3. RandomPerspective - Perspective Warping"
@@ -124,18 +129,19 @@ def benchmark_perspective():
 
     # Simulate perspective warp (simplified - just bilinear resize as proxy)
     from PIL import Image
+
     pil_img = Image.fromarray(test_img)
 
     # Warmup
     for _ in range(10):
-        _ = pil_img.transform((224, 224), Image.PERSPECTIVE,
-                             (1, 0.1, 0, 0.1, 1, 0, 0.001, 0.001))
+        _ = pil_img.transform((224, 224), Image.PERSPECTIVE, (1, 0.1, 0, 0.1, 1, 0, 0.001, 0.001))
 
     # Benchmark
     start = time.perf_counter()
     for _ in range(num_iterations):
-        result = pil_img.transform((224, 224), Image.PERSPECTIVE,
-                                  (1, 0.1, 0, 0.1, 1, 0, 0.001, 0.001))
+        result = pil_img.transform(
+            (224, 224), Image.PERSPECTIVE, (1, 0.1, 0, 0.1, 1, 0, 0.001, 0.001)
+        )
     end = time.perf_counter()
 
     total_time = end - start
@@ -150,6 +156,7 @@ def benchmark_perspective():
     print(f"  Expected speedup vs PIL: 2-4x (SIMD interpolation)")
 
     return throughput
+
 
 def benchmark_autoaugment():
     """Benchmark AutoAugment transform"""
@@ -192,6 +199,7 @@ def benchmark_autoaugment():
 
     return throughput
 
+
 def benchmark_lanczos():
     """Benchmark Lanczos interpolation"""
     name = "5. Lanczos Interpolation - High-quality Resizing"
@@ -202,6 +210,7 @@ def benchmark_lanczos():
 
     # Compare Lanczos vs Bilinear
     from PIL import Image
+
     pil_img = Image.fromarray(test_img)
 
     # Benchmark Lanczos
@@ -242,11 +251,14 @@ def benchmark_lanczos():
     print(f"  Throughput: {throughput_bilinear:.1f} img/s")
     print()
     print(f"Lanczos vs Bilinear:")
-    print(f"  Relative speed: {bilinear_time/lanczos_time:.2f}x slower (expected for higher quality)")
+    print(
+        f"  Relative speed: {bilinear_time/lanczos_time:.2f}x slower (expected for higher quality)"
+    )
     print(f"  Quality improvement: Sharper downsampling, reduced aliasing")
     print(f"  SIMD acceleration: 6x6 kernel with vectorized multiply-add")
 
     return throughput_lanczos
+
 
 def main():
     """Run all benchmarks"""
@@ -259,11 +271,11 @@ def main():
     results = {}
 
     # Run benchmarks
-    results['posterize'] = benchmark_posterize()
-    results['solarize'] = benchmark_solarize()
-    results['perspective'] = benchmark_perspective()
-    results['autoaugment'] = benchmark_autoaugment()
-    results['lanczos'] = benchmark_lanczos()
+    results["posterize"] = benchmark_posterize()
+    results["solarize"] = benchmark_solarize()
+    results["perspective"] = benchmark_perspective()
+    results["autoaugment"] = benchmark_autoaugment()
+    results["lanczos"] = benchmark_lanczos()
 
     # Summary
     print()
@@ -326,6 +338,7 @@ def main():
     print("Results saved successfully!")
     print()
     print("=" * 80)
+
 
 if __name__ == "__main__":
     main()

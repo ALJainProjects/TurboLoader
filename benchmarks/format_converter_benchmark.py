@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 
+
 def benchmark_tar_reading(tar_path, num_samples=1000):
     """
     Benchmark TAR file reading performance
@@ -38,9 +39,9 @@ def benchmark_tar_reading(tar_path, num_samples=1000):
     samples_read = 0
     total_bytes = 0
 
-    with tarfile.open(tar_path, 'r') as tar:
+    with tarfile.open(tar_path, "r") as tar:
         for member in tar.getmembers():
-            if member.isfile() and (member.name.endswith('.jpg') or member.name.endswith('.jpeg')):
+            if member.isfile() and (member.name.endswith(".jpg") or member.name.endswith(".jpeg")):
                 # Extract and read the file
                 f = tar.extractfile(member)
                 if f:
@@ -65,12 +66,13 @@ def benchmark_tar_reading(tar_path, num_samples=1000):
     print()
 
     return {
-        'samples': samples_read,
-        'time': elapsed,
-        'throughput': throughput,
-        'bandwidth': bandwidth,
-        'size_mb': tar_size_mb
+        "samples": samples_read,
+        "time": elapsed,
+        "throughput": throughput,
+        "bandwidth": bandwidth,
+        "size_mb": tar_size_mb,
     }
+
 
 def simulate_tbl_conversion(tar_path):
     """
@@ -92,7 +94,7 @@ def simulate_tbl_conversion(tar_path):
     total_size = 0
     formats = {}
 
-    with tarfile.open(tar_path, 'r') as tar:
+    with tarfile.open(tar_path, "r") as tar:
         for member in tar.getmembers():
             if member.isfile():
                 file_count += 1
@@ -145,13 +147,14 @@ def simulate_tbl_conversion(tar_path):
     print()
 
     return {
-        'file_count': file_count,
-        'processing_rate': rate,
-        'tar_size_mb': tar_size_mb,
-        'tbl_size_mb': tbl_size_mb,
-        'savings_mb': savings_mb,
-        'savings_pct': savings_pct
+        "file_count": file_count,
+        "processing_rate": rate,
+        "tar_size_mb": tar_size_mb,
+        "tbl_size_mb": tbl_size_mb,
+        "savings_mb": savings_mb,
+        "savings_pct": savings_pct,
     }
+
 
 def compare_sequential_vs_random_access(tar_path, num_samples=100):
     """
@@ -168,9 +171,9 @@ def compare_sequential_vs_random_access(tar_path, num_samples=100):
     # Build index of all files
     print("Building file index...")
     file_list = []
-    with tarfile.open(tar_path, 'r') as tar:
+    with tarfile.open(tar_path, "r") as tar:
         for member in tar.getmembers():
-            if member.isfile() and (member.name.endswith('.jpg') or member.name.endswith('.jpeg')):
+            if member.isfile() and (member.name.endswith(".jpg") or member.name.endswith(".jpeg")):
                 file_list.append(member.name)
 
     print(f"Found {len(file_list)} image files")
@@ -180,10 +183,10 @@ def compare_sequential_vs_random_access(tar_path, num_samples=100):
     print(f"Sequential access ({num_samples} samples)...")
     start_time = time.time()
 
-    with tarfile.open(tar_path, 'r') as tar:
+    with tarfile.open(tar_path, "r") as tar:
         count = 0
         for member in tar.getmembers():
-            if member.isfile() and (member.name.endswith('.jpg') or member.name.endswith('.jpeg')):
+            if member.isfile() and (member.name.endswith(".jpg") or member.name.endswith(".jpeg")):
                 f = tar.extractfile(member)
                 if f:
                     data = f.read()
@@ -203,16 +206,19 @@ def compare_sequential_vs_random_access(tar_path, num_samples=100):
     print("  Note: TAR requires scanning from start for each random access")
 
     import random
+
     random_indices = random.sample(range(min(100, len(file_list))), min(10, num_samples))
     random_indices.sort()  # Sort to minimize seeking
 
     start_time = time.time()
 
     for target_idx in random_indices:
-        with tarfile.open(tar_path, 'r') as tar:
+        with tarfile.open(tar_path, "r") as tar:
             count = 0
             for member in tar.getmembers():
-                if member.isfile() and (member.name.endswith('.jpg') or member.name.endswith('.jpeg')):
+                if member.isfile() and (
+                    member.name.endswith(".jpg") or member.name.endswith(".jpeg")
+                ):
                     if count == target_idx:
                         f = tar.extractfile(member)
                         if f:
@@ -239,6 +245,7 @@ def compare_sequential_vs_random_access(tar_path, num_samples=100):
     print("  No performance penalty for random sampling!")
     print("=" * 80)
     print()
+
 
 def main():
     if len(sys.argv) < 2:
@@ -289,10 +296,13 @@ def main():
     print()
     print("Key takeaways:")
     print("  • TBL format saves ~12.4% disk space")
-    print("  • Conversion is fast (~{:.0f} samples/s)".format(conversion_results['processing_rate']))
+    print(
+        "  • Conversion is fast (~{:.0f} samples/s)".format(conversion_results["processing_rate"])
+    )
     print("  • TBL enables O(1) random access vs O(n) for TAR")
     print("  • Memory-mapped I/O eliminates data copying")
     print("=" * 80)
+
 
 if __name__ == "__main__":
     main()
