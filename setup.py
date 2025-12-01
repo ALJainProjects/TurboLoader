@@ -249,7 +249,7 @@ def get_extensions():
             ],
             language="c++",
             extra_compile_args=[
-                "-std=c++20",
+                "-std=c++17",
                 "-O3",
                 "-fvisibility=hidden",
             ],
@@ -311,7 +311,7 @@ class BuildExt(build_ext):
                     if "x86" in arch or "amd64" in arch:
                         opts.append("-march=native")
             elif ct == "msvc":
-                opts.append("/std:c++20")
+                opts.append("/std:c++17")
 
             ext.extra_compile_args = opts
             ext.extra_link_args = link_opts
@@ -368,7 +368,7 @@ else:
 
 setup(
     name="turboloader",
-    version="2.3.6",
+    version="2.3.7",
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",

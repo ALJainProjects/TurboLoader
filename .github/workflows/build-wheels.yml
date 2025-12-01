@@ -62,7 +62,8 @@ jobs:
         uses: pypa/cibuildwheel@v2.21
         env:
           CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
-          CIBW_SKIP: "*-musllinux_* *-win32 *-manylinux_i686"
+          # Skip musllinux, 32-bit, and Python 3.8 on macOS x86_64 (SDK header path issues)
+          CIBW_SKIP: "*-musllinux_* *-win32 *-manylinux_i686 cp38-macosx_x86_64"
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
 
           # Linux-specific configuration
@@ -163,6 +164,9 @@ jobs:
             python: '3.8'
           - os: macos-14
             python: '3.9'
+          # Python 3.8 on macOS-13 x86_64 has SDK header path issues
+          - os: macos-13
+            python: '3.8'
 
     steps:
       - uses: actions/checkout@v4

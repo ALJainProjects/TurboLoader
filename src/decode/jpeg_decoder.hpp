@@ -14,12 +14,12 @@
 
 #include "../core/sample.hpp"
 #include "../core/object_pool.hpp"
+#include "../core/compat.hpp"  // span polyfill for C++17
 #include <jpeglib.h>
 #include <csetjmp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -115,7 +115,10 @@ public:
         }
 
         // Set source to memory buffer (zero-copy)
-        jpeg_mem_src(&cinfo_, jpeg_data.data(), jpeg_data.size());
+        // Cast needed for older libjpeg that expects non-const pointer
+        jpeg_mem_src(&cinfo_,
+                     const_cast<unsigned char*>(jpeg_data.data()),
+                     jpeg_data.size());
 
         // Read JPEG header
         if (jpeg_read_header(&cinfo_, TRUE) != JPEG_HEADER_OK) {

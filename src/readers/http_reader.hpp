@@ -25,6 +25,30 @@
 #pragma once
 
 #include <curl/curl.h>
+
+// Compatibility macros for older libcurl versions
+// HTTP/2 support requires libcurl 7.33.0+ (CURL_HTTP_VERSION_2_0)
+#ifndef CURL_HTTP_VERSION_2_0
+#define CURL_HTTP_VERSION_2_0 CURL_HTTP_VERSION_1_1
+#endif
+
+// CURLINFO_SIZE_DOWNLOAD_T requires libcurl 7.55.0+
+#ifndef CURLINFO_SIZE_DOWNLOAD_T
+#define CURLINFO_SIZE_DOWNLOAD_T CURLINFO_SIZE_DOWNLOAD
+#define TURBOLOADER_CURL_SIZE_DOUBLE 1
+#endif
+
+// CURLINFO_CONTENT_LENGTH_DOWNLOAD_T requires libcurl 7.55.0+
+#ifndef CURLINFO_CONTENT_LENGTH_DOWNLOAD_T
+#define CURLINFO_CONTENT_LENGTH_DOWNLOAD_T CURLINFO_CONTENT_LENGTH_DOWNLOAD
+#define TURBOLOADER_CURL_LENGTH_DOUBLE 1
+#endif
+
+// HTTP/2 feature flag requires libcurl 7.33.0+
+#ifndef CURL_VERSION_HTTP2
+#define CURL_VERSION_HTTP2 0
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -257,10 +281,16 @@ public:
             // Get HTTP response code
             curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response.http_code);
 
-            // Get download size (use _T variant to avoid deprecation warning)
+            // Get download size (use _T variant if available, otherwise use deprecated version)
+#ifdef TURBOLOADER_CURL_SIZE_DOUBLE
+            double download_size = 0;
+            curl_easy_getinfo(handle, CURLINFO_SIZE_DOWNLOAD_T, &download_size);
+            response.bytes_downloaded = static_cast<size_t>(download_size);
+#else
             curl_off_t download_size = 0;
             curl_easy_getinfo(handle, CURLINFO_SIZE_DOWNLOAD_T, &download_size);
             response.bytes_downloaded = static_cast<size_t>(download_size);
+#endif
 
             // Release connection back to pool
             pool_->release(handle);
@@ -341,8 +371,13 @@ public:
 
         CURLcode res = curl_easy_perform(handle);
 
+#ifdef TURBOLOADER_CURL_LENGTH_DOUBLE
+        double content_length = -1;
+        curl_easy_getinfo(handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
+#else
         curl_off_t content_length = -1;
         curl_easy_getinfo(handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
+#endif
 
         pool_->release(handle);
 

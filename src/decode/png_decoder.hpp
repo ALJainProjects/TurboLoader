@@ -16,13 +16,13 @@
 
 #include "../core/sample.hpp"
 #include "../core/object_pool.hpp"
+#include "../core/compat.hpp"  // span polyfill for C++17
 #include <png.h>
 #include <csetjmp>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>

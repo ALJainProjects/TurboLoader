@@ -20,12 +20,12 @@
 
 #include "../core/sample.hpp"
 #include "../core/object_pool.hpp"
+#include "../core/compat.hpp"  // span polyfill for C++17
 #include <tiffio.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>

@@ -18,8 +18,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <span>
 #include <vector>
+#include "compat.hpp"  // span polyfill for C++17
 
 namespace turboloader {
 

@@ -25,8 +25,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <fcntl.h>
-#include <span>
 #include <string>
+#include "../core/compat.hpp"  // span polyfill for C++17
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>

@@ -5,6 +5,32 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.7] - 2025-11-30
+
+### C++17 Compatibility for Cross-Platform Builds
+
+This release fixes compilation issues on manylinux and macOS by switching to C++17 and adding compatibility shims.
+
+### Fixed
+- **C++ Standard**: Downgraded from C++20 to C++17 for broader compiler compatibility
+  - Added `src/core/compat.hpp` with `std::span` polyfill for C++17
+  - Updated all decoder headers to use the compatibility layer
+  - Fixes macOS builds on older Xcode versions
+
+- **libcurl Compatibility**: Added compatibility macros for older libcurl versions (manylinux)
+  - `CURL_HTTP_VERSION_2_0` fallback to `CURL_HTTP_VERSION_1_1`
+  - `CURLINFO_SIZE_DOWNLOAD_T` fallback to `CURLINFO_SIZE_DOWNLOAD`
+  - `CURLINFO_CONTENT_LENGTH_DOWNLOAD_T` fallback to `CURLINFO_CONTENT_LENGTH_DOWNLOAD`
+  - `CURL_VERSION_HTTP2` fallback to 0 for older libcurl
+
+- **libjpeg Compatibility**: Added `const_cast` for older libjpeg versions
+  - `jpeg_mem_src()` now works with both const and non-const pointer APIs
+
+- **CI/CD**: Skip Python 3.8 on macOS-13 x86_64 due to SDK header path conflicts
+  - Python 3.8 wheels still available on Linux and macOS ARM64 (macOS-14)
+
+---
+
 ## [2.3.6] - 2025-12-01
 
 ### Fix Python 3.8 Compatibility
