@@ -93,7 +93,7 @@ inline void aligned_free(void* ptr) {
 // VECTORIZED OPERATIONS - AVX-512
 // ============================================================================
 
-#ifdef TURBOLOADER_SIMD_AVX512
+#if defined(TURBOLOADER_SIMD_AVX512)
 
 /**
  * @brief Convert uint8 to float32 (normalized to [0,1]) - AVX-512
@@ -245,13 +245,11 @@ inline void normalize_f32(const float* src, float* dst, float mean, float std, s
     }
 }
 
-#endif // TURBOLOADER_SIMD_AVX512
-
 // ============================================================================
 // VECTORIZED OPERATIONS - AVX2
 // ============================================================================
 
-#ifdef TURBOLOADER_SIMD_AVX2
+#elif defined(TURBOLOADER_SIMD_AVX2)
 
 /**
  * @brief Convert uint8 to float32 (normalized to [0,1])

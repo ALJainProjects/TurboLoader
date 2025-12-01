@@ -289,10 +289,59 @@ class BuildExt(build_ext):
 
     def build_extensions(self):
         import platform
+        import re
 
         ct = self.compiler.compiler_type
         arch = platform.machine().lower()
         system = platform.system().lower()
+
+        # On macOS, strip problematic flags from Python's embedded compiler configuration
+        # python.org Python embeds CFLAGS/CPPFLAGS that can interfere with libc++ headers
+        if system == "darwin" and ct == "unix":
+            # Filter out problematic include paths from preprocessor args
+            if hasattr(self.compiler, 'preprocessor'):
+                self.compiler.preprocessor = [
+                    arg for arg in self.compiler.preprocessor
+                    if not (arg.startswith('-I') and 'Python.framework' in arg)
+                ]
+
+            # Filter compiler_so (used for C++ compilation)
+            if hasattr(self.compiler, 'compiler_so'):
+                filtered = []
+                skip_next = False
+                for arg in self.compiler.compiler_so:
+                    if skip_next:
+                        skip_next = False
+                        continue
+                    # Skip -isysroot with problematic paths and -I flags pointing to Python framework
+                    if arg == '-isysroot':
+                        skip_next = True
+                        continue
+                    if arg.startswith('-I') and 'Python.framework' in arg:
+                        continue
+                    # Keep other flags but filter problematic -iwithsysroot
+                    if arg.startswith('-iwithsysroot'):
+                        continue
+                    filtered.append(arg)
+                self.compiler.compiler_so = filtered
+
+            # Same for compiler_cxx
+            if hasattr(self.compiler, 'compiler_cxx'):
+                filtered = []
+                skip_next = False
+                for arg in self.compiler.compiler_cxx:
+                    if skip_next:
+                        skip_next = False
+                        continue
+                    if arg == '-isysroot':
+                        skip_next = True
+                        continue
+                    if arg.startswith('-I') and 'Python.framework' in arg:
+                        continue
+                    if arg.startswith('-iwithsysroot'):
+                        continue
+                    filtered.append(arg)
+                self.compiler.compiler_cxx = filtered
 
         for ext in self.extensions:
             opts = list(ext.extra_compile_args)
@@ -371,7 +420,7 @@ else:
 
 setup(
     name="turboloader",
-    version="2.3.15",
+    version="2.3.16",
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",

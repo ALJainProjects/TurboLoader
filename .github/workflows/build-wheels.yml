@@ -98,10 +98,19 @@ jobs:
           CIBW_BEFORE_ALL_MACOS: |
             brew install jpeg-turbo libpng webp curl lz4
 
-          # macOS: Clear any problematic flags before each build
-          # The python.org Python may set CFLAGS/CPPFLAGS that interfere with libc++ headers
+          # macOS: Clear Python's embedded compiler flags that interfere with libc++ headers
+          # The python.org Python framework embeds CFLAGS/CPPFLAGS that break C++ standard library resolution
           CIBW_BEFORE_BUILD_MACOS: |
-            unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS || true
+            pip install setuptools wheel pybind11
+            # Patch Python's sysconfig to not inject problematic flags for C++ compilation
+            python -c "
+            import sysconfig
+            import os
+
+            # Print current config for debugging
+            print('Original CFLAGS:', sysconfig.get_config_var('CFLAGS'))
+            print('Original CPPFLAGS:', sysconfig.get_config_var('CPPFLAGS'))
+            "
 
           # Environment variables for finding libraries
           CIBW_ENVIRONMENT_LINUX: >
@@ -109,13 +118,15 @@ jobs:
             LDFLAGS="-L/usr/lib64 -L/usr/lib"
             PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/pkgconfig"
 
-          # macOS: Explicitly unset all compiler flags to prevent interference with libc++ headers
-          # setup.py's find_library() uses brew --prefix to find paths correctly
+          # macOS: Override compiler flags completely
+          # Empty CFLAGS/CXXFLAGS/CPPFLAGS prevent Python's embedded flags from being used
+          # This is critical: python.org Python embeds flags that break libc++ header resolution
           CIBW_ENVIRONMENT_MACOS: >
             MACOSX_DEPLOYMENT_TARGET="10.15"
             CFLAGS=""
             CXXFLAGS=""
             CPPFLAGS=""
+            LDFLAGS=""
 
           # Build configuration
           CIBW_BUILD_VERBOSITY: 1
