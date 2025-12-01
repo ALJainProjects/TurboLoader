@@ -1,6 +1,6 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.3.22 - Remove automated PyPI publish from CI (manual publish only)
+v2.3.23 - Fix version test to check for 2.x.x instead of hardcoded version
 
 New in v2.0.0:
 - Tiered Caching: L1 memory (LRU) + L2 disk cache for 5-10x faster subsequent epochs
@@ -46,7 +46,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.3.22"
+__version__ = "2.3.23"
 
 # Import C++ extension module
 try:
