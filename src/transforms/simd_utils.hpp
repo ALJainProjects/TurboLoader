@@ -17,6 +17,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 // Platform detection and SIMD headers
 #if defined(__AVX512F__)
@@ -963,6 +964,325 @@ inline void color_adjust_neon(const uint8_t* src, uint8_t* dst,
         val = std::max(0.0f, std::min(255.0f, val));
         dst[i] = static_cast<uint8_t>(val);
     }
+}
+
+/**
+ * @brief NEON-optimized batch RGB to HSV conversion
+ * Processes 4 pixels at a time for saturation/hue adjustments
+ */
+inline void rgb_to_hsv_batch_neon(const uint8_t* rgb, float* h, float* s, float* v,
+                                   size_t num_pixels) {
+    const float32x4_t scale = vdupq_n_f32(1.0f / 255.0f);
+    const float32x4_t sixty = vdupq_n_f32(60.0f);
+    const float32x4_t three_sixty = vdupq_n_f32(360.0f);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t epsilon = vdupq_n_f32(0.00001f);
+    const float32x4_t two = vdupq_n_f32(2.0f);
+    const float32x4_t four = vdupq_n_f32(4.0f);
+
+    size_t i = 0;
+    // Process 4 pixels at a time
+    for (; i + 4 <= num_pixels; i += 4) {
+        // Load 4 RGB pixels (12 bytes) - deinterleaved
+        uint8x8x3_t pixels = vld3_u8(rgb + i * 3);
+
+        // Extend to 16-bit then 32-bit and convert to float
+        uint16x4_t r16 = vget_low_u16(vmovl_u8(pixels.val[0]));
+        uint16x4_t g16 = vget_low_u16(vmovl_u8(pixels.val[1]));
+        uint16x4_t b16 = vget_low_u16(vmovl_u8(pixels.val[2]));
+
+        float32x4_t rf = vmulq_f32(vcvtq_f32_u32(vmovl_u16(r16)), scale);
+        float32x4_t gf = vmulq_f32(vcvtq_f32_u32(vmovl_u16(g16)), scale);
+        float32x4_t bf = vmulq_f32(vcvtq_f32_u32(vmovl_u16(b16)), scale);
+
+        // max_val = max(r, g, b)
+        float32x4_t max_val = vmaxq_f32(vmaxq_f32(rf, gf), bf);
+        // min_val = min(r, g, b)
+        float32x4_t min_val = vminq_f32(vminq_f32(rf, gf), bf);
+        // delta = max - min
+        float32x4_t delta = vsubq_f32(max_val, min_val);
+
+        // v = max_val
+        vst1q_f32(v + i, max_val);
+
+        // s = (delta < epsilon) ? 0 : delta / max_val
+        uint32x4_t delta_small = vcltq_f32(delta, epsilon);
+        uint32x4_t max_zero = vcleq_f32(max_val, zero);
+        float32x4_t s_calc = vdivq_f32(delta, vmaxq_f32(max_val, epsilon));
+        float32x4_t s_result = vbslq_f32(vorrq_u32(delta_small, max_zero), zero, s_calc);
+        vst1q_f32(s + i, s_result);
+
+        // Hue calculation - done per component
+        // if r is max: h = (g - b) / delta
+        // if g is max: h = 2 + (b - r) / delta
+        // if b is max: h = 4 + (r - g) / delta
+        float32x4_t h_r = vdivq_f32(vsubq_f32(gf, bf), vmaxq_f32(delta, epsilon));
+        float32x4_t h_g = vaddq_f32(two, vdivq_f32(vsubq_f32(bf, rf), vmaxq_f32(delta, epsilon)));
+        float32x4_t h_b = vaddq_f32(four, vdivq_f32(vsubq_f32(rf, gf), vmaxq_f32(delta, epsilon)));
+
+        // Select based on which is max
+        uint32x4_t r_is_max = vceqq_f32(rf, max_val);
+        uint32x4_t g_is_max = vceqq_f32(gf, max_val);
+
+        float32x4_t h_result = vbslq_f32(r_is_max, h_r, vbslq_f32(g_is_max, h_g, h_b));
+        h_result = vmulq_f32(h_result, sixty);
+
+        // Normalize negative hues
+        uint32x4_t h_neg = vcltq_f32(h_result, zero);
+        h_result = vbslq_f32(h_neg, vaddq_f32(h_result, three_sixty), h_result);
+
+        // Set h = 0 where delta is small
+        h_result = vbslq_f32(delta_small, zero, h_result);
+
+        vst1q_f32(h + i, h_result);
+    }
+
+    // Scalar tail
+    for (; i < num_pixels; ++i) {
+        rgb_to_hsv(rgb[i*3], rgb[i*3+1], rgb[i*3+2], h[i], s[i], v[i]);
+    }
+}
+
+/**
+ * @brief NEON-optimized batch HSV to RGB conversion
+ * Processes 4 pixels at a time
+ */
+inline void hsv_to_rgb_batch_neon(const float* h, const float* s, const float* v,
+                                   uint8_t* rgb, size_t num_pixels) {
+    const float32x4_t scale = vdupq_n_f32(255.0f);
+    const float32x4_t sixty_inv = vdupq_n_f32(1.0f / 60.0f);
+    const float32x4_t one = vdupq_n_f32(1.0f);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t max255 = vdupq_n_f32(255.0f);
+
+    size_t i = 0;
+    for (; i + 4 <= num_pixels; i += 4) {
+        float32x4_t h_vec = vld1q_f32(h + i);
+        float32x4_t s_vec = vld1q_f32(s + i);
+        float32x4_t v_vec = vld1q_f32(v + i);
+
+        // Grayscale case: s <= 0
+        float32x4_t gray = vmulq_f32(v_vec, scale);
+        uint32x4_t is_gray = vcleq_f32(s_vec, zero);
+
+        // hh = h / 60
+        float32x4_t hh = vmulq_f32(h_vec, sixty_inv);
+        // Handle hue >= 360
+        uint32x4_t hh_ge_6 = vcgeq_f32(hh, vdupq_n_f32(6.0f));
+        hh = vbslq_f32(hh_ge_6, zero, hh);
+
+        // i = floor(hh)
+        int32x4_t sector = vcvtq_s32_f32(hh);
+        // Clamp sector to [0,5]
+        sector = vmaxq_s32(sector, vdupq_n_s32(0));
+        sector = vminq_s32(sector, vdupq_n_s32(5));
+
+        // ff = hh - i (fractional part)
+        float32x4_t ff = vsubq_f32(hh, vcvtq_f32_s32(sector));
+
+        // p = v * (1 - s)
+        float32x4_t p = vmulq_f32(v_vec, vsubq_f32(one, s_vec));
+        // q = v * (1 - s * ff)
+        float32x4_t q = vmulq_f32(v_vec, vsubq_f32(one, vmulq_f32(s_vec, ff)));
+        // t = v * (1 - s * (1 - ff))
+        float32x4_t t = vmulq_f32(v_vec, vsubq_f32(one, vmulq_f32(s_vec, vsubq_f32(one, ff))));
+
+        // Scale all to [0, 255]
+        p = vmulq_f32(p, scale);
+        q = vmulq_f32(q, scale);
+        t = vmulq_f32(t, scale);
+        float32x4_t v_scaled = vmulq_f32(v_vec, scale);
+
+        // Select RGB based on sector - process each pixel individually for now
+        // (Full vectorization of the switch is complex, but this is still faster than scalar)
+        float r_vals[4], g_vals[4], b_vals[4];
+        float p_arr[4], q_arr[4], t_arr[4], v_arr[4];
+        int32_t sector_arr[4];
+
+        vst1q_f32(p_arr, p);
+        vst1q_f32(q_arr, q);
+        vst1q_f32(t_arr, t);
+        vst1q_f32(v_arr, v_scaled);
+        vst1q_s32(sector_arr, sector);
+
+        for (int j = 0; j < 4; ++j) {
+            switch (sector_arr[j]) {
+                case 0: r_vals[j] = v_arr[j]; g_vals[j] = t_arr[j]; b_vals[j] = p_arr[j]; break;
+                case 1: r_vals[j] = q_arr[j]; g_vals[j] = v_arr[j]; b_vals[j] = p_arr[j]; break;
+                case 2: r_vals[j] = p_arr[j]; g_vals[j] = v_arr[j]; b_vals[j] = t_arr[j]; break;
+                case 3: r_vals[j] = p_arr[j]; g_vals[j] = q_arr[j]; b_vals[j] = v_arr[j]; break;
+                case 4: r_vals[j] = t_arr[j]; g_vals[j] = p_arr[j]; b_vals[j] = v_arr[j]; break;
+                default: r_vals[j] = v_arr[j]; g_vals[j] = p_arr[j]; b_vals[j] = q_arr[j]; break;
+            }
+        }
+
+        float32x4_t r_f = vld1q_f32(r_vals);
+        float32x4_t g_f = vld1q_f32(g_vals);
+        float32x4_t b_f = vld1q_f32(b_vals);
+
+        // Apply grayscale mask
+        r_f = vbslq_f32(is_gray, gray, r_f);
+        g_f = vbslq_f32(is_gray, gray, g_f);
+        b_f = vbslq_f32(is_gray, gray, b_f);
+
+        // Clamp to [0, 255]
+        r_f = vmaxq_f32(vminq_f32(r_f, max255), zero);
+        g_f = vmaxq_f32(vminq_f32(g_f, max255), zero);
+        b_f = vmaxq_f32(vminq_f32(b_f, max255), zero);
+
+        // Convert to uint8 and store interleaved
+        uint32x4_t r_u32 = vcvtq_u32_f32(r_f);
+        uint32x4_t g_u32 = vcvtq_u32_f32(g_f);
+        uint32x4_t b_u32 = vcvtq_u32_f32(b_f);
+
+        uint16x4_t r_u16 = vmovn_u32(r_u32);
+        uint16x4_t g_u16 = vmovn_u32(g_u32);
+        uint16x4_t b_u16 = vmovn_u32(b_u32);
+
+        uint8x8_t r_u8 = vmovn_u16(vcombine_u16(r_u16, r_u16));
+        uint8x8_t g_u8 = vmovn_u16(vcombine_u16(g_u16, g_u16));
+        uint8x8_t b_u8 = vmovn_u16(vcombine_u16(b_u16, b_u16));
+
+        // Store interleaved RGB
+        uint8x8x3_t out;
+        out.val[0] = r_u8;
+        out.val[1] = g_u8;
+        out.val[2] = b_u8;
+        vst3_u8(rgb + i * 3, out);
+    }
+
+    // Scalar tail
+    for (; i < num_pixels; ++i) {
+        uint8_t r, g, b;
+        hsv_to_rgb(h[i], s[i], v[i], r, g, b);
+        rgb[i * 3] = r;
+        rgb[i * 3 + 1] = g;
+        rgb[i * 3 + 2] = b;
+    }
+}
+
+/**
+ * @brief NEON-optimized saturation adjustment (single pass, in-place capable)
+ * Combines RGB->HSV->RGB with saturation modification
+ */
+inline void adjust_saturation_neon(uint8_t* rgb, size_t num_pixels, float factor) {
+    // Allocate temporary HSV buffers
+    const size_t aligned_size = (num_pixels + 3) & ~3;  // Round up to 4
+    std::vector<float> h_buf(aligned_size);
+    std::vector<float> s_buf(aligned_size);
+    std::vector<float> v_buf(aligned_size);
+
+    // Convert RGB to HSV
+    rgb_to_hsv_batch_neon(rgb, h_buf.data(), s_buf.data(), v_buf.data(), num_pixels);
+
+    // Adjust saturation with SIMD
+    const float32x4_t factor_vec = vdupq_n_f32(factor);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t one = vdupq_n_f32(1.0f);
+
+    size_t i = 0;
+    for (; i + 4 <= num_pixels; i += 4) {
+        float32x4_t s_vec = vld1q_f32(s_buf.data() + i);
+        s_vec = vmulq_f32(s_vec, factor_vec);
+        s_vec = vmaxq_f32(vminq_f32(s_vec, one), zero);
+        vst1q_f32(s_buf.data() + i, s_vec);
+    }
+    for (; i < num_pixels; ++i) {
+        s_buf[i] = std::max(0.0f, std::min(1.0f, s_buf[i] * factor));
+    }
+
+    // Convert HSV back to RGB
+    hsv_to_rgb_batch_neon(h_buf.data(), s_buf.data(), v_buf.data(), rgb, num_pixels);
+}
+
+/**
+ * @brief NEON-optimized hue adjustment (single pass, in-place capable)
+ * Combines RGB->HSV->RGB with hue modification
+ */
+inline void adjust_hue_neon(uint8_t* rgb, size_t num_pixels, float hue_shift) {
+    // Allocate temporary HSV buffers
+    const size_t aligned_size = (num_pixels + 3) & ~3;
+    std::vector<float> h_buf(aligned_size);
+    std::vector<float> s_buf(aligned_size);
+    std::vector<float> v_buf(aligned_size);
+
+    // Convert RGB to HSV
+    rgb_to_hsv_batch_neon(rgb, h_buf.data(), s_buf.data(), v_buf.data(), num_pixels);
+
+    // Adjust hue with SIMD
+    const float32x4_t shift_vec = vdupq_n_f32(hue_shift);
+    const float32x4_t three_sixty = vdupq_n_f32(360.0f);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+
+    size_t i = 0;
+    for (; i + 4 <= num_pixels; i += 4) {
+        float32x4_t h_vec = vld1q_f32(h_buf.data() + i);
+        h_vec = vaddq_f32(h_vec, shift_vec);
+
+        // Wrap to [0, 360)
+        uint32x4_t neg_mask = vcltq_f32(h_vec, zero);
+        uint32x4_t ge_360_mask = vcgeq_f32(h_vec, three_sixty);
+        h_vec = vbslq_f32(neg_mask, vaddq_f32(h_vec, three_sixty), h_vec);
+        h_vec = vbslq_f32(ge_360_mask, vsubq_f32(h_vec, three_sixty), h_vec);
+
+        vst1q_f32(h_buf.data() + i, h_vec);
+    }
+    for (; i < num_pixels; ++i) {
+        float h = h_buf[i] + hue_shift;
+        if (h < 0.0f) h += 360.0f;
+        if (h >= 360.0f) h -= 360.0f;
+        h_buf[i] = h;
+    }
+
+    // Convert HSV back to RGB
+    hsv_to_rgb_batch_neon(h_buf.data(), s_buf.data(), v_buf.data(), rgb, num_pixels);
+}
+
+/**
+ * @brief NEON-optimized combined saturation and hue adjustment
+ * Single RGB->HSV conversion, both adjustments, then HSV->RGB
+ */
+inline void adjust_saturation_and_hue_neon(uint8_t* rgb, size_t num_pixels,
+                                            float sat_factor, float hue_shift) {
+    const size_t aligned_size = (num_pixels + 3) & ~3;
+    std::vector<float> h_buf(aligned_size);
+    std::vector<float> s_buf(aligned_size);
+    std::vector<float> v_buf(aligned_size);
+
+    rgb_to_hsv_batch_neon(rgb, h_buf.data(), s_buf.data(), v_buf.data(), num_pixels);
+
+    const float32x4_t sat_vec = vdupq_n_f32(sat_factor);
+    const float32x4_t shift_vec = vdupq_n_f32(hue_shift);
+    const float32x4_t three_sixty = vdupq_n_f32(360.0f);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t one = vdupq_n_f32(1.0f);
+
+    size_t i = 0;
+    for (; i + 4 <= num_pixels; i += 4) {
+        // Saturation
+        float32x4_t s_vec = vld1q_f32(s_buf.data() + i);
+        s_vec = vmulq_f32(s_vec, sat_vec);
+        s_vec = vmaxq_f32(vminq_f32(s_vec, one), zero);
+        vst1q_f32(s_buf.data() + i, s_vec);
+
+        // Hue
+        float32x4_t h_vec = vld1q_f32(h_buf.data() + i);
+        h_vec = vaddq_f32(h_vec, shift_vec);
+        uint32x4_t neg_mask = vcltq_f32(h_vec, zero);
+        uint32x4_t ge_360_mask = vcgeq_f32(h_vec, three_sixty);
+        h_vec = vbslq_f32(neg_mask, vaddq_f32(h_vec, three_sixty), h_vec);
+        h_vec = vbslq_f32(ge_360_mask, vsubq_f32(h_vec, three_sixty), h_vec);
+        vst1q_f32(h_buf.data() + i, h_vec);
+    }
+    for (; i < num_pixels; ++i) {
+        s_buf[i] = std::max(0.0f, std::min(1.0f, s_buf[i] * sat_factor));
+        float h = h_buf[i] + hue_shift;
+        if (h < 0.0f) h += 360.0f;
+        if (h >= 360.0f) h -= 360.0f;
+        h_buf[i] = h;
+    }
+
+    hsv_to_rgb_batch_neon(h_buf.data(), s_buf.data(), v_buf.data(), rgb, num_pixels);
 }
 
 /**

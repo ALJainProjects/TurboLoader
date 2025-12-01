@@ -97,57 +97,59 @@ private:
             1.0f + saturation_
         );
         float factor = dist(rng_);
-
         size_t num_pixels = image.width * image.height;
 
+#ifdef TURBOLOADER_SIMD_NEON
+        // Use NEON-optimized batch processing
+        simd::adjust_saturation_neon(image.data, num_pixels, factor);
+#else
+        // Scalar fallback
         for (size_t i = 0; i < num_pixels; ++i) {
             uint8_t r = image.data[i * 3];
             uint8_t g = image.data[i * 3 + 1];
             uint8_t b = image.data[i * 3 + 2];
 
-            // Convert to HSV
             float h, s, v;
             simd::rgb_to_hsv(r, g, b, h, s, v);
-
-            // Adjust saturation
             s = simd::clamp(s * factor, 0.0f, 1.0f);
-
-            // Convert back to RGB
             simd::hsv_to_rgb(h, s, v, r, g, b);
 
             image.data[i * 3] = r;
             image.data[i * 3 + 1] = g;
             image.data[i * 3 + 2] = b;
         }
+#endif
     }
 
     void apply_hue(ImageData& image) {
         std::uniform_real_distribution<float> dist(-hue_, hue_);
         float hue_shift = dist(rng_) * 360.0f;  // Convert to degrees
-
         size_t num_pixels = image.width * image.height;
 
+#ifdef TURBOLOADER_SIMD_NEON
+        // Use NEON-optimized batch processing
+        simd::adjust_hue_neon(image.data, num_pixels, hue_shift);
+#else
+        // Scalar fallback
         for (size_t i = 0; i < num_pixels; ++i) {
             uint8_t r = image.data[i * 3];
             uint8_t g = image.data[i * 3 + 1];
             uint8_t b = image.data[i * 3 + 2];
 
-            // Convert to HSV
             float h, s, v;
             simd::rgb_to_hsv(r, g, b, h, s, v);
 
-            // Adjust hue
             h += hue_shift;
             if (h < 0.0f) h += 360.0f;
             if (h >= 360.0f) h -= 360.0f;
 
-            // Convert back to RGB
             simd::hsv_to_rgb(h, s, v, r, g, b);
 
             image.data[i * 3] = r;
             image.data[i * 3 + 1] = g;
             image.data[i * 3 + 2] = b;
         }
+#endif
     }
 
     float brightness_;

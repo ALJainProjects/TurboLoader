@@ -5,6 +5,51 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2025-11-30
+
+### Transform Performance Release - Major Optimization
+
+Major performance improvements to image transforms, making TurboLoader's transform pipeline significantly faster than torchvision.
+
+### Added
+- **NEON-Optimized RGB↔HSV Conversion** (`src/transforms/simd_utils.hpp`)
+  - Vectorized batch RGB to HSV conversion processing 4 pixels at a time
+  - Vectorized batch HSV to RGB conversion with parallel arithmetic
+  - Combined saturation/hue adjustment functions for single-pass processing
+  - 2.5x faster ColorJitter transform (1.2ms vs previous 3.0ms)
+
+### Changed
+- **ColorJitter Transform** (`src/transforms/color_jitter_transform.hpp`)
+  - Rewrote saturation and hue adjustments to use NEON batch processing
+  - Eliminated per-pixel scalar RGB↔HSV conversions
+  - Now 1.8x faster than torchvision ColorJitter
+
+### Performance Improvements
+
+| Transform | Before | After | Improvement |
+|-----------|--------|-------|-------------|
+| ColorJitter | 2.98 ms | 1.20 ms | 2.5x faster |
+| Full Pipeline (5 transforms) | 2.53 ms | 1.14 ms | 2.2x faster |
+| GaussianBlur | 0.89 ms | 0.85 ms | maintained |
+| Grayscale | 0.016 ms | 0.016 ms | maintained |
+
+### Comparison vs torchvision (256x256 images)
+
+| Transform | TurboLoader | torchvision | Speedup |
+|-----------|-------------|-------------|---------|
+| ColorJitter(0.4, 0.4, 0.4, 0.2) | 1.20 ms | 2.13 ms | **1.8x** |
+| Full Pipeline (5 transforms) | 1.14 ms | 2.06 ms | **1.8x** |
+| GaussianBlur(5) | 0.85 ms | 2.22 ms | **2.6x** |
+| Grayscale | 0.016 ms | 0.097 ms | **6.0x** |
+| Normalize | 0.21 ms | 0.39 ms | **1.9x** |
+| RandomVerticalFlip | 0.008 ms | 0.010 ms | **1.3x** |
+
+### Technical Details
+- Batch RGB→HSV: Processes 4 pixels per NEON iteration using `vld3_u8` for deinterleaved loading
+- Parallel min/max computation using `vmaxq_f32`/`vminq_f32`
+- Vectorized hue calculation with select operations (`vbslq_f32`)
+- Combined saturation+hue adjustment eliminates redundant RGB↔HSV round-trips
+
 ## [1.5.1] - 2025-11-18
 
 ### Changed

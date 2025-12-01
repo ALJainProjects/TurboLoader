@@ -1,44 +1,58 @@
 #!/usr/bin/env python3
 """
-Comprehensive Benchmark Suite for TurboLoader v1.1.0+
+TurboLoader Benchmark Suite v2.0
 
-Runs all benchmarks and collects real-world performance data:
-- Transform benchmarks (all 19 transforms)
-- Framework comparisons (PyTorch, TensorFlow)
-- End-to-end pipeline benchmarks
-- Memory profiling
-- Scalability tests
+Comprehensive benchmark suite comparing TurboLoader against:
+- PyTorch DataLoader
+- WebDataset
+- Albumentations (transforms)
 
-Results are saved to benchmark_results/ for documentation updates.
+Benchmark categories:
+- Throughput (images/second)
+- Transform performance
+- Memory usage
+- Scalability
+
+Results are saved to benchmarks/results/ for analysis.
 """
 
+import argparse
 import os
 import sys
 import json
 import time
 import subprocess
+import tempfile
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List, Any, Optional
+
 
 class BenchmarkRunner:
-    def __init__(self, dataset_path: str, output_dir: str = "benchmark_results"):
+    """Run and collect benchmark results"""
+
+    def __init__(self, dataset_path: str, output_dir: str = "benchmarks/results", quick: bool = False):
         self.dataset_path = dataset_path
         self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        self.quick = quick
         self.results = {
             "timestamp": datetime.now().isoformat(),
             "dataset": dataset_path,
+            "quick_mode": quick,
             "benchmarks": {}
         }
 
-    def run_command(self, name: str, command: list, timeout: int = 600):
-        """Run a benchmark command and capture output"""
-        print(f"\n{'='*80}")
-        print(f"Running: {name}")
-        print(f"Command: {' '.join(command)}")
-        print(f"{'='*80}\n")
+        # Create output directories
+        (self.output_dir / "throughput").mkdir(parents=True, exist_ok=True)
+        (self.output_dir / "transforms").mkdir(parents=True, exist_ok=True)
+        (self.output_dir / "memory").mkdir(parents=True, exist_ok=True)
+        (self.output_dir / "reports").mkdir(parents=True, exist_ok=True)
 
-        output_file = self.output_dir / f"{name.replace(' ', '_').lower()}.txt"
+    def run_command(self, name: str, command: list, timeout: int = 600) -> bool:
+        """Run a benchmark command and capture output"""
+        print(f"\n{'='*70}")
+        print(f"Running: {name}")
+        print(f"{'='*70}")
 
         start_time = time.time()
         try:
@@ -47,164 +61,275 @@ class BenchmarkRunner:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd="/Users/arnavjain/turboloader"
+                cwd=str(Path(__file__).parent.parent)
             )
             elapsed = time.time() - start_time
 
-            # Save output
-            with open(output_file, 'w') as f:
-                f.write(f"=== {name} ===\n")
-                f.write(f"Command: {' '.join(command)}\n")
-                f.write(f"Exit code: {result.returncode}\n")
-                f.write(f"Duration: {elapsed:.2f}s\n\n")
-                f.write("=== STDOUT ===\n")
-                f.write(result.stdout)
-                f.write("\n\n=== STDERR ===\n")
-                f.write(result.stderr)
-
-            # Extract key metrics from output
-            metrics = self.extract_metrics(result.stdout + result.stderr)
+            # Print output
+            if result.stdout:
+                print(result.stdout)
+            if result.stderr and result.returncode != 0:
+                print(f"STDERR: {result.stderr}")
 
             self.results["benchmarks"][name] = {
                 "duration": elapsed,
                 "exit_code": result.returncode,
-                "metrics": metrics,
-                "output_file": str(output_file)
+                "success": result.returncode == 0
             }
-
-            print(f"✅ Completed in {elapsed:.2f}s")
-            if metrics:
-                print(f"   Metrics: {metrics}")
 
             return result.returncode == 0
 
         except subprocess.TimeoutExpired:
-            print(f"❌ Timeout after {timeout}s")
+            print(f"  Timeout after {timeout}s")
             self.results["benchmarks"][name] = {
                 "duration": timeout,
                 "exit_code": -1,
-                "error": "Timeout",
-                "output_file": str(output_file)
+                "error": "Timeout"
             }
             return False
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"  Error: {e}")
             self.results["benchmarks"][name] = {
-                "error": str(e),
-                "output_file": str(output_file)
+                "error": str(e)
             }
             return False
 
-    def extract_metrics(self, output: str) -> dict:
-        """Extract performance metrics from benchmark output"""
-        metrics = {}
+    def run_throughput_benchmarks(self):
+        """Run throughput benchmarks"""
+        print("\n" + "=" * 70)
+        print("THROUGHPUT BENCHMARKS")
+        print("=" * 70)
 
-        # Common patterns
-        patterns = {
-            "throughput": r"(\d+\.?\d*)\s*img/s",
-            "fps": r"(\d+\.?\d*)\s*fps",
-            "latency": r"(\d+\.?\d*)\s*ms",
-            "memory": r"(\d+\.?\d*)\s*MB",
-            "speedup": r"(\d+\.?\d*)x\s*faster",
-        }
+        if self.quick:
+            batch_sizes = "64"
+            workers = "4"
+            num_batches = "20"
+        else:
+            batch_sizes = "32 64 128"
+            workers = "1 2 4 8"
+            num_batches = "50"
 
-        import re
-        for key, pattern in patterns.items():
-            match = re.search(pattern, output, re.IGNORECASE)
-            if match:
-                metrics[key] = float(match.group(1))
-
-        return metrics
-
-    def run_transform_benchmarks(self):
-        """Benchmark all 19 transforms"""
-        print("\n" + "="*80)
-        print("TRANSFORM BENCHMARKS")
-        print("="*80)
-
-        if not Path("benchmarks/benchmark_advanced_transforms.py").exists():
-            print("⚠️  Transform benchmark script not found, skipping")
-            return
-
+        # TurboLoader throughput
         self.run_command(
-            "Transform Benchmarks",
-            ["python3.13", "benchmarks/benchmark_advanced_transforms.py", self.dataset_path]
+            "TurboLoader Throughput",
+            [sys.executable, "benchmarks/throughput/bench_turboloader.py",
+             "--tar-path", self.dataset_path,
+             "--batch-sizes", *batch_sizes.split(),
+             "--workers", *workers.split(),
+             "--num-batches", num_batches,
+             "--output", str(self.output_dir / "throughput/turboloader.json")]
         )
 
-    def run_pytorch_comparison(self):
-        """Compare against PyTorch DataLoader"""
-        print("\n" + "="*80)
-        print("PYTORCH COMPARISON")
-        print("="*80)
+        # PyTorch throughput
+        self.run_command(
+            "PyTorch Throughput",
+            [sys.executable, "benchmarks/throughput/bench_pytorch.py",
+             "--tar-path", self.dataset_path,
+             "--batch-sizes", *batch_sizes.split(),
+             "--workers", *workers.split(),
+             "--num-batches", num_batches,
+             "--cached",
+             "--output", str(self.output_dir / "throughput/pytorch.json")]
+        )
 
-        # PyTorch naive
-        if Path("benchmarks/02_pytorch_naive.py").exists():
-            self.run_command(
-                "PyTorch Naive",
-                ["python3.13", "benchmarks/02_pytorch_naive.py", self.dataset_path]
-            )
+    def run_transform_benchmarks(self):
+        """Run transform benchmarks"""
+        print("\n" + "=" * 70)
+        print("TRANSFORM BENCHMARKS")
+        print("=" * 70)
 
-        # PyTorch optimized
-        if Path("benchmarks/03_pytorch_optimized.py").exists():
-            self.run_command(
-                "PyTorch Optimized",
-                ["python3.13", "benchmarks/03_pytorch_optimized.py", self.dataset_path]
-            )
+        timed_runs = "50" if self.quick else "100"
 
-        # TurboLoader
-        if Path("benchmarks/05_turboloader.py").exists():
-            self.run_command(
-                "TurboLoader",
-                ["python3.13", "benchmarks/05_turboloader.py", self.dataset_path]
-            )
+        self.run_command(
+            "Transform Performance",
+            [sys.executable, "benchmarks/transforms/bench_transforms.py",
+             "--num-images", "50",
+             "--timed-runs", timed_runs,
+             "--output", str(self.output_dir / "transforms/transforms.json")]
+        )
 
-    def run_framework_comparison(self):
-        """Compare against TensorFlow"""
-        print("\n" + "="*80)
-        print("FRAMEWORK COMPARISON")
-        print("="*80)
+    def run_memory_benchmarks(self):
+        """Run memory benchmarks"""
+        print("\n" + "=" * 70)
+        print("MEMORY BENCHMARKS")
+        print("=" * 70)
 
-        if Path("benchmarks/08_tensorflow.py").exists():
-            self.run_command(
-                "TensorFlow",
-                ["python3.13", "benchmarks/08_tensorflow.py", self.dataset_path]
-            )
+        if self.quick:
+            batch_sizes = "64"
+            num_batches = "20"
+        else:
+            batch_sizes = "32 64 128"
+            num_batches = "30"
+
+        self.run_command(
+            "Memory Usage",
+            [sys.executable, "benchmarks/memory/bench_memory.py",
+             "--tar-path", self.dataset_path,
+             "--batch-sizes", *batch_sizes.split(),
+             "--num-batches", num_batches,
+             "--output", str(self.output_dir / "memory/memory.json")]
+        )
 
     def run_scalability_tests(self):
         """Test scalability with different worker counts"""
-        print("\n" + "="*80)
+        print("\n" + "=" * 70)
         print("SCALABILITY TESTS")
-        print("="*80)
+        print("=" * 70)
 
-        # Test with 1, 2, 4, 8, 16 workers
-        for workers in [1, 2, 4, 8, 16]:
-            self.run_command(
-                f"Scalability {workers} workers",
-                ["python3.13", "-c", f"""
-import turboloader
-import time
+        try:
+            import turboloader
+        except ImportError:
+            print("TurboLoader not available, skipping scalability tests")
+            return
 
-loader = turboloader.DataLoader('{self.dataset_path}', batch_size=64, num_workers={workers})
-start = time.time()
-count = 0
-for batch in loader:
-    count += len(batch)
-    if count >= 1000:
-        break
-elapsed = time.time() - start
-print(f"Workers: {workers}, Throughput: {{count/elapsed:.1f}} img/s")
-"""]
-            )
+        worker_counts = [1, 2, 4, 8] if not self.quick else [1, 4]
+        scalability_results = {}
 
-    def run_memory_profiling(self):
-        """Profile memory usage"""
-        print("\n" + "="*80)
-        print("MEMORY PROFILING")
-        print("="*80)
+        for workers in worker_counts:
+            print(f"\n  Testing {workers} workers...")
+            try:
+                loader = turboloader.DataLoader(
+                    self.dataset_path,
+                    batch_size=64,
+                    num_workers=workers,
+                    shuffle=True
+                )
 
-        # This would need memory_profiler package
-        # For now, just track basic stats
-        pass
+                start = time.time()
+                count = 0
+                for batch in loader:
+                    if isinstance(batch, (tuple, list)):
+                        count += len(batch[0])
+                    else:
+                        count += len(batch)
+                    if count >= 1000:
+                        break
+                elapsed = time.time() - start
+
+                throughput = count / elapsed
+                print(f"    Throughput: {throughput:.1f} img/s")
+                scalability_results[workers] = throughput
+
+            except Exception as e:
+                print(f"    Error: {e}")
+
+        self.results["benchmarks"]["Scalability"] = scalability_results
+
+    def generate_report(self):
+        """Generate summary report"""
+        print("\n" + "=" * 70)
+        print("GENERATING REPORT")
+        print("=" * 70)
+
+        lines = []
+        lines.append("=" * 78)
+        lines.append("                    TurboLoader Benchmark Report")
+        lines.append("=" * 78)
+        lines.append(f"\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Dataset: {self.dataset_path}")
+        lines.append(f"Quick mode: {self.quick}")
+
+        # Load results from JSON files
+        throughput_results = {}
+        transform_results = []
+        memory_results = []
+
+        # Load throughput results
+        for lib in ["turboloader", "pytorch"]:
+            path = self.output_dir / f"throughput/{lib}.json"
+            if path.exists():
+                try:
+                    with open(path) as f:
+                        throughput_results[lib] = json.load(f)
+                except:
+                    pass
+
+        # Load transform results
+        transform_path = self.output_dir / "transforms/transforms.json"
+        if transform_path.exists():
+            try:
+                with open(transform_path) as f:
+                    transform_results = json.load(f)
+            except:
+                pass
+
+        # Load memory results
+        memory_path = self.output_dir / "memory/memory.json"
+        if memory_path.exists():
+            try:
+                with open(memory_path) as f:
+                    memory_results = json.load(f)
+            except:
+                pass
+
+        # Throughput comparison
+        if throughput_results:
+            lines.append("\n" + "-" * 78)
+            lines.append("                       THROUGHPUT COMPARISON")
+            lines.append("-" * 78)
+            lines.append(f"{'Library':>20} {'Batch':>8} {'Workers':>8} {'Images/sec':>15}")
+            lines.append("-" * 78)
+
+            for lib, data in throughput_results.items():
+                if isinstance(data, list):
+                    for entry in data:
+                        if entry.get('metric') == 'throughput':
+                            batch = entry.get('config', {}).get('batch_size', 'N/A')
+                            workers = entry.get('config', {}).get('num_workers', 'N/A')
+                            value = entry.get('value', 0)
+                            lines.append(f"{lib:>20} {batch:>8} {workers:>8} {value:>15.1f}")
+
+        # Transform comparison
+        if transform_results:
+            lines.append("\n" + "-" * 78)
+            lines.append("                      TRANSFORM PERFORMANCE")
+            lines.append("-" * 78)
+            lines.append(f"{'Transform':>35} {'Library':>15} {'Time (ms)':>12}")
+            lines.append("-" * 78)
+
+            for entry in transform_results:
+                transform = entry.get('transform', 'N/A')
+                library = entry.get('library', 'N/A')
+                time_ms = entry.get('time_per_image_ms', 0)
+                lines.append(f"{transform:>35} {library:>15} {time_ms:>12.3f}")
+
+        # Memory comparison
+        if memory_results:
+            lines.append("\n" + "-" * 78)
+            lines.append("                         MEMORY USAGE")
+            lines.append("-" * 78)
+            lines.append(f"{'Library':>20} {'Batch':>8} {'Peak (MB)':>12} {'Delta (MB)':>12}")
+            lines.append("-" * 78)
+
+            for entry in memory_results:
+                library = entry.get('library', 'N/A')
+                batch = entry.get('config', {}).get('batch_size', 'N/A')
+                peak = entry.get('peak_mb', 0)
+                delta = entry.get('delta_mb', 0)
+                lines.append(f"{library:>20} {batch:>8} {peak:>12.1f} {delta:>12.1f}")
+
+        # Scalability
+        if "Scalability" in self.results["benchmarks"]:
+            lines.append("\n" + "-" * 78)
+            lines.append("                         SCALABILITY")
+            lines.append("-" * 78)
+            lines.append(f"{'Workers':>12} {'Throughput (img/s)':>20}")
+            lines.append("-" * 78)
+
+            for workers, throughput in self.results["benchmarks"]["Scalability"].items():
+                lines.append(f"{workers:>12} {throughput:>20.1f}")
+
+        lines.append("\n" + "=" * 78)
+
+        report = '\n'.join(lines)
+
+        # Save report
+        report_path = self.output_dir / f"reports/benchmark_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(report_path, 'w') as f:
+            f.write(report)
+
+        print(report)
+        print(f"\nReport saved to: {report_path}")
 
     def save_results(self):
         """Save all results to JSON"""
@@ -212,66 +337,132 @@ print(f"Workers: {workers}, Throughput: {{count/elapsed:.1f}} img/s")
         with open(output_file, 'w') as f:
             json.dump(self.results, f, indent=2)
 
-        print(f"\n{'='*80}")
-        print(f"Results saved to: {output_file}")
-        print(f"{'='*80}\n")
-
-        # Print summary
-        print("BENCHMARK SUMMARY:")
-        print(f"Total benchmarks run: {len(self.results['benchmarks'])}")
-
-        successful = sum(1 for b in self.results['benchmarks'].values()
-                        if b.get('exit_code') == 0)
-        print(f"Successful: {successful}")
-        print(f"Failed: {len(self.results['benchmarks']) - successful}")
-
-        # Print key metrics
-        print("\nKEY METRICS:")
-        for name, data in self.results['benchmarks'].items():
-            if 'metrics' in data and data['metrics']:
-                print(f"\n{name}:")
-                for metric, value in data['metrics'].items():
-                    print(f"  {metric}: {value}")
+        print(f"\nAll results saved to: {output_file}")
 
     def run_all(self):
         """Run complete benchmark suite"""
         print(f"""
-{'='*80}
-TURBOLOADER COMPREHENSIVE BENCHMARK SUITE
-{'='*80}
+{'='*70}
+         TURBOLOADER COMPREHENSIVE BENCHMARK SUITE v2.0
+{'='*70}
 
 Dataset: {self.dataset_path}
 Output directory: {self.output_dir}
+Quick mode: {self.quick}
 Timestamp: {self.results['timestamp']}
 
-{'='*80}
+{'='*70}
 """)
 
         # Run all benchmark categories
+        self.run_throughput_benchmarks()
         self.run_transform_benchmarks()
-        self.run_pytorch_comparison()
-        self.run_framework_comparison()
+        self.run_memory_benchmarks()
         self.run_scalability_tests()
-        self.run_memory_profiling()
 
-        # Save results
+        # Save and report
         self.save_results()
+        self.generate_report()
+
+
+def generate_synthetic_dataset(output_path: str, num_images: int = 1000) -> bool:
+    """Generate synthetic dataset for benchmarking"""
+    print(f"\nGenerating synthetic dataset with {num_images} images...")
+
+    cmd = [
+        sys.executable,
+        'benchmarks/datasets/generate_synthetic.py',
+        '--output', output_path,
+        '--num-images', str(num_images),
+        '--type', 'tar',
+        '--format', 'jpeg',
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(Path(__file__).parent.parent)
+        )
+        if result.returncode == 0:
+            print(f"  Created: {output_path}")
+            return True
+        else:
+            print(f"  Error: {result.stderr}")
+            return False
+    except Exception as e:
+        print(f"  Error: {e}")
+        return False
+
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python run_all_benchmarks.py <dataset.tar>")
-        print("\nExample:")
-        print("  python run_all_benchmarks.py /tmp/benchmark_1000.tar")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description='TurboLoader Benchmark Suite',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Quick benchmark with auto-generated data
+  python run_all_benchmarks.py --quick
 
-    dataset_path = sys.argv[1]
+  # Full benchmark with custom dataset
+  python run_all_benchmarks.py --dataset /path/to/data.tar --full
 
-    if not os.path.exists(dataset_path):
-        print(f"Error: Dataset not found: {dataset_path}")
-        sys.exit(1)
+  # Run only throughput benchmarks
+  python run_all_benchmarks.py --throughput-only
+"""
+    )
 
-    runner = BenchmarkRunner(dataset_path)
-    runner.run_all()
+    parser.add_argument('--dataset', type=str,
+                        help='Path to dataset (TAR file). If not provided, synthetic data is generated.')
+    parser.add_argument('--num-images', type=int, default=1000,
+                        help='Number of images for synthetic dataset (default: 1000)')
+    parser.add_argument('--quick', action='store_true',
+                        help='Quick mode: fewer iterations, smaller configs')
+    parser.add_argument('--full', action='store_true',
+                        help='Full mode: comprehensive testing (slower)')
+    parser.add_argument('--throughput-only', action='store_true',
+                        help='Run only throughput benchmarks')
+    parser.add_argument('--transforms-only', action='store_true',
+                        help='Run only transform benchmarks')
+    parser.add_argument('--memory-only', action='store_true',
+                        help='Run only memory benchmarks')
+    parser.add_argument('--output-dir', type=str, default='benchmarks/results',
+                        help='Output directory for results')
+
+    args = parser.parse_args()
+
+    # Get or create dataset
+    if args.dataset:
+        if not os.path.exists(args.dataset):
+            print(f"Error: Dataset not found: {args.dataset}")
+            sys.exit(1)
+        dataset_path = args.dataset
+    else:
+        dataset_path = '/tmp/turboloader_benchmark.tar'
+        num_images = 500 if args.quick else args.num_images
+        if not os.path.exists(dataset_path):
+            if not generate_synthetic_dataset(dataset_path, num_images):
+                print("Failed to generate synthetic dataset")
+                sys.exit(1)
+
+    runner = BenchmarkRunner(
+        dataset_path,
+        output_dir=args.output_dir,
+        quick=args.quick
+    )
+
+    # Run selected benchmarks or all
+    if args.throughput_only:
+        runner.run_throughput_benchmarks()
+    elif args.transforms_only:
+        runner.run_transform_benchmarks()
+    elif args.memory_only:
+        runner.run_memory_benchmarks()
+    else:
+        runner.run_all()
+
 
 if __name__ == "__main__":
     main()
