@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turboloader"
-version = "2.3.23"
+version = "2.4.0"
 description = "Production-ready ML data loading library with distributed training support, SIMD-accelerated transforms, pipe operator composition, HDF5/TFRecord/Zarr support, and GPU transforms. Built with C++17 for maximum performance."
 readme = "README.md"
 requires-python = ">=3.10"

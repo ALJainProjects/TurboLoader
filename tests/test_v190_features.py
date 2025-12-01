@@ -150,7 +150,7 @@ class TestNewFeatures:
 
             features = turboloader.features()
 
-            assert features["version"] == "2.1.0"
+            assert features["version"].startswith("2.")
             assert "pipe_operator" in features
             assert features["pipe_operator"] == True
 

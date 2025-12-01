@@ -1,6 +1,11 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.3.23 - Fix version test to check for 2.x.x instead of hardcoded version
+v2.4.0 - Add transform parameter to DataLoader for integrated pipeline transforms
+
+New in v2.4.0:
+- DataLoader now accepts a `transform` parameter for integrated transforms
+- Transforms are applied after decoding using SIMD-accelerated C++ code
+- Example: DataLoader('data.tar', transform=Resize(224, 224) | ImageNetNormalize())
 
 New in v2.0.0:
 - Tiered Caching: L1 memory (LRU) + L2 disk cache for 5-10x faster subsequent epochs
@@ -46,13 +51,13 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.3.23"
+__version__ = "2.4.0"
 
 # Import C++ extension module
 try:
     from _turboloader import (
-        # Core DataLoader
-        DataLoader,
+        # Core DataLoader (internal - we wrap this)
+        DataLoader as _DataLoaderBase,
         version,
         features,
         # TBL v2 Format
@@ -157,6 +162,145 @@ try:
         "PaddingMode",
         "TensorFormat",
     ]
+
+    # Create DataLoader wrapper with transform support
+    class DataLoader:
+        """High-performance DataLoader with integrated transform support.
+
+        Drop-in replacement for PyTorch DataLoader with TurboLoader performance
+        and SIMD-accelerated transforms.
+
+        Args:
+            data_path (str): Path to data (TAR, video, CSV, Parquet).
+                            Supports: local files, http://, https://, s3://, gs://
+            batch_size (int): Samples per batch (default: 32)
+            num_workers (int): Worker threads (default: 4)
+            shuffle (bool): Shuffle samples (future feature, default: False)
+            transform: Transform or composed transforms to apply to images.
+                      Use pipe operator: Resize(224, 224) | ImageNetNormalize()
+                      Or Compose([Resize(224, 224), ImageNetNormalize()])
+            enable_distributed (bool): Enable distributed training (default: False)
+            world_rank (int): Rank of this process (default: 0)
+            world_size (int): Total number of processes (default: 1)
+            drop_last (bool): Drop incomplete batches (default: False)
+            distributed_seed (int): Seed for shuffling (default: 42)
+            enable_cache (bool): Enable tiered caching (default: False)
+            cache_l1_mb (int): L1 memory cache size in MB (default: 512)
+            cache_l2_gb (int): L2 disk cache size in GB (default: 0)
+            cache_dir (str): L2 cache directory (default: /tmp/turboloader_cache)
+            auto_smart_batching (bool): Auto-detect smart batching (default: True)
+            enable_smart_batching (bool): Manual smart batching override (default: False)
+            prefetch_batches (int): Batches to prefetch (default: 4)
+
+        Example:
+            >>> # With transforms
+            >>> loader = turboloader.DataLoader(
+            ...     'imagenet.tar',
+            ...     batch_size=128,
+            ...     num_workers=8,
+            ...     transform=turboloader.Resize(224, 224) | turboloader.ImageNetNormalize()
+            ... )
+            >>> for batch in loader:
+            ...     images = [sample['image'] for sample in batch]
+        """
+
+        def __init__(
+            self,
+            data_path,
+            batch_size=32,
+            num_workers=4,
+            shuffle=False,
+            transform=None,
+            enable_distributed=False,
+            world_rank=0,
+            world_size=1,
+            drop_last=False,
+            distributed_seed=42,
+            enable_cache=False,
+            cache_l1_mb=512,
+            cache_l2_gb=0,
+            cache_dir="/tmp/turboloader_cache",
+            auto_smart_batching=True,
+            enable_smart_batching=False,
+            prefetch_batches=4,
+        ):
+            self._transform = transform
+            self._loader = _DataLoaderBase(
+                data_path,
+                batch_size,
+                num_workers,
+                shuffle,
+                enable_distributed,
+                world_rank,
+                world_size,
+                drop_last,
+                distributed_seed,
+                enable_cache,
+                cache_l1_mb,
+                cache_l2_gb,
+                cache_dir,
+                auto_smart_batching,
+                enable_smart_batching,
+                prefetch_batches,
+            )
+
+        def _apply_transform(self, sample):
+            """Apply transform to a sample's image if transform is set."""
+            if self._transform is not None and "image" in sample:
+                img = sample["image"]
+                if img is not None:
+                    # Apply the SIMD-accelerated C++ transform
+                    sample["image"] = self._transform.apply(img)
+            return sample
+
+        def next_batch(self):
+            """Get next batch with transforms applied."""
+            batch = self._loader.next_batch()
+            if self._transform is not None:
+                batch = [self._apply_transform(s) for s in batch]
+            return batch
+
+        def is_finished(self):
+            """Check if all data has been processed."""
+            return self._loader.is_finished()
+
+        def smart_batching_enabled(self):
+            """Check if smart batching is active."""
+            return self._loader.smart_batching_enabled()
+
+        def stop(self):
+            """Stop the pipeline and clean up resources."""
+            self._loader.stop()
+
+        def __enter__(self):
+            """Context manager entry."""
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            """Context manager exit."""
+            self.stop()
+
+        def __iter__(self):
+            """Make DataLoader iterable."""
+            return self
+
+        def __next__(self):
+            """Get next batch (iterator protocol) with transforms applied."""
+            batch = self._loader.__next__()
+            if self._transform is not None:
+                batch = [self._apply_transform(s) for s in batch]
+            return batch
+
+        @property
+        def transform(self):
+            """Get the current transform."""
+            return self._transform
+
+        @transform.setter
+        def transform(self, value):
+            """Set the transform."""
+            self._transform = value
+
 except ImportError:
     # Fallback for development/documentation builds
     __all__ = ["__version__"]

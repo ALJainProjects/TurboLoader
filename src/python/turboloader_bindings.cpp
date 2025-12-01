@@ -437,14 +437,14 @@ PYBIND11_MODULE(_turboloader, m) {
              "Get next batch (iterator protocol)");
 
     // Module-level functions
-    m.def("version", []() { return "2.1.0"; },
+    m.def("version", []() { return "2.4.0"; },
           "Get TurboLoader version\n\n"
           "Returns:\n"
-          "    str: Version string (e.g., '2.1.0')");
+          "    str: Version string (e.g., '2.3.23')");
 
     m.def("features", []() {
         py::dict features;
-        features["version"] = "2.1.0";
+        features["version"] = "2.4.0";
         features["distributed_training"] = true;
         features["tar_support"] = true;
         features["remote_tar"] = true;

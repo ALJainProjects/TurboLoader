@@ -5,6 +5,42 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2025-12-01
+
+### Integrated Transform Pipeline
+
+This release adds integrated transform support directly in the DataLoader API, enabling SIMD-accelerated transforms in the data loading pipeline.
+
+### Added
+- **DataLoader Transform Parameter**: New `transform` parameter for integrated transforms
+  - Pass transforms directly to DataLoader: `DataLoader('data.tar', transform=Resize(224) | ImageNetNormalize())`
+  - Transforms are applied after decoding using SIMD-accelerated C++ code
+  - Supports pipe operator composition: `Resize(224) | Normalize() | ToTensor()`
+  - Supports `Compose([...])` for traditional transform lists
+  - `transform` property getter/setter for dynamic transform changes
+
+### Example
+```python
+import turboloader
+
+# Create transform pipeline with pipe operator
+transform = turboloader.Resize(224, 224) | turboloader.ImageNetNormalize()
+
+# Use transforms directly in DataLoader
+loader = turboloader.DataLoader(
+    'imagenet.tar',
+    batch_size=128,
+    num_workers=8,
+    transform=transform
+)
+
+for batch in loader:
+    images = [sample['image'] for sample in batch]
+    # images are already resized and normalized
+```
+
+---
+
 ## [2.3.12] - 2025-11-30
 
 ### Require Python 3.10+
