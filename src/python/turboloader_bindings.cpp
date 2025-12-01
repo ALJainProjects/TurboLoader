@@ -1,12 +1,14 @@
 /**
  * @file turboloader_bindings.cpp
- * @brief Python bindings for TurboLoader v1.8.1
+ * @brief Python bindings for TurboLoader v2.0.0
  *
  * Provides PyTorch-compatible DataLoader interface using pybind11.
  * Includes all SIMD-accelerated transforms with comprehensive docstrings.
  *
  * v1.8.0: ARM NEON optimizations, modern augmentations, error recovery, logging
  * v1.8.1: Full Python bindings for MixUp/CutMix/Mosaic source image methods
+ * v2.0.0: Pipe operator for transforms, HDF5/TFRecord/Zarr support, COCO/VOC,
+ *         Azure Blob Storage, GPU transforms, multi-platform wheels
  */
 
 #include <pybind11/pybind11.h>
@@ -79,6 +81,10 @@ public:
      * @param world_size Total number of processes in distributed training (default: 1)
      * @param drop_last Drop incomplete batches at end (default: false)
      * @param distributed_seed Seed for shuffling across ranks (default: 42)
+     * @param enable_cache Enable tiered caching (NEW in v2.0.0, default: false)
+     * @param cache_l1_mb L1 memory cache size in MB (default: 512)
+     * @param cache_l2_gb L2 disk cache size in GB (default: 0 = disabled)
+     * @param cache_dir L2 disk cache directory (default: /tmp/turboloader_cache)
      */
     DataLoader(
         const std::string& data_path,
@@ -89,7 +95,11 @@ public:
         int world_rank = 0,
         int world_size = 1,
         bool drop_last = false,
-        int distributed_seed = 42
+        int distributed_seed = 42,
+        bool enable_cache = false,
+        size_t cache_l1_mb = 512,
+        size_t cache_l2_gb = 0,
+        const std::string& cache_dir = "/tmp/turboloader_cache"
     ) {
         config_.data_path = data_path;
         config_.batch_size = batch_size;
@@ -103,6 +113,12 @@ public:
         config_.world_size = world_size;
         config_.drop_last = drop_last;
         config_.distributed_seed = distributed_seed;
+
+        // Caching (NEW in v2.0.0)
+        config_.enable_cache = enable_cache;
+        config_.cache_l1_mb = cache_l1_mb;
+        config_.cache_l2_gb = cache_l2_gb;
+        config_.cache_dir = cache_dir;
 
         // Create pipeline (will auto-detect format)
         pipeline_ = std::make_unique<UnifiedPipeline>(config_);
@@ -265,7 +281,7 @@ std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
  * with the turboloader package. The Python __init__.py re-exports the API.
  */
 PYBIND11_MODULE(_turboloader, m) {
-    m.doc() = "TurboLoader v1.8.1 - High-performance data loading for ML\n\n"
+    m.doc() = "TurboLoader v2.0.0 - High-performance data loading for ML\n\n"
               "Drop-in replacement for PyTorch DataLoader with 12x speedup.\n\n"
               "Features:\n"
               "- ARM NEON optimizations (3-5x speedup on Apple Silicon)\n"
@@ -306,7 +322,7 @@ PYBIND11_MODULE(_turboloader, m) {
 
     // DataLoader class (PyTorch-compatible)
     py::class_<DataLoader>(m, "DataLoader")
-        .def(py::init<const std::string&, size_t, size_t, bool, bool, int, int, bool, int>(),
+        .def(py::init<const std::string&, size_t, size_t, bool, bool, int, int, bool, int, bool, size_t, size_t, const std::string&>(),
              py::arg("data_path"),
              py::arg("batch_size") = 32,
              py::arg("num_workers") = 4,
@@ -316,6 +332,10 @@ PYBIND11_MODULE(_turboloader, m) {
              py::arg("world_size") = 1,
              py::arg("drop_last") = false,
              py::arg("distributed_seed") = 42,
+             py::arg("enable_cache") = false,
+             py::arg("cache_l1_mb") = 512,
+             py::arg("cache_l2_gb") = 0,
+             py::arg("cache_dir") = "/tmp/turboloader_cache",
              "Create TurboLoader DataLoader (PyTorch-compatible)\n\n"
              "Args:\n"
              "    data_path (str): Path to data (TAR, video, CSV, Parquet)\n"
@@ -327,7 +347,11 @@ PYBIND11_MODULE(_turboloader, m) {
              "    world_rank (int): Rank of this process (0 to world_size-1, default: 0)\n"
              "    world_size (int): Total number of processes (default: 1)\n"
              "    drop_last (bool): Drop incomplete batches at end (default: False)\n"
-             "    distributed_seed (int): Seed for shuffling (same across ranks, default: 42)\n\n"
+             "    distributed_seed (int): Seed for shuffling (same across ranks, default: 42)\n"
+             "    enable_cache (bool): Enable tiered caching (NEW in v2.0.0, default: False)\n"
+             "    cache_l1_mb (int): L1 memory cache size in MB (default: 512)\n"
+             "    cache_l2_gb (int): L2 disk cache size in GB, 0=disabled (default: 0)\n"
+             "    cache_dir (str): L2 disk cache directory (default: /tmp/turboloader_cache)\n\n"
              "Returns:\n"
              "    DataLoader: Iterable that yields batches\n\n"
              "Example:\n"
@@ -336,14 +360,14 @@ PYBIND11_MODULE(_turboloader, m) {
              "    >>> for batch in loader:\n"
              "    >>>     images = [sample['image'] for sample in batch]  # NumPy arrays\n"
              "    >>>     # Train your model...\n\n"
-             "    >>> # Distributed training (PyTorch DDP)\n"
+             "    >>> # With caching (NEW in v2.0.0) - 5-10x faster for subsequent epochs\n"
              "    >>> loader = turboloader.DataLoader(\n"
              "    >>>     'imagenet.tar',\n"
              "    >>>     batch_size=128,\n"
              "    >>>     num_workers=8,\n"
-             "    >>>     enable_distributed=True,\n"
-             "    >>>     world_rank=torch.distributed.get_rank(),\n"
-             "    >>>     world_size=torch.distributed.get_world_size()\n"
+             "    >>>     enable_cache=True,\n"
+             "    >>>     cache_l1_mb=1024,  # 1GB L1 memory cache\n"
+             "    >>>     cache_l2_gb=10     # 10GB L2 disk cache\n"
              "    >>> )"
         )
         .def("next_batch", &DataLoader::next_batch,
@@ -373,31 +397,47 @@ PYBIND11_MODULE(_turboloader, m) {
              "Get next batch (iterator protocol)");
 
     // Module-level functions
-    m.def("version", []() { return "1.8.1"; },
+    m.def("version", []() { return "2.0.0"; },
           "Get TurboLoader version\n\n"
           "Returns:\n"
-          "    str: Version string (e.g., '1.8.1')");
+          "    str: Version string (e.g., '2.0.0')");
 
     m.def("features", []() {
         py::dict features;
-        features["version"] = "1.8.1";
+        features["version"] = "2.0.0";
         features["distributed_training"] = true;
         features["tar_support"] = true;
         features["remote_tar"] = true;
         features["http_support"] = true;
         features["s3_support"] = true;
         features["gcs_support"] = true;
+        features["azure_support"] = true;
         features["jpeg_decode"] = true;
         features["png_decode"] = true;
         features["webp_decode"] = true;
         features["simd_acceleration"] = true;
         features["lock_free_queues"] = true;
-        features["num_transforms"] = 19;
+        features["num_transforms"] = 24;
         features["autoaugment"] = true;
         features["pytorch_tensors"] = true;
         features["tensorflow_tensors"] = true;
         features["lanczos_interpolation"] = true;
         features["smart_batching"] = true;
+        features["pipe_operator"] = true;
+        features["hdf5_support"] = true;
+        features["tfrecord_support"] = true;
+        features["zarr_support"] = true;
+        features["coco_voc_support"] = true;
+#ifdef __linux__
+        features["io_uring"] = true;
+#else
+        features["io_uring"] = false;
+#endif
+#ifdef TURBOLOADER_HAS_CUDA
+        features["gpu_transforms"] = true;
+#else
+        features["gpu_transforms"] = false;
+#endif
         return features;
     }, "Get TurboLoader feature support\n\n"
        "Returns:\n"
@@ -475,11 +515,14 @@ PYBIND11_MODULE(_turboloader, m) {
         .value("PYTORCH_CHW", TensorFormat::PYTORCH_CHW)
         .value("TENSORFLOW_HWC", TensorFormat::TENSORFLOW_HWC);
 
-    // Base Transform class
+    // Base Transform class with pipe operator support
     py::class_<Transform>(m, "Transform",
              "Base class for all image transforms\n\n"
              "All transforms inherit from this class and provide SIMD-accelerated operations.\n"
-             "Transforms can be composed into pipelines for efficient batch processing.")
+             "Transforms can be composed into pipelines for efficient batch processing.\n\n"
+             "Pipe operator (|) support:\n"
+             "    >>> pipeline = Resize(224, 224) | RandomHorizontalFlip(0.5) | ImageNetNormalize()\n"
+             "    >>> output = pipeline.apply(image)")
         .def("apply", [](Transform& self, py::array_t<uint8_t> img) {
             auto input = numpy_to_imagedata(img);
             auto output = self.apply(*input);
@@ -496,7 +539,24 @@ PYBIND11_MODULE(_turboloader, m) {
         .def("is_deterministic", &Transform::is_deterministic,
              "Check if transform is deterministic\n\n"
              "Returns:\n"
-             "    bool: True if transform produces same output for same input");
+             "    bool: True if transform produces same output for same input")
+        .def("__or__", [](py::object self, py::object other) {
+            // Create a new ComposedTransforms from two transforms
+            py::list transforms;
+            transforms.append(self);
+            transforms.append(other);
+            // Get the Compose function from the module
+            py::module_ m = py::module_::import("_turboloader");
+            return m.attr("Compose")(transforms);
+        }, py::arg("other"),
+           "Pipe operator for composing transforms\n\n"
+           "Usage:\n"
+           "    >>> pipeline = Resize(224, 224) | RandomHorizontalFlip(0.5) | ImageNetNormalize()\n"
+           "    >>> output = pipeline.apply(image)\n\n"
+           "Args:\n"
+           "    other: Another transform to chain\n\n"
+           "Returns:\n"
+           "    ComposedTransforms: A pipeline combining both transforms");
 
     // Resize
     py::class_<ResizeTransform, Transform>(m, "Resize",
@@ -850,13 +910,19 @@ PYBIND11_MODULE(_turboloader, m) {
         }
 
         size_t size() const { return transforms_.size(); }
+
+        // Get transforms for pipe operator
+        const std::vector<py::object>& get_transforms() const { return transforms_; }
     };
 
     // Bind PyTransformPipeline
     py::class_<PyTransformPipeline>(m, "ComposedTransforms",
                   "Transform pipeline that applies multiple transforms sequentially\n\n"
                   "This class composes multiple transforms into a single operation.\n"
-                  "Transforms are applied in the order they were added.")
+                  "Transforms are applied in the order they were added.\n\n"
+                  "Pipe operator (|) support:\n"
+                  "    >>> pipeline = Resize(224, 224) | RandomHorizontalFlip(0.5)\n"
+                  "    >>> extended = pipeline | ImageNetNormalize()")
         .def("apply", &PyTransformPipeline::apply,
              py::arg("img"),
              "Apply all transforms in sequence\n\n"
@@ -868,7 +934,24 @@ PYBIND11_MODULE(_turboloader, m) {
              "Get number of transforms in pipeline")
         .def("__call__", &PyTransformPipeline::apply,
              py::arg("img"),
-             "Apply pipeline (callable interface)");
+             "Apply pipeline (callable interface)")
+        .def("__or__", [](PyTransformPipeline& self, py::object other) {
+            // Create a new ComposedTransforms with all existing transforms + the new one
+            py::list transforms;
+            for (const auto& t : self.get_transforms()) {
+                transforms.append(t);
+            }
+            transforms.append(other);
+            return PyTransformPipeline(transforms);
+        }, py::arg("other"),
+           "Pipe operator for extending pipelines\n\n"
+           "Usage:\n"
+           "    >>> pipeline = Resize(224, 224) | RandomHorizontalFlip(0.5)\n"
+           "    >>> extended = pipeline | ImageNetNormalize()\n\n"
+           "Args:\n"
+           "    other: Another transform to add to the pipeline\n\n"
+           "Returns:\n"
+           "    ComposedTransforms: Extended pipeline with the new transform");
 
     // Compose helper function
     m.def("Compose", [](py::list transforms) -> PyTransformPipeline {

@@ -231,18 +231,4 @@ jobs:
 
     - name: Test basic functionality
       run: |
-        python -c "
-import turboloader
-import numpy as np
-
-# Test DataLoader creation
-print(f'TurboLoader version: {turboloader.__version__}')
-
-# Test transform
-img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
-resize = turboloader.Resize(224, 224)
-output = resize.apply(img)
-assert output.shape == (224, 224, 3), f'Expected (224, 224, 3), got {output.shape}'
-
-print('✓ All basic tests passed')
-"
+        python -c "import turboloader; import numpy as np; print(f'TurboLoader version: {turboloader.__version__}'); img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8); resize = turboloader.Resize(224, 224); output = resize.apply(img); assert output.shape == (224, 224, 3), f'Expected (224, 224, 3), got {output.shape}'; print('All basic tests passed')"

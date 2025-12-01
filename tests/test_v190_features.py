@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Tests for TurboLoader v1.9.0 Features
+Tests for TurboLoader v2.0.0 Features
 
-Tests the new features added in v1.9.0:
+Tests the new features added in v2.0.0:
 - Transform Pipe Operator (|)
 - HDF5 format support (header only, requires libhdf5)
 - TFRecord format support
@@ -23,15 +23,15 @@ class TestVersion:
     """Test version information"""
 
     def test_version_is_190(self):
-        """Verify version is 1.9.0"""
+        """Verify version is 2.0.0"""
         import turboloader
-        assert turboloader.__version__ == "1.9.0"
+        assert turboloader.__version__ == "2.0.0"
 
     def test_version_function(self):
         """Test version() function returns correct version"""
         try:
             import turboloader
-            assert turboloader.version() == "1.9.0"
+            assert turboloader.version() == "2.0.0"
         except (ImportError, AttributeError):
             pytest.skip("C++ module not built")
 
@@ -140,15 +140,15 @@ class TestPipeOperator:
 
 
 class TestNewFeatures:
-    """Test new v1.9.0 features are available"""
+    """Test new v2.0.0 features are available"""
 
     def test_features_dict_has_new_features(self):
-        """Test features() includes new v1.9.0 features"""
+        """Test features() includes new v2.0.0 features"""
         try:
             import turboloader
             features = turboloader.features()
 
-            assert features["version"] == "1.9.0"
+            assert features["version"] == "2.0.0"
             assert "pipe_operator" in features
             assert features["pipe_operator"] == True
 
@@ -355,7 +355,7 @@ class TestAllExports:
 def run_tests():
     """Run all tests and print summary"""
     print("=" * 70)
-    print("TurboLoader v1.9.0 Feature Tests")
+    print("TurboLoader v2.0.0 Feature Tests")
     print("=" * 70)
 
     # Run pytest

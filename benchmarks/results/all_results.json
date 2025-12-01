@@ -1,0 +1,33 @@
+{
+  "timestamp": "2025-11-30T18:57:56.830505",
+  "dataset": "/tmp/turboloader_benchmark.tar",
+  "quick_mode": false,
+  "benchmarks": {
+    "TurboLoader Throughput": {
+      "duration": 2.612907886505127,
+      "exit_code": 0,
+      "success": true
+    },
+    "PyTorch Throughput": {
+      "duration": 242.00790405273438,
+      "exit_code": 0,
+      "success": true
+    },
+    "Transform Performance": {
+      "duration": 2.720335006713867,
+      "exit_code": 0,
+      "success": true
+    },
+    "Memory Usage": {
+      "duration": 9.839620113372803,
+      "exit_code": 0,
+      "success": true
+    },
+    "Scalability": {
+      "1": 279.11250744857085,
+      "2": 272.8813110886052,
+      "4": 231.35137321596838,
+      "8": 6971.78612983655
+    }
+  }
+}

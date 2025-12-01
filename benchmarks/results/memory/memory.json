@@ -1,0 +1,44 @@
+[
+  {
+    "library": "turboloader",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 4,
+      "num_batches": 30
+    },
+    "baseline_mb": 193.125,
+    "peak_mb": 248.609375,
+    "delta_mb": 55.484375,
+    "avg_mb": 242.4375,
+    "samples_per_mb": 4.613911574204449,
+    "timestamp": "2025-11-30T19:02:05.261686"
+  },
+  {
+    "library": "turboloader",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 4,
+      "num_batches": 30
+    },
+    "baseline_mb": 309.640625,
+    "peak_mb": 347.125,
+    "delta_mb": 37.484375,
+    "avg_mb": 345.1822916666667,
+    "samples_per_mb": 11.951646519383075,
+    "timestamp": "2025-11-30T19:02:08.517580"
+  },
+  {
+    "library": "turboloader",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 4,
+      "num_batches": 30
+    },
+    "baseline_mb": 333.46875,
+    "peak_mb": 367.171875,
+    "delta_mb": 33.703125,
+    "avg_mb": 366.4427083333333,
+    "samples_per_mb": 18.989337042188225,
+    "timestamp": "2025-11-30T19:02:11.527043"
+  }
+]

@@ -58,6 +58,9 @@
 #include "smart_batching.hpp"
 #include "error_recovery.hpp"
 
+// Cache (NEW in v2.0.0)
+#include "../cache/tiered_cache.hpp"
+
 // Readers
 #include "../readers/tar_reader.hpp"
 #include "../readers/http_reader.hpp"
@@ -142,9 +145,9 @@ struct UnifiedPipelineConfig {
     size_t num_workers = 4;                     // Worker threads
     size_t batch_size = 32;                     // Samples per batch
     size_t queue_size = 256;                    // Sample queue size
-    size_t buffer_pool_size = 128;              // Buffer pool size
+    size_t buffer_pool_size = 256;              // Buffer pool size (increased in v2.0.0)
     bool prefetch = true;                       // Enable prefetching
-    size_t prefetch_batches = 2;                // Batches to prefetch
+    size_t prefetch_batches = 4;                // Batches to prefetch (increased in v2.0.0)
     bool shuffle = false;                       // Shuffle (future)
 
     // ===== Image processing =====
@@ -168,8 +171,8 @@ struct UnifiedPipelineConfig {
     bool parquet_use_threads = true;            // Multi-threaded reading
     bool parquet_use_mmap = true;               // Memory-mapped I/O
 
-    // ===== Smart Batching (NEW in v1.5.1) =====
-    bool enable_smart_batching = false;         // Enable size-based sample grouping
+    // ===== Smart Batching (enabled by default in v2.0.0) =====
+    bool enable_smart_batching = true;          // Enable size-based sample grouping
     size_t bucket_width_step = 32;              // Group images with width ± this value
     size_t bucket_height_step = 32;             // Group images with height ± this value
     size_t min_bucket_size = 16;                // Minimum samples before creating batch
@@ -190,6 +193,12 @@ struct UnifiedPipelineConfig {
     size_t max_errors = 100;                    // Maximum errors before failing (0 = unlimited)
     bool log_errors = true;                     // Log error messages for corrupted files
     std::string error_log_path = "";            // Path to error log file (empty = stderr)
+
+    // ===== Caching (NEW in v2.0.0) =====
+    bool enable_cache = false;                  // Enable tiered caching
+    size_t cache_l1_mb = 512;                   // L1 memory cache size in MB
+    size_t cache_l2_gb = 0;                     // L2 disk cache size in GB (0 = disabled)
+    std::string cache_dir = "/tmp/turboloader_cache";  // L2 cache directory
 };
 
 /**
@@ -313,7 +322,8 @@ public:
               BufferPool* buffer_pool,
               std::shared_ptr<std::vector<uint8_t>> remote_tar_data = nullptr,
               size_t distributed_start_idx = 0,
-              size_t distributed_end_idx = 0)
+              size_t distributed_end_idx = 0,
+              cache::TieredCache* cache = nullptr)
         : config_(config),
           worker_id_(worker_id),
           buffer_pool_(buffer_pool),
@@ -321,7 +331,8 @@ public:
           running_(false),
           samples_processed_(0),
           distributed_start_idx_(distributed_start_idx),
-          distributed_end_idx_(distributed_end_idx) {
+          distributed_end_idx_(distributed_end_idx),
+          cache_(cache) {
 
         // Per-worker TAR reader
         // Check if using remote TAR data (already fetched)
@@ -418,36 +429,68 @@ private:
             usample.format = DataFormat::JPEG;
             usample.filename = entry.name;
 
+            // Check cache first (NEW in v2.0.0)
+            bool cache_hit = false;
+            if (cache_) {
+                cache::CacheKey cache_key = cache::CacheKey::from_bytes(
+                    jpeg_data.data(), jpeg_data.size());
+
+                auto cached = cache_->get(cache_key);
+                if (cached) {
+                    // Cache hit - use cached decoded data
+                    usample.image_data = cached->data;
+                    usample.width = cached->width;
+                    usample.height = cached->height;
+                    usample.channels = cached->channels;
+                    cache_hit = true;
+                }
+            }
+
+            if (!cache_hit) {
+                // Cache miss - decode the image
 #ifdef HAVE_NVJPEG
-            // GPU-accelerated JPEG decoding (if enabled and available)
-            if (use_gpu_ && nvjpeg_decoder_) {
-                NvJpegResult gpu_result;
-                if (nvjpeg_decoder_->decode(
-                    reinterpret_cast<const uint8_t*>(jpeg_data.data()),
-                    jpeg_data.size(),
-                    gpu_result)) {
-                    // Successful GPU decode
-                    usample.image_data = std::move(gpu_result.rgb_data);
-                    usample.width = gpu_result.width;
-                    usample.height = gpu_result.height;
-                    usample.channels = gpu_result.channels;
-                } else {
-                    continue;  // Skip corrupted
-                }
-            } else
+                // GPU-accelerated JPEG decoding (if enabled and available)
+                if (use_gpu_ && nvjpeg_decoder_) {
+                    NvJpegResult gpu_result;
+                    if (nvjpeg_decoder_->decode(
+                        reinterpret_cast<const uint8_t*>(jpeg_data.data()),
+                        jpeg_data.size(),
+                        gpu_result)) {
+                        // Successful GPU decode
+                        usample.image_data = std::move(gpu_result.rgb_data);
+                        usample.width = gpu_result.width;
+                        usample.height = gpu_result.height;
+                        usample.channels = gpu_result.channels;
+                    } else {
+                        continue;  // Skip corrupted
+                    }
+                } else
 #endif
-            {
-                // CPU SIMD-accelerated JPEG decoding (fallback)
-                Sample sample(entry.index, jpeg_data);
-                try {
-                    decoder_->decode_sample(sample);
-                } catch (const std::exception& e) {
-                    continue;  // Skip corrupted
+                {
+                    // CPU SIMD-accelerated JPEG decoding (fallback)
+                    Sample sample(entry.index, jpeg_data);
+                    try {
+                        decoder_->decode_sample(sample);
+                    } catch (const std::exception& e) {
+                        continue;  // Skip corrupted
+                    }
+                    usample.image_data = std::move(sample.decoded_rgb);
+                    usample.width = sample.width;
+                    usample.height = sample.height;
+                    usample.channels = sample.channels;
                 }
-                usample.image_data = std::move(sample.decoded_rgb);
-                usample.width = sample.width;
-                usample.height = sample.height;
-                usample.channels = sample.channels;
+
+                // Cache the decoded result (NEW in v2.0.0)
+                if (cache_) {
+                    cache::CacheKey cache_key = cache::CacheKey::from_bytes(
+                        jpeg_data.data(), jpeg_data.size());
+
+                    auto cached_data = cache::TieredCache::make_cached_data(
+                        usample.image_data.data(), usample.image_data.size(),
+                        usample.width, usample.height, usample.channels);
+
+                    cache_->put(cache_key, cached_data);
+                }
             }
 
             // Push to lock-free SPSC queue (busy-wait if full)
@@ -484,6 +527,9 @@ private:
     // Distributed Training (NEW in v1.7.1)
     size_t distributed_start_idx_;
     size_t distributed_end_idx_;
+
+    // Caching (NEW in v2.0.0)
+    cache::TieredCache* cache_;
 };
 
 /**
@@ -586,11 +632,21 @@ public:
                 }
             }
 
+            // Initialize tiered cache (NEW in v2.0.0)
+            if (config_.enable_cache) {
+                tiered_cache_ = std::make_unique<cache::TieredCache>(
+                    config_.cache_l1_mb,
+                    config_.cache_l2_gb,
+                    config_.cache_dir
+                );
+            }
+
             // Create workers with per-worker lock-free queues
             for (size_t i = 0; i < config_.num_workers; ++i) {
                 tar_workers_.push_back(std::make_unique<TarWorker>(
                     config_, i, buffer_pool_.get(), remote_tar_data,
-                    distributed_start_idx_, distributed_end_idx_
+                    distributed_start_idx_, distributed_end_idx_,
+                    tiered_cache_.get()
                 ));
                 tar_workers_.back()->start();
             }
@@ -936,6 +992,27 @@ private:
     // Distributed Training (NEW in v1.7.1)
     size_t distributed_start_idx_;
     size_t distributed_end_idx_;
+
+    // Tiered Cache (NEW in v2.0.0)
+    std::unique_ptr<cache::TieredCache> tiered_cache_;
+
+public:
+    /**
+     * @brief Get cache statistics (NEW in v2.0.0)
+     */
+    cache::TieredCacheStats cache_stats() const {
+        if (tiered_cache_) {
+            return tiered_cache_->stats();
+        }
+        return cache::TieredCacheStats{};
+    }
+
+    /**
+     * @brief Check if cache is enabled (NEW in v2.0.0)
+     */
+    bool cache_enabled() const {
+        return tiered_cache_ != nullptr;
+    }
 };
 
 }  // namespace turboloader

@@ -1,0 +1,287 @@
+[
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 496.6508649358556,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 1,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 496.6508649358556,
+      "total_time": 0.21745658293366432,
+      "total_images": 108,
+      "avg_batch_time": 0.0012754850710431735,
+      "p50_batch_time": 0.0006046611815690994,
+      "p95_batch_time": 0.005283171776682136,
+      "p99_batch_time": 0.006756701041012998
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 542.1715287585412,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 2,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 542.1715287585412,
+      "total_time": 0.11066608410328627,
+      "total_images": 60,
+      "avg_batch_time": 0.0014083925634622574,
+      "p50_batch_time": 0.0010834774002432823,
+      "p95_batch_time": 0.0030418043024837953,
+      "p99_batch_time": 0.003641864750534296
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 322.7683973490171,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 4,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 322.7683973490171,
+      "total_time": 0.11153508303686976,
+      "total_images": 36,
+      "avg_batch_time": 0.02131960354745388,
+      "p50_batch_time": 0.00704184640198946,
+      "p95_batch_time": 0.060531136114150286,
+      "p99_batch_time": 0.06440613651648164
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 5676.107595766874,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 8,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 5676.107595766874,
+      "total_time": 0.0021141248289495707,
+      "total_images": 12,
+      "avg_batch_time": 0.00200001522898674,
+      "p50_batch_time": 0.00200001522898674,
+      "p95_batch_time": 0.0025624409317970276,
+      "p99_batch_time": 0.0026124343276023865
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 355.11087478142207,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 1,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 355.11087478142207,
+      "total_time": 0.21964970813132823,
+      "total_images": 78,
+      "avg_batch_time": 0.006067387473124724,
+      "p50_batch_time": 0.0012081582099199295,
+      "p95_batch_time": 0.03034202381968498,
+      "p99_batch_time": 0.03100195899605751
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 376.8614532200409,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 2,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 376.8614532200409,
+      "total_time": 0.11144679202698171,
+      "total_images": 42,
+      "avg_batch_time": 0.00874405460698264,
+      "p50_batch_time": 0.001666136085987091,
+      "p95_batch_time": 0.03529193345457313,
+      "p99_batch_time": 0.04509211052209137
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 398.3147495281886,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 4,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 398.3147495281886,
+      "total_time": 0.10544424992986023,
+      "total_images": 42,
+      "avg_batch_time": 0.08058328447597367,
+      "p50_batch_time": 0.0015830155462026596,
+      "p95_batch_time": 0.38383749779313764,
+      "p99_batch_time": 0.5098675144836304
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 3753.4200917431995,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 8,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 3753.4200917431995,
+      "total_time": 0.0015985420905053616,
+      "total_images": 6,
+      "avg_batch_time": 0.002375105395913124,
+      "p50_batch_time": 0.002375105395913124,
+      "p95_batch_time": 0.002375105395913124,
+      "p99_batch_time": 0.002375105395913124
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 244.31786535033538,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 1,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 244.31786535033538,
+      "total_time": 0.22102354210801423,
+      "total_images": 54,
+      "avg_batch_time": 0.00995374284684658,
+      "p50_batch_time": 0.00100000761449337,
+      "p95_batch_time": 0.04707528278231619,
+      "p99_batch_time": 0.06904875859618187
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 213.58631463738217,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 2,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 213.58631463738217,
+      "total_time": 0.1123667499050498,
+      "total_images": 24,
+      "avg_batch_time": 0.0021355226635932922,
+      "p50_batch_time": 0.0014795223250985146,
+      "p95_batch_time": 0.004258204717189073,
+      "p99_batch_time": 0.004618095699697732
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 386.174344608883,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 4,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 386.174344608883,
+      "total_time": 0.10875916690565646,
+      "total_images": 42,
+      "avg_batch_time": 0.014845248577850205,
+      "p50_batch_time": 0.0010838266462087631,
+      "p95_batch_time": 0.06727485451847308,
+      "p99_batch_time": 0.08915491867810482
+    }
+  },
+  {
+    "library": "turboloader",
+    "metric": "throughput",
+    "value": 2019.3235752063104,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 8,
+      "with_transforms": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:57:56.877856",
+    "extra": {
+      "throughput": 2019.3235752063104,
+      "total_time": 0.00297129200771451,
+      "total_images": 6,
+      "avg_batch_time": 0.002250075340270996,
+      "p50_batch_time": 0.002250075340270996,
+      "p95_batch_time": 0.002250075340270996,
+      "p99_batch_time": 0.002250075340270996
+    }
+  },
+  {
+    "library": "turboloader_pipe",
+    "metric": "throughput",
+    "value": 438.8726914912558,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 4,
+      "syntax": "pipe_operator"
+    },
+    "timestamp": "2025-11-30T18:57:59.187767",
+    "extra": {
+      "throughput": 438.8726914912558,
+      "total_time": 0.10937112499959767,
+      "total_images": 48,
+      "avg_batch_time": 0.04961458034813404,
+      "p50_batch_time": 0.0017499551177024841,
+      "p95_batch_time": 0.18578115850687027,
+      "p99_batch_time": 0.1864226534962654
+    }
+  }
+]

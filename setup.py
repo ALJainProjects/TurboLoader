@@ -161,6 +161,10 @@ ext_modules = [
             '-std=c++20',
             '-O3',
             '-fvisibility=hidden',
+            '-mmacosx-version-min=10.15',  # Required for std::filesystem
+        ],
+        extra_link_args=[
+            '-mmacosx-version-min=10.15',  # Required for std::filesystem
         ],
     ),
 ]
@@ -197,9 +201,9 @@ class BuildExt(build_ext):
 
 setup(
     name='turboloader',
-    version='1.8.1',
+    version='2.0.0',
     author='TurboLoader Contributors',
-    description='High-performance data loading for ML with ARM NEON, modern augmentations, error recovery & logging',
+    description='High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support',
     long_description=open('README.md').read() if os.path.exists('README.md') else '',
     long_description_content_type='text/markdown',
     ext_modules=ext_modules,

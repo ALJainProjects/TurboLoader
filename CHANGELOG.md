@@ -5,6 +5,55 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2025-11-30
+
+### Major Release - Tiered Caching & Throughput Optimizations
+
+This is a major release with significant new features and performance improvements.
+
+### Added
+- **Tiered Caching System** (`src/cache/`)
+  - L1 Memory LRU Cache with shared_mutex for concurrent reads
+  - L2 Disk Cache with async writes via background thread
+  - xxHash64 for fast content hashing (10+ GB/s)
+  - Cache-aside pattern: L1 → L2 → decode on miss
+  - Expected 5-10x speedup for subsequent epochs
+
+- **Cache Configuration**
+  - `enable_cache` parameter to enable caching
+  - `cache_l1_mb` for L1 memory cache size (default: 512 MB)
+  - `cache_l2_gb` for L2 disk cache size (default: 0 = disabled)
+  - `cache_dir` for L2 cache directory
+
+- **TBL v2 Benchmark Script** (`benchmarks/throughput/bench_tbl_v2.py`)
+  - Compare TAR vs TBL v2 format performance
+  - Test cache effectiveness across epochs
+
+### Changed
+- **Smart Batching Enabled by Default**
+  - Groups images by dimensions to reduce padding waste
+  - 1.2x throughput improvement, 15-25% memory savings
+
+- **Pipeline Configuration Tuning**
+  - `prefetch_batches` increased from 2 to 4
+  - `buffer_pool_size` increased from 128 to 256
+  - Better latency hiding for decode operations
+
+### Performance Improvements
+
+| Optimization | Expected Improvement |
+|--------------|---------------------|
+| L1 Cache Hits | 5-10x faster epochs |
+| Smart Batching | +20% throughput |
+| Pipeline Tuning | +10-15% throughput |
+| Combined | 11K → 15-18K images/sec |
+
+### Breaking Changes
+- `enable_smart_batching` now defaults to `true`
+- New cache-related parameters added to DataLoader
+
+---
+
 ## [1.9.0] - 2025-11-30
 
 ### Transform Performance Release - Major Optimization

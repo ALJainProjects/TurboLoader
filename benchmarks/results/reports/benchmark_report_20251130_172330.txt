@@ -1,0 +1,88 @@
+==============================================================================
+                    TurboLoader Benchmark Report
+==============================================================================
+
+Generated: 2025-11-30 17:23:30
+Dataset: /tmp/turboloader_benchmark_5k.tar
+Quick mode: False
+
+------------------------------------------------------------------------------
+                       THROUGHPUT COMPARISON
+------------------------------------------------------------------------------
+             Library    Batch  Workers      Images/sec
+------------------------------------------------------------------------------
+         turboloader       32        1           557.8
+         turboloader       32        2          1256.9
+         turboloader       32        4          2031.5
+         turboloader       32        8         16513.1
+         turboloader       64        1           396.2
+         turboloader       64        2           661.8
+         turboloader       64        4          1148.0
+         turboloader       64        8           694.3
+         turboloader      128        1           303.4
+         turboloader      128        2           500.0
+         turboloader      128        4           777.2
+         turboloader      128        8          3095.6
+         turboloader       64        4          1121.5
+             pytorch       32        1          2105.8
+             pytorch       32        2          4139.2
+             pytorch       32        4          6530.4
+             pytorch       32        8          8599.9
+             pytorch       64        1          2120.1
+             pytorch       64        2          3874.7
+             pytorch       64        4          6417.9
+             pytorch       64        8          7601.5
+             pytorch      128        1          1851.6
+             pytorch      128        2          3236.6
+             pytorch      128        4          5558.1
+             pytorch      128        8          6124.7
+
+------------------------------------------------------------------------------
+                      TRANSFORM PERFORMANCE
+------------------------------------------------------------------------------
+                          Transform         Library    Time (ms)
+------------------------------------------------------------------------------
+                   Resize(256, 256)     turboloader        0.008
+                   Resize(224, 224)     turboloader        0.215
+               CenterCrop(224, 224)     turboloader        0.007
+               RandomCrop(224, 224)     turboloader        0.007
+          RandomHorizontalFlip(1.0)     turboloader        0.073
+            RandomVerticalFlip(1.0)     turboloader        0.008
+    ColorJitter(0.4, 0.4, 0.4, 0.2)     turboloader        2.982
+                    GaussianBlur(5)     turboloader        0.890
+                          Grayscale     turboloader        0.016
+                  ImageNetNormalize     turboloader        0.209
+       Full Pipeline (5 transforms)     turboloader        2.531
+             Pipe Operator Pipeline turboloader_pipe        2.499
+                   Resize(256, 256)     torchvision        0.002
+                   Resize(224, 224)     torchvision        0.217
+                    CenterCrop(224)     torchvision        0.008
+                    RandomCrop(224)     torchvision        0.010
+          RandomHorizontalFlip(1.0)     torchvision        0.022
+            RandomVerticalFlip(1.0)     torchvision        0.010
+    ColorJitter(0.4, 0.4, 0.4, 0.2)     torchvision        2.159
+                    GaussianBlur(5)     torchvision        2.232
+                          Grayscale     torchvision        0.099
+                          Normalize     torchvision        0.369
+       Full Pipeline (5 transforms)     torchvision        2.087
+
+------------------------------------------------------------------------------
+                         MEMORY USAGE
+------------------------------------------------------------------------------
+             Library    Batch    Peak (MB)   Delta (MB)
+------------------------------------------------------------------------------
+         turboloader       32        700.9        508.3
+         turboloader       64        845.4        358.7
+         turboloader      128        905.8        354.0
+
+------------------------------------------------------------------------------
+                         SCALABILITY
+------------------------------------------------------------------------------
+     Workers   Throughput (img/s)
+------------------------------------------------------------------------------
+           1                366.8
+           2                692.0
+           4               1209.9
+           8                669.0
+
+==============================================================================

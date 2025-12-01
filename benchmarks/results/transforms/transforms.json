@@ -1,0 +1,301 @@
+[
+  {
+    "library": "turboloader",
+    "transform": "Resize(256, 256)",
+    "time_per_image_ms": 0.0081691425293684,
+    "throughput": 122411.86836990043,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "Resize(224, 224)",
+    "time_per_image_ms": 0.21576492814347148,
+    "throughput": 4634.673524582533,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "CenterCrop(224, 224)",
+    "time_per_image_ms": 0.006789963226765394,
+    "throughput": 147276.20262479398,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "RandomCrop(224, 224)",
+    "time_per_image_ms": 0.007353746332228184,
+    "throughput": 135985.1094696382,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "RandomHorizontalFlip(1.0)",
+    "time_per_image_ms": 0.07113447645679116,
+    "throughput": 14057.880929332834,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "RandomVerticalFlip(1.0)",
+    "time_per_image_ms": 0.007836234290152788,
+    "throughput": 127612.31517243243,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "ColorJitter(0.4, 0.4, 0.4, 0.2)",
+    "time_per_image_ms": 1.2219262029975653,
+    "throughput": 818.3800278174348,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "GaussianBlur(5)",
+    "time_per_image_ms": 0.8984140725806355,
+    "throughput": 1113.0725024459662,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "Grayscale",
+    "time_per_image_ms": 0.016571665182709694,
+    "throughput": 60343.96597895097,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "ImageNetNormalize",
+    "time_per_image_ms": 0.21814868552610278,
+    "throughput": 4584.029454902877,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader",
+    "transform": "Full Pipeline (5 transforms)",
+    "time_per_image_ms": 1.1187250050716102,
+    "throughput": 893.87471940523,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "turboloader_pipe",
+    "transform": "Pipe Operator Pipeline",
+    "time_per_image_ms": 1.105298614129424,
+    "throughput": 904.7328814282813,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.119677"
+  },
+  {
+    "library": "torchvision",
+    "transform": "Resize(256, 256)",
+    "time_per_image_ms": 0.0017228955402970314,
+    "throughput": 580418.2416233997,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "Resize(224, 224)",
+    "time_per_image_ms": 0.21783077390864491,
+    "throughput": 4590.7195850086155,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "CenterCrop(224)",
+    "time_per_image_ms": 0.00746037345379591,
+    "throughput": 134041.54714147592,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "RandomCrop(224)",
+    "time_per_image_ms": 0.009773788042366505,
+    "throughput": 102314.47578618376,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "RandomHorizontalFlip(1.0)",
+    "time_per_image_ms": 0.021991608664393425,
+    "throughput": 45471.88954026352,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "RandomVerticalFlip(1.0)",
+    "time_per_image_ms": 0.009565935470163822,
+    "throughput": 104537.60671070829,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "ColorJitter(0.4, 0.4, 0.4, 0.2)",
+    "time_per_image_ms": 2.1580853476189077,
+    "throughput": 463.37370350219726,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "GaussianBlur(5)",
+    "time_per_image_ms": 2.230589131359011,
+    "throughput": 448.31205619241007,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "Grayscale",
+    "time_per_image_ms": 0.09629412088543177,
+    "throughput": 10384.849986737758,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "Normalize",
+    "time_per_image_ms": 0.38220377638936043,
+    "throughput": 2616.4053360406238,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  },
+  {
+    "library": "torchvision",
+    "transform": "Full Pipeline (5 transforms)",
+    "time_per_image_ms": 2.2206933959387243,
+    "throughput": 450.3098004563945,
+    "config": {
+      "input_size": [
+        256,
+        256
+      ]
+    },
+    "timestamp": "2025-11-30T19:02:02.942891"
+  }
+]

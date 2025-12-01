@@ -1,0 +1,62 @@
+==============================================================================
+                    TurboLoader Benchmark Report
+==============================================================================
+
+Generated: 2025-11-30 17:10:33
+Dataset: /tmp/turboloader_benchmark.tar
+Quick mode: True
+
+------------------------------------------------------------------------------
+                       THROUGHPUT COMPARISON
+------------------------------------------------------------------------------
+             Library    Batch  Workers      Images/sec
+------------------------------------------------------------------------------
+         turboloader       64        4           278.9
+         turboloader       64        4           277.3
+             pytorch       64        4          6869.2
+
+------------------------------------------------------------------------------
+                      TRANSFORM PERFORMANCE
+------------------------------------------------------------------------------
+                          Transform         Library    Time (ms)
+------------------------------------------------------------------------------
+                   Resize(256, 256)     turboloader        0.009
+                   Resize(224, 224)     turboloader        0.213
+               CenterCrop(224, 224)     turboloader        0.009
+               RandomCrop(224, 224)     turboloader        0.008
+          RandomHorizontalFlip(1.0)     turboloader        0.071
+            RandomVerticalFlip(1.0)     turboloader        0.008
+    ColorJitter(0.4, 0.4, 0.4, 0.2)     turboloader        3.002
+                    GaussianBlur(5)     turboloader        0.884
+                          Grayscale     turboloader        0.016
+                  ImageNetNormalize     turboloader        0.197
+       Full Pipeline (5 transforms)     turboloader        2.512
+             Pipe Operator Pipeline turboloader_pipe        2.521
+                   Resize(256, 256)     torchvision        0.002
+                   Resize(224, 224)     torchvision        0.215
+                    CenterCrop(224)     torchvision        0.008
+                    RandomCrop(224)     torchvision        0.010
+          RandomHorizontalFlip(1.0)     torchvision        0.023
+            RandomVerticalFlip(1.0)     torchvision        0.010
+    ColorJitter(0.4, 0.4, 0.4, 0.2)     torchvision        2.031
+                    GaussianBlur(5)     torchvision        2.270
+                          Grayscale     torchvision        0.097
+                          Normalize     torchvision        0.387
+       Full Pipeline (5 transforms)     torchvision        2.166
+
+------------------------------------------------------------------------------
+                         MEMORY USAGE
+------------------------------------------------------------------------------
+             Library    Batch    Peak (MB)   Delta (MB)
+------------------------------------------------------------------------------
+         turboloader       64        248.8         55.6
+
+------------------------------------------------------------------------------
+                         SCALABILITY
+------------------------------------------------------------------------------
+     Workers   Throughput (img/s)
+------------------------------------------------------------------------------
+           1                251.8
+           4                443.1
+
+==============================================================================

@@ -1,0 +1,264 @@
+name: Build Wheels
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_to_pypi:
+        description: 'Publish to PyPI'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-13, macos-14]
+        include:
+          - os: ubuntu-latest
+            cibw_archs: "x86_64"
+          - os: macos-13
+            cibw_archs: "x86_64"
+          - os: macos-14
+            cibw_archs: "arm64"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libjpeg-turbo8-dev \
+            libpng-dev \
+            libwebp-dev \
+            libcurl4-openssl-dev \
+            liblz4-dev \
+            cmake \
+            ninja-build
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install jpeg-turbo libpng webp curl lz4 cmake ninja
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21
+        env:
+          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+          CIBW_SKIP: "*-musllinux_* *-win32 *-manylinux_i686"
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+
+          # Linux-specific configuration
+          CIBW_BEFORE_ALL_LINUX: |
+            yum install -y epel-release
+            yum install -y \
+              libjpeg-turbo-devel \
+              libpng-devel \
+              libwebp-devel \
+              libcurl-devel \
+              lz4-devel \
+              cmake3 \
+              ninja-build || true
+            # Alternative for newer distros
+            apt-get update && apt-get install -y \
+              libjpeg-turbo8-dev \
+              libpng-dev \
+              libwebp-dev \
+              libcurl4-openssl-dev \
+              liblz4-dev \
+              cmake \
+              ninja-build || true
+
+          # macOS-specific configuration
+          CIBW_BEFORE_ALL_MACOS: |
+            brew install jpeg-turbo libpng webp curl lz4
+
+          # Environment variables for finding libraries
+          CIBW_ENVIRONMENT_LINUX: >
+            CFLAGS="-I/usr/include"
+            LDFLAGS="-L/usr/lib64 -L/usr/lib"
+
+          CIBW_ENVIRONMENT_MACOS: >
+            CFLAGS="-I$(brew --prefix jpeg-turbo)/include -I$(brew --prefix libpng)/include -I$(brew --prefix webp)/include -I$(brew --prefix lz4)/include"
+            LDFLAGS="-L$(brew --prefix jpeg-turbo)/lib -L$(brew --prefix libpng)/lib -L$(brew --prefix webp)/lib -L$(brew --prefix lz4)/lib"
+            MACOSX_DEPLOYMENT_TARGET="10.15"
+
+          # Build configuration
+          CIBW_BUILD_VERBOSITY: 1
+
+          # Test the wheel
+          CIBW_TEST_COMMAND: |
+            python -c "import turboloader; print(f'TurboLoader {turboloader.version()} loaded successfully')"
+            python -c "import turboloader; print(turboloader.features())"
+
+          # Repair wheel (include shared libraries)
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            auditwheel repair -w {dest_dir} {wheel}
+
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: >
+            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+          retention-days: 7
+
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build sdist
+        run: python -m build --sdist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          retention-days: 7
+
+  test_wheels:
+    name: Test wheels on ${{ matrix.os }} Python ${{ matrix.python }}
+    needs: build_wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-13, macos-14]
+        python: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        exclude:
+          # Python 3.8 and 3.9 not available on macOS-14 (ARM)
+          - os: macos-14
+            python: '3.8'
+          - os: macos-14
+            python: '3.9'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse
+
+      - name: Install wheel
+        run: |
+          pip install numpy torch
+          pip install wheelhouse/*.whl
+
+      - name: Run tests
+        run: |
+          python -c "import turboloader; print(f'Version: {turboloader.version()}')"
+          python -c "import turboloader; print(f'Features: {turboloader.features()}')"
+          python -c "
+          import turboloader
+          import numpy as np
+
+          # Test transforms
+          img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
+
+          resize = turboloader.Resize(224, 224)
+          result = resize.apply(img)
+          assert result.shape == (224, 224, 3), f'Resize failed: {result.shape}'
+
+          flip = turboloader.RandomHorizontalFlip(1.0)
+          result = flip.apply(img)
+          assert result.shape == img.shape, f'Flip failed: {result.shape}'
+
+          normalize = turboloader.ImageNetNormalize()
+          result = normalize.apply(img)
+          assert result.shape == img.shape, f'Normalize failed: {result.shape}'
+
+          print('All transform tests passed!')
+          "
+
+  publish_pypi:
+    name: Publish to PyPI
+    needs: [build_wheels, build_sdist, test_wheels]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi)
+
+    environment:
+      name: pypi
+      url: https://pypi.org/project/turboloader/
+
+    permissions:
+      id-token: write  # OIDC publishing
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  publish_testpypi:
+    name: Publish to TestPyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/turboloader/
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/

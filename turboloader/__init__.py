@@ -1,6 +1,21 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v1.8.0 - ARM NEON Optimizations, Modern Augmentations, Error Recovery & Logging
+v2.0.0 - Tiered Caching, Throughput Optimizations, Smart Batching Default
+
+New in v2.0.0:
+- Tiered Caching: L1 memory (LRU) + L2 disk cache for 5-10x faster subsequent epochs
+- Smart Batching enabled by default: 1.2x throughput, 15-25% memory savings
+- Pipeline tuning: Increased prefetch (4 batches), larger buffer pool (256)
+- xxHash64 content hashing for fast cache key generation
+- Cache-aside pattern: L1 → L2 → decode on miss
+- Async disk writes via background thread
+- DataLoader parameters: enable_cache, cache_l1_mb, cache_l2_gb, cache_dir
+
+Previous features (v1.9.0):
+- Transform Pipe Operator: pipeline = Resize(224) | Normalize() | ToTensor()
+- HDF5/TFRecord/Zarr format support
+- COCO/Pascal VOC annotation format support
+- Azure Blob Storage, GPU transforms, io_uring
 
 Production-Ready Features:
 - TBL v2 format: 40-60% space savings with LZ4 compression
@@ -13,12 +28,12 @@ Production-Ready Features:
 - 21,035 img/s throughput with 16 workers (12x faster than PyTorch, 1.3x faster than TensorFlow)
 - Smart Batching: Size-based sample grouping reduces padding by 15-25%, ~1.2x throughput boost
 - Distributed Training: Multi-node data loading with deterministic sharding (PyTorch DDP, Horovod, DeepSpeed)
-- 19 SIMD-accelerated data augmentation transforms (AVX2/NEON)
+- 24 SIMD-accelerated data augmentation transforms (AVX2/NEON)
 - Advanced transforms: RandomPerspective, RandomPosterize, RandomSolarize, AutoAugment, Lanczos interpolation
 - AutoAugment learned policies: ImageNet, CIFAR10, SVHN
 - Interactive benchmark web app with real-time visualizations
 - WebDataset format support for multi-modal datasets
-- Remote TAR support (HTTP, S3, GCS)
+- Remote TAR support (HTTP, S3, GCS, Azure)
 - GPU-accelerated JPEG decoding (nvJPEG)
 - PyTorch/TensorFlow/JAX framework integration
 - Lock-free SPSC queues for maximum concurrency
@@ -31,7 +46,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "1.8.1"
+__version__ = "2.0.0"
 
 # Import C++ extension module
 try:

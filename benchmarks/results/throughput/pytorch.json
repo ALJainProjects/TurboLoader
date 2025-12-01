@@ -1,0 +1,278 @@
+[
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 2320.4301372659793,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 1,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 2320.4301372659793,
+      "total_time": 0.21547729102894664,
+      "total_images": 500,
+      "avg_batch_time": 0.0015468831406906247,
+      "p50_batch_time": 0.0015414552763104439,
+      "p95_batch_time": 0.002385815605521202,
+      "p99_batch_time": 0.0028099399060010906
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 4380.917864137377,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 2,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 4380.917864137377,
+      "total_time": 0.1141313340049237,
+      "total_images": 500,
+      "avg_batch_time": 0.001343796611763537,
+      "p50_batch_time": 0.0012085074558854103,
+      "p95_batch_time": 0.0020622974261641502,
+      "p99_batch_time": 0.0023123575374484062
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 6893.350633940142,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 4,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 6893.350633940142,
+      "total_time": 0.07253366708755493,
+      "total_images": 500,
+      "avg_batch_time": 0.0012969976523891091,
+      "p50_batch_time": 0.0012085074558854103,
+      "p95_batch_time": 0.0023546162992715836,
+      "p99_batch_time": 0.003404589369893073
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 10693.204778870684,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 32,
+      "num_workers": 8,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 10693.204778870684,
+      "total_time": 0.046758666867390275,
+      "total_images": 500,
+      "avg_batch_time": 0.0008541392162442207,
+      "p50_batch_time": 0.0005830079317092896,
+      "p95_batch_time": 0.0019997823983430862,
+      "p99_batch_time": 0.0020998064428567886
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 2020.1268553750624,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 1,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 2020.1268553750624,
+      "total_time": 0.24750920897349715,
+      "total_images": 500,
+      "avg_batch_time": 0.0018957944121211767,
+      "p50_batch_time": 0.001875101588666439,
+      "p95_batch_time": 0.002302182838320732,
+      "p99_batch_time": 0.0023603346198797226
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 4165.070056604499,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 2,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 4165.070056604499,
+      "total_time": 0.12004599999636412,
+      "total_images": 500,
+      "avg_batch_time": 0.0014634861145168543,
+      "p50_batch_time": 0.001437612809240818,
+      "p95_batch_time": 0.0021935906261205673,
+      "p99_batch_time": 0.00220506452023983
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 7300.371307020839,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 4,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 7300.371307020839,
+      "total_time": 0.0684896670281887,
+      "total_images": 500,
+      "avg_batch_time": 0.001255102688446641,
+      "p50_batch_time": 0.0009789364412426949,
+      "p95_batch_time": 0.0023229164071381088,
+      "p99_batch_time": 0.0024982192553579803
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 10705.998062765435,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 64,
+      "num_workers": 8,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 10705.998062765435,
+      "total_time": 0.046702791936695576,
+      "total_images": 500,
+      "avg_batch_time": 0.0009168288670480251,
+      "p50_batch_time": 0.0006669433787465096,
+      "p95_batch_time": 0.0018795370124280448,
+      "p99_batch_time": 0.002042974811047315
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 2102.540186305884,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 1,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 2102.540186305884,
+      "total_time": 0.23780758306384087,
+      "total_images": 500,
+      "avg_batch_time": 0.0025313347578048706,
+      "p50_batch_time": 0.002250075340270996,
+      "p95_batch_time": 0.00385009916499257,
+      "p99_batch_time": 0.004070068243891
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 3804.77930055034,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 2,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 3804.77930055034,
+      "total_time": 0.13141366699710488,
+      "total_images": 500,
+      "avg_batch_time": 0.001489534042775631,
+      "p50_batch_time": 0.001375097781419754,
+      "p95_batch_time": 0.0020891544409096237,
+      "p99_batch_time": 0.0021841772831976414
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 5767.458915922066,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 4,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 5767.458915922066,
+      "total_time": 0.08669329201802611,
+      "total_images": 500,
+      "avg_batch_time": 0.0010522780939936638,
+      "p50_batch_time": 0.00100000761449337,
+      "p95_batch_time": 0.001385645009577274,
+      "p99_batch_time": 0.001410734839737415
+    }
+  },
+  {
+    "library": "pytorch_cached",
+    "metric": "throughput",
+    "value": 5868.590477874231,
+    "unit": "images/sec",
+    "config": {
+      "batch_size": 128,
+      "num_workers": 8,
+      "with_transforms": true,
+      "cached": true,
+      "dataset": "turboloader_benchmark.tar"
+    },
+    "timestamp": "2025-11-30T18:58:00.128190",
+    "extra": {
+      "throughput": 5868.590477874231,
+      "total_time": 0.08519933396019042,
+      "total_images": 500,
+      "avg_batch_time": 0.0015103141777217388,
+      "p50_batch_time": 0.0015415716916322708,
+      "p95_batch_time": 0.001808034721761942,
+      "p99_batch_time": 0.0018280674703419209
+    }
+  }
+]
