@@ -1,18 +1,10 @@
 name: Build Wheels
 
 on:
-  release:
-    types: [published]
   push:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      publish_to_pypi:
-        description: 'Publish to PyPI'
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   build_wheels:
@@ -168,30 +160,3 @@ jobs:
           print('All transform tests passed!')
           "
 
-  publish_pypi:
-    name: Publish to PyPI
-    needs: [build_wheels, build_sdist, test_wheels]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi)
-
-    environment:
-      name: pypi
-      url: https://pypi.org/project/turboloader/
-
-    permissions:
-      id-token: write
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: List artifacts
-        run: ls -la dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
