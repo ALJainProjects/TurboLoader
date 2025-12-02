@@ -237,5 +237,26 @@ else()
 endif()
 add_test(NAME pipeline_gpu_decode COMMAND test_pipeline_gpu_decode)
 
+# Test executable for v2.5.0 batch array transfer functionality
+add_executable(test_batch_array test_batch_array.cpp)
+target_include_directories(test_batch_array PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_batch_array PRIVATE turboloader)
+add_test(NAME batch_array COMMAND test_batch_array)
+message(STATUS "Building batch array transfer tests (v2.5.0)")
+
+# Test executable for Phase 2: DCT-scaled JPEG decoding
+add_executable(test_decode_scaled test_decode_scaled.cpp)
+target_include_directories(test_decode_scaled PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_decode_scaled PRIVATE turboloader)
+add_test(NAME decode_scaled COMMAND test_decode_scaled)
+message(STATUS "Building DCT-scaled decode tests (v2.5.0 Phase 2)")
+
+# Test executable for Phase 3: Hybrid wait strategy
+add_executable(test_hybrid_wait test_hybrid_wait.cpp)
+target_include_directories(test_hybrid_wait PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_hybrid_wait PRIVATE turboloader pthread)
+add_test(NAME hybrid_wait COMMAND test_hybrid_wait)
+message(STATUS "Building hybrid wait tests (v2.5.0 Phase 3)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
