@@ -58,7 +58,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.5.0"
+__version__ = "2.6.0"
 
 # Import C++ extension module
 try:
@@ -119,6 +119,8 @@ try:
     __all__ = [
         "DataLoader",
         "FastDataLoader",
+        "MemoryEfficientDataLoader",
+        "create_loader",
         "Loader",
         "version",
         "features",
@@ -775,6 +777,391 @@ try:
                 auto_smart_batching=auto_smart_batching,
                 enable_smart_batching=enable_smart_batching,
                 prefetch_batches=prefetch_batches,
+            )
+
+    class MemoryEfficientDataLoader:
+        """Memory-optimized DataLoader with configurable memory budget.
+
+        Uses aggressive memory-saving defaults to minimize memory footprint
+        while maintaining good throughput. Ideal for:
+        - Memory-constrained environments
+        - Development machines with limited RAM
+        - Running alongside other memory-intensive processes
+
+        Key optimizations:
+        - Reduced prefetch_batches (1-2 vs 4 in FastDataLoader)
+        - Fewer workers (2-8 vs 16 in FastDataLoader)
+        - Caching disabled by default
+        - Auto-tuned settings based on memory budget
+
+        Args:
+            data_path (str): Path to data (TAR, video, CSV, Parquet).
+                            Supports: local files, http://, https://, s3://, gs://
+            batch_size (int): Samples per batch (default: 32)
+            num_workers (int): Worker threads. If None, auto-calculated based on
+                              max_memory_mb (default: None)
+            max_memory_mb (int): Target memory budget in MB. Settings are auto-tuned
+                                to stay within this budget. (default: 512)
+            output_format (str): Output format - 'numpy', 'numpy_chw', 'pytorch',
+                               'tensorflow' (default: 'numpy')
+            target_height (int): Target image height (0 = auto from first image)
+            target_width (int): Target image width (0 = auto from first image)
+            transform: Transform pipeline to apply to images
+            shuffle (bool): Shuffle samples (default: False)
+            enable_distributed (bool): Enable distributed training (default: False)
+            world_rank (int): Rank of this process (default: 0)
+            world_size (int): Total number of processes (default: 1)
+            drop_last (bool): Drop incomplete batches (default: False)
+
+        Example:
+            >>> # Memory-efficient loading with 512MB budget
+            >>> loader = turboloader.MemoryEfficientDataLoader(
+            ...     'imagenet.tar',
+            ...     batch_size=64,
+            ...     max_memory_mb=512
+            ... )
+            >>> for images, metadata in loader:
+            ...     batch_size = images.shape[0]
+            ...
+            >>> # Very low memory (256MB)
+            >>> loader = turboloader.MemoryEfficientDataLoader(
+            ...     'data.tar',
+            ...     max_memory_mb=256
+            ... )
+        """
+
+        def __init__(
+            self,
+            data_path,
+            batch_size=32,
+            num_workers=None,
+            max_memory_mb=512,
+            output_format='numpy',
+            target_height=0,
+            target_width=0,
+            transform=None,
+            shuffle=False,
+            enable_distributed=False,
+            world_rank=0,
+            world_size=1,
+            drop_last=False,
+            distributed_seed=42,
+        ):
+            self._output_format = output_format
+            self._target_height = target_height
+            self._target_width = target_width
+            self._transform = transform
+            self._chw_format = output_format in ('numpy_chw', 'pytorch')
+            self._max_memory_mb = max_memory_mb
+
+            # Auto-tune settings based on memory budget
+            prefetch_batches, auto_workers = self._configure_for_memory_budget(
+                max_memory_mb, batch_size
+            )
+
+            # Use provided num_workers or auto-calculated
+            actual_workers = num_workers if num_workers is not None else auto_workers
+
+            self._loader = _DataLoaderBase(
+                data_path,
+                batch_size,
+                actual_workers,
+                shuffle,
+                enable_distributed,
+                world_rank,
+                world_size,
+                drop_last,
+                distributed_seed,
+                False,  # enable_cache - disabled for memory efficiency
+                0,      # cache_l1_mb - disabled
+                0,      # cache_l2_gb - disabled
+                "/tmp/turboloader_cache",
+                False,  # auto_smart_batching - disabled to save memory
+                False,  # enable_smart_batching
+                prefetch_batches,
+            )
+
+            # Store actual settings for introspection
+            self._prefetch_batches = prefetch_batches
+            self._num_workers = actual_workers
+
+        def _configure_for_memory_budget(self, max_memory_mb, batch_size):
+            """Calculate optimal settings for memory budget.
+
+            Returns:
+                tuple: (prefetch_batches, num_workers)
+            """
+            import os
+
+            # Estimate image size (assume 224x224 RGB worst case)
+            est_image_bytes = 224 * 224 * 3
+            bytes_per_batch = batch_size * est_image_bytes
+
+            # Allocate 70% to prefetch, 30% to pools/overhead
+            prefetch_budget = max_memory_mb * 0.7 * 1024 * 1024
+
+            # Calculate prefetch_batches (minimum 1, maximum 2)
+            prefetch_batches = min(2, max(1, int(prefetch_budget / bytes_per_batch)))
+
+            # Calculate num_workers (fewer workers = less memory)
+            cpu_count = os.cpu_count() or 4
+            if max_memory_mb <= 256:
+                num_workers = min(2, max(1, cpu_count // 4))
+            elif max_memory_mb <= 512:
+                num_workers = min(4, cpu_count // 2)
+            elif max_memory_mb <= 1024:
+                num_workers = min(8, cpu_count)
+            else:
+                num_workers = min(12, cpu_count)
+
+            return prefetch_batches, num_workers
+
+        def next_batch(self):
+            """Get next batch as contiguous array.
+
+            Returns:
+                tuple: (images_array, metadata_dict)
+                    - images_array: np.ndarray of shape (N, H, W, C) or (N, C, H, W)
+                    - metadata_dict: {'indices': [...], 'filenames': [...], ...}
+
+            Raises:
+                StopIteration: When all data has been processed.
+            """
+            import time
+
+            # Retry loop for async pipeline startup
+            max_retries = 10
+            for attempt in range(max_retries):
+                images, metadata = self._loader.next_batch_array(
+                    self._chw_format,
+                    self._target_height,
+                    self._target_width
+                )
+
+                # Check for empty batch
+                if images.size == 0:
+                    if attempt < max_retries - 1 and not self._loader.is_finished():
+                        time.sleep(0.01)
+                        continue
+                    raise StopIteration
+                else:
+                    break
+
+            # Apply transforms if set
+            if self._transform is not None:
+                import numpy as np
+                batch_size = images.shape[0]
+                transformed = []
+                for i in range(batch_size):
+                    if self._chw_format:
+                        img = np.transpose(images[i], (1, 2, 0))
+                        img = self._transform.apply(img)
+                        img = np.transpose(img, (2, 0, 1))
+                    else:
+                        img = self._transform.apply(images[i])
+                    transformed.append(img)
+                images = np.stack(transformed)
+
+            return images, metadata
+
+        def is_finished(self):
+            """Check if all data has been processed."""
+            return self._loader.is_finished()
+
+        def stop(self):
+            """Stop the pipeline and clean up resources."""
+            self._loader.stop()
+
+        def __enter__(self):
+            """Context manager entry."""
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            """Context manager exit."""
+            self.stop()
+
+        def __iter__(self):
+            """Make MemoryEfficientDataLoader iterable."""
+            return self
+
+        def __next__(self):
+            """Get next batch (iterator protocol)."""
+            return self.next_batch()
+
+        @property
+        def output_format(self):
+            """Get the output format."""
+            return self._output_format
+
+        @property
+        def transform(self):
+            """Get the current transform."""
+            return self._transform
+
+        @transform.setter
+        def transform(self, value):
+            """Set the transform."""
+            self._transform = value
+
+        @property
+        def max_memory_mb(self):
+            """Get the memory budget."""
+            return self._max_memory_mb
+
+        @property
+        def prefetch_batches(self):
+            """Get the actual prefetch_batches setting."""
+            return self._prefetch_batches
+
+        @property
+        def num_workers(self):
+            """Get the actual num_workers setting."""
+            return self._num_workers
+
+    def create_loader(
+        data_path,
+        loader_type='fast',
+        batch_size=32,
+        num_workers=None,
+        output_format='numpy',
+        target_height=0,
+        target_width=0,
+        transform=None,
+        shuffle=False,
+        enable_distributed=False,
+        world_rank=0,
+        world_size=1,
+        drop_last=False,
+        distributed_seed=42,
+        enable_cache=False,
+        cache_l1_mb=512,
+        cache_l2_gb=0,
+        cache_dir="/tmp/turboloader_cache",
+        auto_smart_batching=True,
+        enable_smart_batching=False,
+        prefetch_batches=4,
+        max_memory_mb=512,
+    ):
+        """Factory function to create the appropriate data loader.
+
+        Creates DataLoader, FastDataLoader, or MemoryEfficientDataLoader based
+        on the `loader_type` parameter.
+
+        Args:
+            data_path (str): Path to data (TAR, video, CSV, Parquet)
+            loader_type (str): Type of loader to create:
+                - 'fast': FastDataLoader (max throughput, higher memory)
+                - 'memory_efficient': MemoryEfficientDataLoader (low memory)
+                - 'standard': DataLoader (original API, list of dicts)
+            batch_size (int): Samples per batch (default: 32)
+            num_workers (int): Worker threads. For memory_efficient, None means
+                              auto-calculate based on max_memory_mb. (default: None for
+                              memory_efficient, 4 for others)
+            output_format (str): For fast/memory_efficient: 'numpy', 'numpy_chw',
+                               'pytorch', 'tensorflow' (default: 'numpy')
+            target_height (int): Target image height (default: 0 = auto)
+            target_width (int): Target image width (default: 0 = auto)
+            transform: Transform pipeline to apply to images
+            shuffle (bool): Shuffle samples (default: False)
+            enable_distributed (bool): Enable distributed training (default: False)
+            world_rank (int): Rank of this process (default: 0)
+            world_size (int): Total number of processes (default: 1)
+            drop_last (bool): Drop incomplete batches (default: False)
+            distributed_seed (int): Seed for shuffling (default: 42)
+            enable_cache (bool): Enable tiered caching (default: False)
+            cache_l1_mb (int): L1 memory cache size in MB (default: 512)
+            cache_l2_gb (int): L2 disk cache size in GB (default: 0)
+            cache_dir (str): L2 cache directory (default: /tmp/turboloader_cache)
+            auto_smart_batching (bool): Auto-detect smart batching (default: True)
+            enable_smart_batching (bool): Manual smart batching override (default: False)
+            prefetch_batches (int): Batches to prefetch (default: 4)
+            max_memory_mb (int): Memory budget for memory_efficient loader (default: 512)
+
+        Returns:
+            DataLoader, FastDataLoader, or MemoryEfficientDataLoader
+
+        Example:
+            >>> # High throughput (default)
+            >>> loader = turboloader.create_loader('data.tar', loader_type='fast')
+            >>> for images, metadata in loader:
+            ...     pass
+            ...
+            >>> # Memory constrained
+            >>> loader = turboloader.create_loader(
+            ...     'data.tar',
+            ...     loader_type='memory_efficient',
+            ...     max_memory_mb=512
+            ... )
+            ...
+            >>> # Standard API (list of dicts)
+            >>> loader = turboloader.create_loader('data.tar', loader_type='standard')
+            >>> for batch in loader:
+            ...     images = [s['image'] for s in batch]
+        """
+        if loader_type == 'memory_efficient':
+            return MemoryEfficientDataLoader(
+                data_path=data_path,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                max_memory_mb=max_memory_mb,
+                output_format=output_format,
+                target_height=target_height,
+                target_width=target_width,
+                transform=transform,
+                shuffle=shuffle,
+                enable_distributed=enable_distributed,
+                world_rank=world_rank,
+                world_size=world_size,
+                drop_last=drop_last,
+                distributed_seed=distributed_seed,
+            )
+        elif loader_type == 'fast':
+            return FastDataLoader(
+                data_path=data_path,
+                batch_size=batch_size,
+                num_workers=num_workers if num_workers is not None else 4,
+                output_format=output_format,
+                target_height=target_height,
+                target_width=target_width,
+                transform=transform,
+                shuffle=shuffle,
+                enable_distributed=enable_distributed,
+                world_rank=world_rank,
+                world_size=world_size,
+                drop_last=drop_last,
+                distributed_seed=distributed_seed,
+                enable_cache=enable_cache,
+                cache_l1_mb=cache_l1_mb,
+                cache_l2_gb=cache_l2_gb,
+                cache_dir=cache_dir,
+                auto_smart_batching=auto_smart_batching,
+                enable_smart_batching=enable_smart_batching,
+                prefetch_batches=prefetch_batches,
+            )
+        elif loader_type == 'standard':
+            return DataLoader(
+                data_path=data_path,
+                batch_size=batch_size,
+                num_workers=num_workers if num_workers is not None else 4,
+                shuffle=shuffle,
+                transform=transform,
+                enable_distributed=enable_distributed,
+                world_rank=world_rank,
+                world_size=world_size,
+                drop_last=drop_last,
+                distributed_seed=distributed_seed,
+                enable_cache=enable_cache,
+                cache_l1_mb=cache_l1_mb,
+                cache_l2_gb=cache_l2_gb,
+                cache_dir=cache_dir,
+                auto_smart_batching=auto_smart_batching,
+                enable_smart_batching=enable_smart_batching,
+                prefetch_batches=prefetch_batches,
+            )
+        else:
+            raise ValueError(
+                f"Invalid loader_type: {loader_type}. "
+                f"Must be 'fast', 'memory_efficient', or 'standard'."
             )
 
 except ImportError:
