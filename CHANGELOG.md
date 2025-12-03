@@ -5,6 +5,50 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2025-12-02
+
+### Decoded Tensor Caching for Multi-Epoch Training
+
+This release adds the `cache_decoded` feature to FastDataLoader, enabling dramatically faster subsequent epochs by caching decoded numpy arrays in memory.
+
+### Added
+- **Decoded Tensor Caching** (`cache_decoded=True` parameter for FastDataLoader)
+  - Caches complete numpy arrays in memory after first epoch
+  - Subsequent epochs iterate at memory speed (100K+ img/s)
+  - 2.6x faster total training time vs TensorFlow's `.cache()` (0.24s vs 0.63s for 5 epochs)
+  - New methods: `clear_cache()` to release cached memory
+  - New properties: `cache_populated` (bool), `cache_size_mb` (float)
+  - Optional `cache_decoded_mb` parameter to limit cache memory usage
+
+### Example
+```python
+import turboloader
+
+# Enable caching for multi-epoch training
+loader = turboloader.FastDataLoader(
+    'imagenet.tar',
+    batch_size=64,
+    num_workers=8,
+    cache_decoded=True  # Cache decoded arrays
+)
+
+for epoch in range(10):
+    for images, metadata in loader:
+        # First epoch: ~25K img/s (decode from TAR)
+        # Subsequent epochs: memory speed (cache hit)
+        train_step(images)
+
+    if loader.cache_populated:
+        print(f"Cache size: {loader.cache_size_mb:.1f} MB")
+```
+
+### Performance
+- First epoch: Standard decode throughput (~25K img/s)
+- Cached epochs: Memory iteration speed (100K+ img/s)
+- Total time for 5 epochs: 2.6x faster than TensorFlow `.cache()`
+
+---
+
 ## [2.4.0] - 2025-12-01
 
 ### Integrated Transform Pipeline

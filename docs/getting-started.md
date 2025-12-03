@@ -20,7 +20,7 @@ pip install -e .
 
 ## System Requirements
 
-- **Python:** 3.8 or later
+- **Python:** 3.10 or later
 - **Compiler:** C++20 compatible (GCC 10+, Clang 12+, MSVC 19.29+)
 - **OS:** macOS, Linux, or Windows
 

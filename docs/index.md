@@ -31,7 +31,7 @@ TurboLoader achieves **21,035 img/s peak throughput** (12x faster than PyTorch) 
 
 ### Performance
 
-**Latest Results (v2.0.0):**
+**Latest Results (v2.7.0):**
 
 | Workers | Throughput | Linear Scaling | Efficiency |
 |---------|------------|----------------|------------|
@@ -84,7 +84,7 @@ pip install turboloader
 ```
 
 **Requirements:**
-- Python 3.8+
+- Python 3.10+
 - C++20 compiler
 - libjpeg-turbo, libpng, libwebp (optional but recommended)
 
@@ -214,7 +214,9 @@ See [Architecture Guide](architecture.md) for detailed design.
 
 ## Version History
 
-- **v2.0.0** (Current) - Tiered Caching (L1 memory + L2 disk), Smart Batching enabled by default, Pipeline tuning optimizations
+- **v2.7.0** (Current) - Decoded Tensor Caching (`cache_decoded=True`), FastDataLoader, MemoryEfficientDataLoader
+- **v2.4.0** - Integrated transform pipeline support in DataLoader
+- **v2.0.0** - Tiered Caching (L1 memory + L2 disk), Smart Batching enabled by default, Pipeline tuning optimizations
 - **v1.9.0** - Transform Pipe Operator, HDF5/TFRecord/Zarr support (headers), COCO/VOC annotations, Azure Blob Storage, GPU transforms, io_uring
 - **v1.8.0** - Modern Augmentations (MixUp, CutMix, Mosaic, RandAugment, GridMask), Logging system
 - **v1.7.7** - Developer experience improvements: Issue templates, Quick Start notebook, PyTorch Lightning example
@@ -244,7 +246,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {2.0.0},
+  version = {2.7.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```

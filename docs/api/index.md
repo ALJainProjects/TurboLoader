@@ -1,6 +1,6 @@
 # API Reference
 
-Complete API documentation for TurboLoader v1.7.7.
+Complete API documentation for TurboLoader v2.7.0.
 
 ## Quick Links
 
@@ -36,12 +36,12 @@ turboloader.AutoAugmentPolicy  # IMAGENET, CIFAR10, SVHN
 Get TurboLoader version string.
 
 **Returns:**
-- `str`: Version string (e.g., "1.7.7")
+- `str`: Version string (e.g., "2.7.0")
 
 **Example:**
 ```python
 import turboloader
-print(turboloader.__version__)  # "1.7.7"
+print(turboloader.__version__)  # "2.7.0"
 ```
 
 ### `turboloader.features()`

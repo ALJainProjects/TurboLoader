@@ -22,7 +22,7 @@ That's it! TurboLoader will be installed with pre-built wheels for most platform
 
 ### Python Versions
 
-- Python 3.8, 3.9, 3.10, 3.11, 3.12
+- Python 3.10, 3.11, 3.12, 3.13
 
 ### Compilers (for building from source)
 
@@ -45,7 +45,7 @@ pip install turboloader
 Install a specific version:
 
 ```bash
-pip install turboloader==1.7.7
+pip install turboloader==2.7.0
 ```
 
 Upgrade to latest:

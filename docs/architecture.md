@@ -1,6 +1,6 @@
 # TurboLoader Architecture
 
-This document describes the internal architecture of TurboLoader v2.0.0.
+This document describes the internal architecture of TurboLoader v2.7.0.
 
 ## Overview
 

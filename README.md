@@ -4,7 +4,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/turboloader.svg)](https://pypi.org/project/turboloader/)
 [![Tests](https://github.com/ALJainProjects/TurboLoader/actions/workflows/test.yml/badge.svg)](https://github.com/ALJainProjects/TurboLoader/actions/workflows/test.yml)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -16,7 +16,9 @@ TurboLoader is a high-performance data loading library for machine learning work
 
 ### Core Features
 
-- **Distributed Training Support** - Multi-node data loading with deterministic sharding (v1.7.1)
+- **Decoded Tensor Caching (v2.7.0)** - `cache_decoded=True` for 100K+ img/s on subsequent epochs
+- **Multiple Loader Types** - FastDataLoader (8-12% faster), MemoryEfficientDataLoader, standard DataLoader
+- **Distributed Training Support** - Multi-node data loading with deterministic sharding
 - **SIMD-Accelerated Transforms** - 19 vectorized transforms using AVX2/AVX-512/NEON
 - **TBL v2 Binary Format** - Custom format with LZ4 compression for reduced storage
 - **Framework Integration** - Seamless support for PyTorch, TensorFlow, and JAX
@@ -44,7 +46,7 @@ pip install -e .
 
 ### System Requirements
 
-- **Python:** 3.8 or higher
+- **Python:** 3.10 or higher
 - **Compiler:** C++20 capable (GCC 10+, Clang 12+, MSVC 19.29+)
 - **OS:** macOS, Linux, Windows
 
@@ -298,7 +300,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: Production-Ready ML Data Loading},
   year = {2025},
-  version = {2.0.0},
+  version = {2.7.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
@@ -316,4 +318,4 @@ If you use TurboLoader in your research:
 
 ---
 
-TurboLoader v2.0.0 - Production-ready ML data loading. Fast. Efficient. Reliable.
+TurboLoader v2.7.0 - Production-ready ML data loading. Fast. Efficient. Reliable.

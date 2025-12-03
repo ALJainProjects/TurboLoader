@@ -12,7 +12,7 @@ Verify installation:
 
 ```python
 import turboloader
-print(turboloader.__version__)  # Should print "1.7.7" or later
+print(turboloader.__version__)  # Should print "2.7.0" or later
 ```
 
 ---
@@ -282,7 +282,40 @@ writer.finalize()
 loader = turboloader.DataLoader('output.tbl', batch_size=64, num_workers=8)
 ```
 
-### 3. Use Larger Batch Sizes
+### 3. Use FastDataLoader with Caching (v2.7.0)
+
+For multi-epoch training, use FastDataLoader with `cache_decoded=True` for 2.6x faster total training:
+
+```python
+import turboloader
+
+# FastDataLoader with decoded tensor caching
+loader = turboloader.FastDataLoader(
+    'imagenet.tar',
+    batch_size=64,
+    num_workers=8,
+    cache_decoded=True  # Cache decoded arrays in memory
+)
+
+for epoch in range(10):
+    for images, metadata in loader:
+        # First epoch: ~25K img/s (decode from TAR)
+        # Subsequent epochs: 100K+ img/s (cache hit)
+        train_step(images)
+
+    if loader.cache_populated:
+        print(f"Cache size: {loader.cache_size_mb:.1f} MB")
+
+# Clear cache when done
+loader.clear_cache()
+```
+
+**Performance:**
+- First epoch: Standard decode throughput
+- Cached epochs: Memory iteration speed (100K+ img/s)
+- Total time for 5 epochs: 2.6x faster than TensorFlow `.cache()`
+
+### 4. Use Larger Batch Sizes
 
 Larger batches = better throughput (if GPU memory allows):
 
