@@ -48,6 +48,35 @@ for batch in loader:
 
 ---
 
+## Shuffling Data (v2.8.0)
+
+Enable data shuffling for training:
+
+```python
+import turboloader
+
+# Create DataLoader with shuffle enabled
+loader = turboloader.DataLoader(
+    'imagenet.tar',
+    batch_size=32,
+    num_workers=4,
+    shuffle=True  # Enable shuffling
+)
+
+# For reproducible shuffling across epochs
+for epoch in range(10):
+    loader.set_epoch(epoch)  # Different order each epoch, reproducible
+    for batch in loader:
+        train(batch)
+```
+
+**How it works:**
+- Each worker shuffles its own shard of data using Fisher-Yates algorithm
+- `set_epoch()` ensures reproducible shuffling with different orderings per epoch
+- Matches PyTorch DataLoader's distributed shuffling behavior
+
+---
+
 ## Data Augmentation
 
 Apply transforms for data augmentation:

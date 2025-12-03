@@ -428,6 +428,19 @@ public:
         return batch;
     }
 
+    /**
+     * @brief Set epoch for reproducible shuffling (NEW in v2.8.0)
+     *
+     * When shuffle=True, call this at the start of each epoch to get
+     * reproducible shuffling. Different epochs produce different orderings,
+     * but the same epoch + seed = same ordering.
+     */
+    void set_epoch(size_t epoch) {
+        if (pipeline_) {
+            pipeline_->set_epoch(epoch);
+        }
+    }
+
 private:
     UnifiedPipelineConfig config_;
     std::unique_ptr<UnifiedPipeline> pipeline_;
@@ -626,6 +639,20 @@ PYBIND11_MODULE(_turboloader, m) {
              "was enabled based on image size variation detection.\n\n"
              "Returns:\n"
              "    bool: True if smart batching is currently active")
+        .def("set_epoch", &DataLoader::set_epoch,
+             py::arg("epoch"),
+             "Set epoch for reproducible shuffling (NEW in v2.8.0)\n\n"
+             "When shuffle=True, call this at the start of each epoch to get\n"
+             "reproducible shuffling. Different epochs produce different orderings,\n"
+             "but the same epoch + seed = same ordering.\n\n"
+             "Args:\n"
+             "    epoch (int): The epoch number (0, 1, 2, ...)\n\n"
+             "Example:\n"
+             "    >>> loader = turboloader.DataLoader('data.tar', shuffle=True)\n"
+             "    >>> for epoch in range(10):\n"
+             "    ...     loader.set_epoch(epoch)\n"
+             "    ...     for batch in loader:\n"
+             "    ...         train(batch)")
         .def("stop", &DataLoader::stop,
              "Stop the pipeline and clean up resources")
         .def("__enter__", &DataLoader::enter,

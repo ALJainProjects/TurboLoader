@@ -98,6 +98,8 @@
 #include <stdexcept>
 #include <algorithm>
 #include <set>
+#include <random>
+#include <numeric>
 
 namespace turboloader {
 
@@ -380,6 +382,16 @@ public:
         thread_ = std::thread(&TarWorker::run, this);
     }
 
+    /**
+     * @brief Set epoch for reproducible shuffling (NEW in v2.8.0)
+     *
+     * Call this before each epoch to get reproducible shuffle order.
+     * Different epochs with the same seed will produce different orderings.
+     */
+    void set_epoch(size_t epoch) {
+        epoch_ = epoch;
+    }
+
     void stop() {
         running_ = false;
         if (thread_.joinable()) {
@@ -409,7 +421,19 @@ private:
         // Each worker processes all samples in its partition sequentially
         size_t num_samples = tar_reader_->num_samples();
 
-        for (size_t i = 0; i < num_samples && running_; ++i) {
+        // Build index array and optionally shuffle (NEW in v2.8.0)
+        std::vector<size_t> indices(num_samples);
+        std::iota(indices.begin(), indices.end(), 0);
+
+        if (config_.shuffle) {
+            // Use worker_id + epoch for reproducible per-worker shuffling
+            // Different workers get different shuffles, same epoch = same shuffle
+            std::mt19937 rng(config_.distributed_seed + worker_id_ * 1000 + epoch_);
+            std::shuffle(indices.begin(), indices.end(), rng);
+        }
+
+        for (size_t idx = 0; idx < num_samples && running_; ++idx) {
+            size_t i = indices[idx];  // Use shuffled index
             // Zero-copy JPEG data from TAR
             auto jpeg_data = tar_reader_->get_sample(i);
             const auto& entry = tar_reader_->get_entry(i);
@@ -522,6 +546,9 @@ private:
 
     // Caching (NEW in v2.0.0)
     cache::TieredCache* cache_;
+
+    // Shuffle support (NEW in v2.8.0)
+    size_t epoch_ = 0;
 };
 
 /**
@@ -1166,6 +1193,38 @@ public:
     bool smart_batching_enabled() const {
         return smart_batching_active_;
     }
+
+    /**
+     * @brief Set epoch for reproducible shuffling (NEW in v2.8.0)
+     *
+     * Call this before each epoch to get a different shuffle order.
+     * Same epoch + same seed = same shuffle order (reproducible).
+     *
+     * @param epoch The epoch number (0, 1, 2, ...)
+     */
+    void set_epoch(size_t epoch) {
+        current_epoch_ = epoch;
+        for (auto& worker : tar_workers_) {
+            worker->set_epoch(epoch);
+        }
+    }
+
+    /**
+     * @brief Get current epoch (NEW in v2.8.0)
+     */
+    size_t get_epoch() const {
+        return current_epoch_;
+    }
+
+    /**
+     * @brief Check if shuffle is enabled (NEW in v2.8.0)
+     */
+    bool shuffle_enabled() const {
+        return config_.shuffle;
+    }
+
+private:
+    size_t current_epoch_ = 0;
 };
 
 }  // namespace turboloader

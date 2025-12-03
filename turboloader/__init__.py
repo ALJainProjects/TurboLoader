@@ -1,6 +1,12 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.7.0 - Decoded Tensor Cache for 100K+ img/s on subsequent epochs!
+v2.8.0 - Complete AutoAugment & Data Shuffling!
+
+New in v2.8.0:
+- Complete AutoAugment: All 14 operations fully implemented (Invert, AutoContrast,
+  Equalize, Color, Brightness, Contrast, Sharpness, ShearX/Y, TranslateX/Y)
+- shuffle=True: Enable data shuffling with intra-worker Fisher-Yates algorithm
+- set_epoch(): Reproducible shuffling across epochs (matches PyTorch DataLoader)
 
 New in v2.7.0:
 - cache_decoded=True: Cache decoded numpy arrays in memory
@@ -69,7 +75,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.7.0"
+__version__ = "2.8.0"
 
 # Import C++ extension module
 try:
@@ -197,7 +203,8 @@ try:
                             Supports: local files, http://, https://, s3://, gs://
             batch_size (int): Samples per batch (default: 32)
             num_workers (int): Worker threads (default: 4)
-            shuffle (bool): Shuffle samples (future feature, default: False)
+            shuffle (bool): Shuffle samples within each worker (default: False).
+                          Use set_epoch() for reproducible shuffling across epochs.
             transform: Transform or composed transforms to apply to images.
                       Use pipe operator: Resize(224, 224) | ImageNetNormalize()
                       Or Compose([Resize(224, 224), ImageNetNormalize()])
@@ -323,6 +330,25 @@ try:
             """Set the transform."""
             self._transform = value
 
+        def set_epoch(self, epoch: int):
+            """Set the epoch for reproducible shuffling (NEW in v2.8.0).
+
+            When shuffle=True, call this at the start of each epoch to get
+            reproducible shuffling. Different epochs produce different orderings,
+            but the same epoch + seed = same ordering.
+
+            Args:
+                epoch (int): The epoch number (0, 1, 2, ...)
+
+            Example:
+                >>> loader = turboloader.DataLoader('data.tar', shuffle=True)
+                >>> for epoch in range(10):
+                ...     loader.set_epoch(epoch)  # Different shuffle each epoch
+                ...     for batch in loader:
+                ...         train(batch)
+            """
+            self._loader.set_epoch(epoch)
+
     class FastDataLoader:
         """High-performance DataLoader with batch array transfer (8-12% faster).
 
@@ -431,7 +457,9 @@ try:
 
             # Decoded tensor cache (v2.7.0)
             self._cache_decoded = cache_decoded
-            self._cache_decoded_mb = cache_decoded_mb if cache_decoded_mb is not None else 4096
+            self._cache_decoded_mb = (
+                cache_decoded_mb if cache_decoded_mb is not None else 4096
+            )
             self._decoded_cache = []
             self._cache_populated = False
             self._cache_index = 0
@@ -538,7 +566,8 @@ try:
                 import torch
             except ImportError:
                 raise ImportError(
-                    "PyTorch is required for next_batch_torch(). " "Install with: pip install torch"
+                    "PyTorch is required for next_batch_torch(). "
+                    "Install with: pip install torch"
                 )
 
             import time
@@ -731,7 +760,8 @@ try:
                         # Make copies to ensure data persists
                         cached_images = images.copy()
                         cached_metadata = {
-                            k: (v.copy() if hasattr(v, "copy") else v) for k, v in metadata.items()
+                            k: (v.copy() if hasattr(v, "copy") else v)
+                            for k, v in metadata.items()
                         }
                         self._decoded_cache.append((cached_images, cached_metadata))
 
@@ -767,7 +797,9 @@ try:
                 return 0.0
             total_bytes = sum(
                 images.nbytes
-                + sum(v.nbytes if hasattr(v, "nbytes") else 0 for v in metadata.values())
+                + sum(
+                    v.nbytes if hasattr(v, "nbytes") else 0 for v in metadata.values()
+                )
                 for images, metadata in self._decoded_cache
             )
             return total_bytes / (1024 * 1024)

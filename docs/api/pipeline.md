@@ -21,7 +21,7 @@ turboloader.DataLoader(
 - `data_path` (str): Path to TAR archive (local file, http://, s3://, gs://)
 - `batch_size` (int): Samples per batch (default: 32)
 - `num_workers` (int): Worker threads (default: 4)
-- `shuffle` (bool): Shuffle samples (future feature, default: False)
+- `shuffle` (bool): Shuffle samples within each worker's shard (default: False)
 
 **Returns:**
 - DataLoader instance
@@ -59,6 +59,27 @@ Check if all data has been processed.
 #### `stop() -> None`
 
 Stop the pipeline and clean up resources.
+
+#### `set_epoch(epoch: int) -> None` (v2.8.0)
+
+Set epoch for reproducible shuffling.
+
+When `shuffle=True`, call this at the start of each epoch to get reproducible shuffling. Different epochs produce different orderings, but the same epoch + seed = same ordering across runs.
+
+**Parameters:**
+- `epoch` (int): The epoch number (0, 1, 2, ...)
+
+**Example:**
+```python
+loader = turboloader.DataLoader('data.tar', shuffle=True)
+
+for epoch in range(10):
+    loader.set_epoch(epoch)  # Ensure reproducible shuffling
+    for batch in loader:
+        train(batch)
+```
+
+**Note:** Shuffle uses intra-worker shuffling (each worker shuffles its own shard), matching PyTorch DataLoader's distributed behavior.
 
 ### Iterator Protocol
 

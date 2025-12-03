@@ -547,6 +547,8 @@ output = solarize.apply(image)
 
 Apply learned AutoAugment policy (ImageNet, CIFAR10, or SVHN).
 
+AutoAugment applies one of 25 learned sub-policies, each consisting of two sequential operations. This provides strong regularization for image classification training.
+
 **Constructor:**
 ```python
 turboloader.AutoAugment(policy=turboloader.AutoAugmentPolicy.IMAGENET)
@@ -573,7 +575,28 @@ autoaugment_cifar = turboloader.AutoAugment(
 output_cifar = autoaugment_cifar.apply(image)
 ```
 
-**Note:** Applies randomly selected sub-policy from learned set.
+**Supported Operations (v2.8.0):**
+
+All 14 AutoAugment operations are fully implemented:
+
+| Operation | Description |
+|-----------|-------------|
+| `Posterize` | Reduce bits per channel (quantization) |
+| `Solarize` | Invert pixels above threshold |
+| `Rotate` | Rotate image by degrees |
+| `Invert` | Invert all pixel values (255 - pixel) |
+| `AutoContrast` | Normalize contrast (remap min/max to 0/255) |
+| `Equalize` | Histogram equalization per channel |
+| `Color` | Adjust color saturation |
+| `Brightness` | Adjust image brightness |
+| `Contrast` | Adjust image contrast |
+| `Sharpness` | Adjust image sharpness (unsharp mask) |
+| `ShearX` | Horizontal shear transformation |
+| `ShearY` | Vertical shear transformation |
+| `TranslateX` | Horizontal translation |
+| `TranslateY` | Vertical translation |
+
+**Note:** Applies randomly selected sub-policy from learned set. Each sub-policy applies two operations with learned probability and magnitude.
 
 ---
 

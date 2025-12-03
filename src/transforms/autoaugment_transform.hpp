@@ -192,8 +192,9 @@ private:
         return current;
     }
 
+public:
     /**
-     * @brief Apply a single operation
+     * @brief Apply a single operation (public for testing)
      */
     std::unique_ptr<ImageData> apply_operation(const ImageData& input,
                                                const std::string& op_name,
@@ -214,20 +215,54 @@ private:
             RandomRotationTransform transform(degrees, false, 0, rng_());
             return transform.apply(input);
         }
-        else if (op_name == "Equalize" || op_name == "AutoContrast" ||
-                 op_name == "Invert" || op_name == "Sharpness" ||
-                 op_name == "Color" || op_name == "Contrast" ||
-                 op_name == "Brightness" || op_name == "ShearX" ||
-                 op_name == "ShearY" || op_name == "TranslateX" ||
-                 op_name == "TranslateY") {
-            // These operations are not yet implemented, return copy
-            // In a full implementation, these would use the corresponding transforms
-            auto output = std::make_unique<ImageData>(
-                new uint8_t[input.size_bytes()],
-                input.width, input.height, input.channels, input.stride, true
-            );
-            std::memcpy(output->data, input.data, input.size_bytes());
-            return output;
+        else if (op_name == "Invert") {
+            return apply_invert(input);
+        }
+        else if (op_name == "AutoContrast") {
+            return apply_autocontrast(input);
+        }
+        else if (op_name == "Equalize") {
+            return apply_equalize(input);
+        }
+        else if (op_name == "Color") {
+            // Color = saturation adjustment, magnitude 0-10 maps to 0.1-1.9
+            float factor = 1.0f + (magnitude / 10.0f) * 0.9f;
+            return apply_color(input, factor);
+        }
+        else if (op_name == "Brightness") {
+            // Brightness adjustment, magnitude 0-10 maps to 0.1-1.9
+            float factor = 1.0f + (magnitude / 10.0f) * 0.9f;
+            return apply_brightness(input, factor);
+        }
+        else if (op_name == "Contrast") {
+            // Contrast adjustment, magnitude 0-10 maps to 0.1-1.9
+            float factor = 1.0f + (magnitude / 10.0f) * 0.9f;
+            return apply_contrast(input, factor);
+        }
+        else if (op_name == "Sharpness") {
+            // Sharpness, magnitude 0-10 maps to 0.1-1.9
+            float factor = 1.0f + (magnitude / 10.0f) * 0.9f;
+            return apply_sharpness(input, factor);
+        }
+        else if (op_name == "ShearX") {
+            // ShearX, magnitude 0-10 maps to 0-0.3 radians
+            float shear = (magnitude / 10.0f) * 0.3f;
+            return apply_shear_x(input, shear);
+        }
+        else if (op_name == "ShearY") {
+            // ShearY, magnitude 0-10 maps to 0-0.3 radians
+            float shear = (magnitude / 10.0f) * 0.3f;
+            return apply_shear_y(input, shear);
+        }
+        else if (op_name == "TranslateX") {
+            // TranslateX, magnitude 0-10 maps to 0-0.45 of width
+            float translate = (magnitude / 10.0f) * 0.45f;
+            return apply_translate_x(input, translate);
+        }
+        else if (op_name == "TranslateY") {
+            // TranslateY, magnitude 0-10 maps to 0-0.45 of height
+            float translate = (magnitude / 10.0f) * 0.45f;
+            return apply_translate_y(input, translate);
         }
 
         // Unknown operation, return copy
@@ -236,6 +271,388 @@ private:
             input.width, input.height, input.channels, input.stride, true
         );
         std::memcpy(output->data, input.data, input.size_bytes());
+        return output;
+    }
+
+private:
+    // =========================================================================
+    // Individual operation implementations (private helpers)
+    // =========================================================================
+
+    /**
+     * @brief Invert all pixels (255 - pixel)
+     */
+    std::unique_ptr<ImageData> apply_invert(const ImageData& input) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels, input.stride, true
+        );
+
+        size_t total = input.size_bytes();
+        for (size_t i = 0; i < total; ++i) {
+            output->data[i] = 255 - input.data[i];
+        }
+        return output;
+    }
+
+    /**
+     * @brief AutoContrast: stretch histogram to full range per channel
+     */
+    std::unique_ptr<ImageData> apply_autocontrast(const ImageData& input) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels, input.stride, true
+        );
+
+        size_t num_pixels = input.width * input.height;
+
+        // Find min/max per channel
+        for (int c = 0; c < input.channels; ++c) {
+            uint8_t min_val = 255;
+            uint8_t max_val = 0;
+
+            for (size_t i = 0; i < num_pixels; ++i) {
+                uint8_t val = input.data[i * input.channels + c];
+                if (val < min_val) min_val = val;
+                if (val > max_val) max_val = val;
+            }
+
+            // Apply linear stretch
+            float scale = (max_val > min_val) ? 255.0f / (max_val - min_val) : 1.0f;
+
+            for (size_t i = 0; i < num_pixels; ++i) {
+                uint8_t val = input.data[i * input.channels + c];
+                float stretched = (val - min_val) * scale;
+                output->data[i * input.channels + c] = static_cast<uint8_t>(
+                    simd::clamp(stretched, 0.0f, 255.0f)
+                );
+            }
+        }
+        return output;
+    }
+
+    /**
+     * @brief Equalize: histogram equalization per channel
+     */
+    std::unique_ptr<ImageData> apply_equalize(const ImageData& input) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels, input.stride, true
+        );
+
+        size_t num_pixels = input.width * input.height;
+
+        // Process each channel independently
+        for (int c = 0; c < input.channels; ++c) {
+            // Build histogram
+            int histogram[256] = {0};
+            for (size_t i = 0; i < num_pixels; ++i) {
+                histogram[input.data[i * input.channels + c]]++;
+            }
+
+            // Build cumulative distribution function (CDF)
+            int cdf[256];
+            cdf[0] = histogram[0];
+            for (int i = 1; i < 256; ++i) {
+                cdf[i] = cdf[i-1] + histogram[i];
+            }
+
+            // Find minimum non-zero CDF value
+            int cdf_min = 0;
+            for (int i = 0; i < 256; ++i) {
+                if (cdf[i] > 0) {
+                    cdf_min = cdf[i];
+                    break;
+                }
+            }
+
+            // Build lookup table
+            uint8_t lut[256];
+            float scale = (num_pixels > cdf_min) ? 255.0f / (num_pixels - cdf_min) : 0.0f;
+            for (int i = 0; i < 256; ++i) {
+                if (cdf[i] > 0) {
+                    lut[i] = static_cast<uint8_t>(
+                        simd::clamp((cdf[i] - cdf_min) * scale, 0.0f, 255.0f)
+                    );
+                } else {
+                    lut[i] = 0;
+                }
+            }
+
+            // Apply lookup table
+            for (size_t i = 0; i < num_pixels; ++i) {
+                output->data[i * input.channels + c] = lut[input.data[i * input.channels + c]];
+            }
+        }
+        return output;
+    }
+
+    /**
+     * @brief Color (saturation) adjustment
+     */
+    std::unique_ptr<ImageData> apply_color(const ImageData& input, float factor) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels, input.stride, true
+        );
+
+        if (input.channels != 3) {
+            std::memcpy(output->data, input.data, input.size_bytes());
+            return output;
+        }
+
+        size_t num_pixels = input.width * input.height;
+
+        for (size_t i = 0; i < num_pixels; ++i) {
+            uint8_t r = input.data[i * 3];
+            uint8_t g = input.data[i * 3 + 1];
+            uint8_t b = input.data[i * 3 + 2];
+
+            // Convert to grayscale (luminance)
+            float gray = 0.299f * r + 0.587f * g + 0.114f * b;
+
+            // Blend between gray and color based on factor
+            output->data[i * 3] = static_cast<uint8_t>(
+                simd::clamp(gray + factor * (r - gray), 0.0f, 255.0f)
+            );
+            output->data[i * 3 + 1] = static_cast<uint8_t>(
+                simd::clamp(gray + factor * (g - gray), 0.0f, 255.0f)
+            );
+            output->data[i * 3 + 2] = static_cast<uint8_t>(
+                simd::clamp(gray + factor * (b - gray), 0.0f, 255.0f)
+            );
+        }
+        return output;
+    }
+
+    /**
+     * @brief Brightness adjustment
+     */
+    std::unique_ptr<ImageData> apply_brightness(const ImageData& input, float factor) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels, input.stride, true
+        );
+
+        size_t total = input.size_bytes();
+        for (size_t i = 0; i < total; ++i) {
+            float val = input.data[i] * factor;
+            output->data[i] = static_cast<uint8_t>(simd::clamp(val, 0.0f, 255.0f));
+        }
+        return output;
+    }
+
+    /**
+     * @brief Contrast adjustment
+     */
+    std::unique_ptr<ImageData> apply_contrast(const ImageData& input, float factor) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels, input.stride, true
+        );
+
+        // Calculate mean brightness
+        size_t total = input.size_bytes();
+        float mean = 0.0f;
+        for (size_t i = 0; i < total; ++i) {
+            mean += input.data[i];
+        }
+        mean /= total;
+
+        // Apply contrast: pixel = mean + factor * (pixel - mean)
+        for (size_t i = 0; i < total; ++i) {
+            float val = mean + factor * (input.data[i] - mean);
+            output->data[i] = static_cast<uint8_t>(simd::clamp(val, 0.0f, 255.0f));
+        }
+        return output;
+    }
+
+    /**
+     * @brief Sharpness adjustment using unsharp mask
+     */
+    std::unique_ptr<ImageData> apply_sharpness(const ImageData& input, float factor) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels, input.stride, true
+        );
+
+        // Create a blurred version using 3x3 box filter
+        std::vector<float> blurred(input.size_bytes());
+
+        for (int y = 0; y < input.height; ++y) {
+            for (int x = 0; x < input.width; ++x) {
+                for (int c = 0; c < input.channels; ++c) {
+                    float sum = 0.0f;
+                    int count = 0;
+
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            int ny = y + dy;
+                            int nx = x + dx;
+                            if (ny >= 0 && ny < input.height && nx >= 0 && nx < input.width) {
+                                sum += input.data[(ny * input.width + nx) * input.channels + c];
+                                count++;
+                            }
+                        }
+                    }
+                    blurred[(y * input.width + x) * input.channels + c] = sum / count;
+                }
+            }
+        }
+
+        // Blend: output = blurred + factor * (original - blurred)
+        for (size_t i = 0; i < input.size_bytes(); ++i) {
+            float val = blurred[i] + factor * (input.data[i] - blurred[i]);
+            output->data[i] = static_cast<uint8_t>(simd::clamp(val, 0.0f, 255.0f));
+        }
+        return output;
+    }
+
+    /**
+     * @brief Shear in X direction
+     */
+    std::unique_ptr<ImageData> apply_shear_x(const ImageData& input, float shear) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels,
+            input.width * input.channels, true
+        );
+        std::memset(output->data, 0, input.size_bytes());
+
+        float cx = input.width / 2.0f;
+        float cy = input.height / 2.0f;
+
+        for (int y = 0; y < input.height; ++y) {
+            for (int x = 0; x < input.width; ++x) {
+                // Inverse transform: source = dest + shear * (y - cy)
+                float src_x = x - shear * (y - cy);
+                float src_y = static_cast<float>(y);
+
+                if (src_x >= 0 && src_x < input.width - 1) {
+                    size_t dst_idx = (y * input.width + x) * input.channels;
+
+                    for (int c = 0; c < input.channels; ++c) {
+                        float val = simd::bilinear_interpolate(
+                            input.data, input.width, input.height,
+                            src_x, src_y, c, input.channels
+                        );
+                        output->data[dst_idx + c] = static_cast<uint8_t>(
+                            simd::clamp(val, 0.0f, 255.0f)
+                        );
+                    }
+                }
+            }
+        }
+        return output;
+    }
+
+    /**
+     * @brief Shear in Y direction
+     */
+    std::unique_ptr<ImageData> apply_shear_y(const ImageData& input, float shear) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels,
+            input.width * input.channels, true
+        );
+        std::memset(output->data, 0, input.size_bytes());
+
+        float cx = input.width / 2.0f;
+        float cy = input.height / 2.0f;
+
+        for (int y = 0; y < input.height; ++y) {
+            for (int x = 0; x < input.width; ++x) {
+                // Inverse transform: source = dest + shear * (x - cx)
+                float src_x = static_cast<float>(x);
+                float src_y = y - shear * (x - cx);
+
+                if (src_y >= 0 && src_y < input.height - 1) {
+                    size_t dst_idx = (y * input.width + x) * input.channels;
+
+                    for (int c = 0; c < input.channels; ++c) {
+                        float val = simd::bilinear_interpolate(
+                            input.data, input.width, input.height,
+                            src_x, src_y, c, input.channels
+                        );
+                        output->data[dst_idx + c] = static_cast<uint8_t>(
+                            simd::clamp(val, 0.0f, 255.0f)
+                        );
+                    }
+                }
+            }
+        }
+        return output;
+    }
+
+    /**
+     * @brief Translate in X direction
+     */
+    std::unique_ptr<ImageData> apply_translate_x(const ImageData& input, float translate) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels,
+            input.width * input.channels, true
+        );
+        std::memset(output->data, 0, input.size_bytes());
+
+        float offset = translate * input.width;
+
+        for (int y = 0; y < input.height; ++y) {
+            for (int x = 0; x < input.width; ++x) {
+                float src_x = x - offset;
+                float src_y = static_cast<float>(y);
+
+                if (src_x >= 0 && src_x < input.width - 1) {
+                    size_t dst_idx = (y * input.width + x) * input.channels;
+
+                    for (int c = 0; c < input.channels; ++c) {
+                        float val = simd::bilinear_interpolate(
+                            input.data, input.width, input.height,
+                            src_x, src_y, c, input.channels
+                        );
+                        output->data[dst_idx + c] = static_cast<uint8_t>(
+                            simd::clamp(val, 0.0f, 255.0f)
+                        );
+                    }
+                }
+            }
+        }
+        return output;
+    }
+
+    /**
+     * @brief Translate in Y direction
+     */
+    std::unique_ptr<ImageData> apply_translate_y(const ImageData& input, float translate) {
+        auto output = std::make_unique<ImageData>(
+            new uint8_t[input.size_bytes()],
+            input.width, input.height, input.channels,
+            input.width * input.channels, true
+        );
+        std::memset(output->data, 0, input.size_bytes());
+
+        float offset = translate * input.height;
+
+        for (int y = 0; y < input.height; ++y) {
+            for (int x = 0; x < input.width; ++x) {
+                float src_x = static_cast<float>(x);
+                float src_y = y - offset;
+
+                if (src_y >= 0 && src_y < input.height - 1) {
+                    size_t dst_idx = (y * input.width + x) * input.channels;
+
+                    for (int c = 0; c < input.channels; ++c) {
+                        float val = simd::bilinear_interpolate(
+                            input.data, input.width, input.height,
+                            src_x, src_y, c, input.channels
+                        );
+                        output->data[dst_idx + c] = static_cast<uint8_t>(
+                            simd::clamp(val, 0.0f, 255.0f)
+                        );
+                    }
+                }
+            }
+        }
         return output;
     }
 };

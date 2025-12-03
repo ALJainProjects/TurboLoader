@@ -258,5 +258,12 @@ target_link_libraries(test_hybrid_wait PRIVATE turboloader pthread)
 add_test(NAME hybrid_wait COMMAND test_hybrid_wait)
 message(STATUS "Building hybrid wait tests (v2.5.0 Phase 3)")
 
+# Test executable for AutoAugment operations (v2.8.0)
+add_executable(test_autoaugment_ops test_autoaugment_ops.cpp)
+target_include_directories(test_autoaugment_ops PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_autoaugment_ops PRIVATE turboloader gtest gtest_main)
+add_test(NAME autoaugment_ops COMMAND test_autoaugment_ops)
+message(STATUS "Building AutoAugment operations tests (v2.8.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
