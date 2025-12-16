@@ -98,18 +98,42 @@ struct TarHeader {
     }
 
     /**
-     * @brief Get file name
+     * @brief Get file name (safely bounded)
      *
-     * @return File name as string
+     * @return File name as string (max 256 chars per POSIX TAR spec)
+     *
+     * Safely handles prefix+name concatenation with explicit bounds checking
+     * to prevent buffer overflows from malformed TAR headers.
      */
     std::string get_name() const {
-        // Combine prefix + name if prefix exists
+        // POSIX TAR: max path = prefix(155) + '/' + name(100) = 256 bytes
+        constexpr size_t MAX_TAR_PATH = 256;
+
         std::string result;
-        if (prefix[0] != '\0') {
-            result = std::string(prefix, strnlen(prefix, sizeof(prefix)));
+        result.reserve(MAX_TAR_PATH);  // Preallocate for efficiency
+
+        // Get prefix length (bounded by field size)
+        size_t prefix_len = strnlen(prefix, sizeof(prefix));
+
+        // Get name length (bounded by field size)
+        size_t name_len = strnlen(name, sizeof(name));
+
+        // Add prefix if present and valid
+        if (prefix_len > 0 && prefix_len < sizeof(prefix)) {
+            result.append(prefix, prefix_len);
             result += '/';
         }
-        result += std::string(name, strnlen(name, sizeof(name)));
+
+        // Add name if present and valid
+        if (name_len > 0 && name_len < sizeof(name)) {
+            result.append(name, name_len);
+        }
+
+        // Ensure total length doesn't exceed POSIX TAR limit
+        if (result.size() > MAX_TAR_PATH) {
+            result.resize(MAX_TAR_PATH);
+        }
+
         return result;
     }
 };

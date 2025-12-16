@@ -1,6 +1,13 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.8.0 - Complete AutoAugment & Data Shuffling!
+v2.9.0 - Critical Bug Fixes & Improved Error Handling
+
+New in v2.9.0:
+- Fixed uninitialized pixels in Bicubic/Lanczos resize at corners (now neutral gray 128)
+- Fixed TAR header buffer overflow with proper bounds checking on prefix/name fields
+- Fixed silent GPU decode failures: now logs errors and respects skip_corrupted config
+- Fixed CPU decode failures: now logs errors and respects skip_corrupted config
+- Improved error messages with sample index and filename for decode failures
 
 New in v2.8.0:
 - Complete AutoAugment: All 14 operations fully implemented (Invert, AutoContrast,

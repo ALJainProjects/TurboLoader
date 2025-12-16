@@ -5,6 +5,56 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2025-12-16
+
+### Critical Bug Fixes & Improved Error Handling
+
+This release focuses on stability and correctness with critical bug fixes for resize transforms, TAR parsing, and decode error handling.
+
+### Fixed
+- **Uninitialized Pixels in Resize** (`src/transforms/resize_transform.hpp`)
+  - Bicubic and Lanczos interpolation now initialize to neutral gray (128) instead of leaving pixels uninitialized at image corners where weight_sum may be zero
+  - Prevents visual artifacts and undefined behavior at image boundaries
+
+- **TAR Header Buffer Overflow** (`src/readers/tar_reader.hpp`)
+  - `get_name()` now uses proper bounds checking with `strnlen()` for prefix and name fields
+  - Added path length validation (max 256 bytes per POSIX TAR spec)
+  - Prevents potential buffer overflows from malformed TAR headers
+
+- **Silent GPU Decode Failures** (`src/pipeline/pipeline.hpp`)
+  - GPU decode failures now log errors when `log_errors=true` (default)
+  - Respects `skip_corrupted` config - throws exception if false, continues if true
+  - Error messages include sample index and filename for debugging
+
+- **Silent CPU Decode Failures** (`src/pipeline/pipeline.hpp`)
+  - CPU decode failures now log errors when `log_errors=true` (default)
+  - Respects `skip_corrupted` config - re-throws exception if false
+  - Error messages include sample index, filename, and exception details
+
+### Changed
+- Error logging now uses `fprintf(stderr, ...)` with `[TurboLoader]` prefix for easy filtering
+
+---
+
+## [2.8.0] - 2025-12-15
+
+### Complete AutoAugment & Data Shuffling
+
+This release adds complete AutoAugment support with all 14 operations and introduces data shuffling for training.
+
+### Added
+- **Complete AutoAugment**: All 14 operations fully implemented
+  - Invert, AutoContrast, Equalize, Color, Brightness, Contrast, Sharpness
+  - ShearX, ShearY, TranslateX, TranslateY, Rotate, Solarize, Posterize
+- **Data Shuffling** (`shuffle=True` parameter)
+  - Intra-worker Fisher-Yates shuffling algorithm
+  - Efficient O(n) shuffle with minimal memory overhead
+- **Epoch Control** (`set_epoch()` method)
+  - Reproducible shuffling across epochs
+  - Matches PyTorch DataLoader shuffle behavior for distributed training
+
+---
+
 ## [2.7.0] - 2025-12-02
 
 ### Decoded Tensor Caching for Multi-Epoch Training

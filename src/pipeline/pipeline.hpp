@@ -477,7 +477,17 @@ private:
                         usample.height = gpu_result.height;
                         usample.channels = gpu_result.channels;
                     } else {
-                        continue;  // Skip corrupted
+                        // GPU decode failed - respect skip_corrupted config
+                        if (config_.log_errors) {
+                            std::fprintf(stderr,
+                                "[TurboLoader] GPU decode failed for sample %zu (%s)\n",
+                                entry.index, entry.name.c_str());
+                        }
+                        if (!config_.skip_corrupted) {
+                            throw std::runtime_error(
+                                "GPU decode failed for: " + entry.name);
+                        }
+                        continue;  // Skip corrupted (config allows)
                     }
                 } else
 #endif
@@ -487,7 +497,16 @@ private:
                     try {
                         decoder_->decode_sample(sample);
                     } catch (const std::exception& e) {
-                        continue;  // Skip corrupted
+                        // CPU decode failed - respect skip_corrupted config
+                        if (config_.log_errors) {
+                            std::fprintf(stderr,
+                                "[TurboLoader] CPU decode failed for sample %zu (%s): %s\n",
+                                entry.index, entry.name.c_str(), e.what());
+                        }
+                        if (!config_.skip_corrupted) {
+                            throw;  // Re-throw if not skipping
+                        }
+                        continue;  // Skip corrupted (config allows)
                     }
                     usample.image_data = std::move(sample.decoded_rgb);
                     usample.width = sample.width;

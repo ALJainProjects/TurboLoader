@@ -165,7 +165,9 @@ private:
                 size_t dst_idx = (y * target_width_ + x) * output.channels;
 
                 for (int c = 0; c < input.channels; ++c) {
-                    float sum = 0.0f;
+                    // Initialize sum to neutral gray (128) to avoid uninitialized
+                    // pixels at corners where weight_sum may be zero
+                    float sum = 128.0f;
                     float weight_sum = 0.0f;
 
                     // 4x4 kernel
@@ -183,6 +185,10 @@ private:
                             float w = wx * wy;
 
                             size_t src_idx = (py * input.width + px) * input.channels + c;
+                            // Reset sum on first valid weight to accumulate properly
+                            if (weight_sum == 0.0f) {
+                                sum = 0.0f;
+                            }
                             sum += input.data[src_idx] * w;
                             weight_sum += w;
                         }
@@ -191,6 +197,7 @@ private:
                     if (weight_sum > 0.0f) {
                         sum /= weight_sum;
                     }
+                    // If weight_sum is still 0, sum remains 128 (neutral gray)
 
                     output.data[dst_idx + c] = static_cast<uint8_t>(
                         simd::clamp(sum, 0.0f, 255.0f)
@@ -234,7 +241,9 @@ private:
                 size_t dst_idx = (y * target_width_ + x) * output.channels;
 
                 for (int c = 0; c < input.channels; ++c) {
-                    float sum = 0.0f;
+                    // Initialize sum to neutral gray (128) to avoid uninitialized
+                    // pixels at corners where weight_sum may be zero
+                    float sum = 128.0f;
                     float weight_sum = 0.0f;
 
                     // Lanczos kernel: 6x6 window (a=3)
@@ -252,6 +261,10 @@ private:
                             float w = wx * wy;
 
                             size_t src_idx = (py * input.width + px) * input.channels + c;
+                            // Reset sum on first valid weight to accumulate properly
+                            if (weight_sum == 0.0f) {
+                                sum = 0.0f;
+                            }
                             sum += input.data[src_idx] * w;
                             weight_sum += w;
                         }
@@ -260,6 +273,7 @@ private:
                     if (weight_sum > 0.0f) {
                         sum /= weight_sum;
                     }
+                    // If weight_sum is still 0, sum remains 128 (neutral gray)
 
                     output.data[dst_idx + c] = static_cast<uint8_t>(
                         simd::clamp(sum, 0.0f, 255.0f)
