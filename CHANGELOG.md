@@ -5,6 +5,37 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] - 2025-12-16
+
+### Unified BufferPool for Entire Pipeline
+
+This release consolidates two separate buffer pool implementations into one unified `BufferPool` class that serves both transforms (raw byte arrays) and decoders (vector buffers).
+
+### Changed
+- **Unified BufferPool** (`src/core/buffer_pool.hpp`)
+  - Consolidated `SizedBufferPool` and old `BufferPool` into single unified class
+  - Supports both raw buffer interface (`acquire(size)` / `release()`) for transforms
+  - Supports vector buffer interface (`acquire_vector()` / `acquire()`) for decoders
+  - Added `PooledVector` auto-releasing RAII wrapper for decoder compatibility
+  - Statistics tracking for both raw and vector buffers (`raw_hit_rate()`, `vector_hit_rate()`)
+
+- **Updated All Decoders**
+  - `jpeg_decoder.hpp`, `png_decoder.hpp`, `webp_decoder.hpp`, `bmp_decoder.hpp`, `tiff_decoder.hpp`, `image_decoder.hpp`
+  - Now use unified `buffer_pool.hpp` instead of `object_pool.hpp`
+  - Seamless compatibility via `PooledVector` auto-releasing wrapper
+
+- **Updated Pipeline**
+  - `pipeline.hpp` now uses unified BufferPool constructor signature
+  - Removed old BufferPool class from `object_pool.hpp`
+
+### Tests
+- Updated `test_buffer_pool.cpp` with 24 tests (was 17)
+  - Added vector buffer interface tests: `PooledVectorBasic`, `PooledVectorAutoRelease`, `PooledVectorMove`
+  - Added `AcquireAliasWorks` for backward compatibility testing
+  - Added `VectorPoolReusesCapacity`, `VectorHitRateCalculation`, `TotalPooledCount`
+
+---
+
 ## [2.10.0] - 2025-12-16
 
 ### Performance Optimizations (Phase 2)

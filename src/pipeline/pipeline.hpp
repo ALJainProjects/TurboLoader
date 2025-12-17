@@ -53,7 +53,7 @@
 
 // Core types
 #include "../core/sample.hpp"
-#include "../core/object_pool.hpp"
+#include "../core/buffer_pool.hpp"
 #include "../core/spsc_ring_buffer.hpp"
 #include "smart_batching.hpp"
 #include "error_recovery.hpp"
@@ -923,10 +923,11 @@ private:
     void initialize() {
         if (config_.format == DataFormat::TAR) {
             // Create buffer pool for TAR mode
+            // New unified BufferPool signature: (max_buffers_per_bucket, max_buffer_size, default_vector_size)
             buffer_pool_ = std::make_unique<BufferPool>(
-                256 * 256 * 3,
-                config_.buffer_pool_size,
-                config_.buffer_pool_size * 2
+                config_.buffer_pool_size,  // max_buffers_per_bucket
+                64 * 1024 * 1024,           // max_buffer_size (64 MB)
+                256 * 256 * 3               // default_vector_size
             );
         } else if (is_video_format(config_.format)) {
             init_video_decoder();

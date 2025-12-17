@@ -24,10 +24,11 @@ using namespace turboloader::transforms;
 class BufferPoolTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        pool_ = std::make_unique<SizedBufferPool>(8, 16 * 1024 * 1024);  // 8 per bucket, 16MB max
+        // BufferPool constructor: (max_buffers_per_bucket, max_buffer_size, default_vector_size)
+        pool_ = std::make_unique<BufferPool>(8, 16 * 1024 * 1024, 256 * 256 * 3);
     }
 
-    std::unique_ptr<SizedBufferPool> pool_;
+    std::unique_ptr<BufferPool> pool_;
 };
 
 // Basic acquire test
@@ -139,7 +140,7 @@ TEST_F(BufferPoolTest, PooledMemoryTracking) {
 
 // Oversized buffers not pooled
 TEST_F(BufferPoolTest, OversizedNotPooled) {
-    SizedBufferPool small_pool(4, 1024);  // Max 1KB
+    BufferPool small_pool(4, 1024, 256);  // 4 per bucket, Max 1KB
 
     auto large = small_pool.acquire(2048);  // > max
     ASSERT_NE(large, nullptr);
@@ -153,7 +154,7 @@ TEST_F(BufferPoolTest, OversizedNotPooled) {
 
 // Bucket limit
 TEST_F(BufferPoolTest, BucketLimitRespected) {
-    SizedBufferPool limited_pool(2, 1024 * 1024);  // Only 2 per bucket
+    BufferPool limited_pool(2, 1024 * 1024, 256);  // Only 2 per bucket
 
     // Acquire and release 3 buffers of same size
     std::vector<std::unique_ptr<uint8_t[]>> buffers;
@@ -236,7 +237,7 @@ TEST_F(BufferPoolTest, PooledBufferGuardRelease) {
 
 // Global buffer pool singleton
 TEST(GlobalBufferPoolTest, SingletonExists) {
-    SizedBufferPool& pool = get_resize_buffer_pool();
+    BufferPool& pool = get_resize_buffer_pool();
 
     auto buffer = pool.acquire(1024);
     EXPECT_NE(buffer, nullptr);
@@ -310,7 +311,123 @@ TEST_F(BufferPoolTest, HitRateCalculation) {
     EXPECT_EQ(stats.acquire_calls, 4);
     EXPECT_EQ(stats.cache_hits, 2);
     EXPECT_EQ(stats.cache_misses, 2);
-    EXPECT_FLOAT_EQ(stats.hit_rate(), 0.5f);
+    EXPECT_FLOAT_EQ(stats.raw_hit_rate(), 0.5f);
+}
+
+// ============================================================================
+// Vector Buffer Interface Tests (for decoder compatibility)
+// ============================================================================
+
+// PooledVector basic test
+TEST_F(BufferPoolTest, PooledVectorBasic) {
+    // Get a pooled vector
+    auto pooled = pool_->acquire_vector();
+
+    // Access the vector
+    std::vector<uint8_t>& vec = *pooled;
+    vec.resize(1024);
+    EXPECT_EQ(vec.size(), 1024);
+
+    // Fill with data
+    std::fill(vec.begin(), vec.end(), 0x42);
+    EXPECT_EQ(vec[0], 0x42);
+    EXPECT_EQ(vec[1023], 0x42);
+}
+
+// PooledVector auto-release on destruction
+TEST_F(BufferPoolTest, PooledVectorAutoRelease) {
+    pool_->reset_stats();
+
+    {
+        auto pooled = pool_->acquire_vector();
+        (*pooled).resize(4096);
+    } // pooled destroyed, should auto-release to pool
+
+    EXPECT_EQ(pool_->vector_pooled_count(), 1);
+
+    // Next acquire should be a cache hit
+    auto pooled2 = pool_->acquire_vector();
+    auto stats = pool_->stats();
+    EXPECT_EQ(stats.vector_cache_hits, 1);
+}
+
+// PooledVector move semantics
+TEST_F(BufferPoolTest, PooledVectorMove) {
+    pool_->reset_stats();
+
+    BufferPool::PooledVector pooled1 = pool_->acquire_vector();
+    (*pooled1).resize(1024);
+    std::fill((*pooled1).begin(), (*pooled1).end(), 0xAB);
+
+    // Move to new variable
+    BufferPool::PooledVector pooled2 = std::move(pooled1);
+    EXPECT_EQ((*pooled2).size(), 1024);
+    EXPECT_EQ((*pooled2)[0], 0xAB);
+}
+
+// acquire() alias works same as acquire_vector()
+TEST_F(BufferPoolTest, AcquireAliasWorks) {
+    // This tests backward compatibility with old decoder code
+    auto pooled = pool_->acquire();  // Uses acquire_vector() internally
+
+    std::vector<uint8_t>& vec = *pooled;
+    vec.resize(2048);
+    EXPECT_EQ(vec.size(), 2048);
+}
+
+// Vector pool reuses capacity
+TEST_F(BufferPoolTest, VectorPoolReusesCapacity) {
+    pool_->reset_stats();
+
+    {
+        auto pooled = pool_->acquire_vector();
+        (*pooled).resize(10000);  // Large resize
+    }
+
+    // Get it back - should reuse the capacity
+    auto pooled2 = pool_->acquire_vector();
+    EXPECT_GE((*pooled2).capacity(), 10000);  // Capacity preserved
+    EXPECT_EQ((*pooled2).size(), 0);  // But cleared
+}
+
+// Vector hit rate calculation
+TEST_F(BufferPoolTest, VectorHitRateCalculation) {
+    pool_->reset_stats();
+
+    // 2 misses (in scope)
+    {
+        auto v1 = pool_->acquire_vector();
+        auto v2 = pool_->acquire_vector();
+
+        auto stats1 = pool_->stats();
+        EXPECT_EQ(stats1.vector_cache_misses, 2);
+        EXPECT_EQ(stats1.vector_cache_hits, 0);
+    }  // v1 and v2 released back to pool
+
+    // 2 hits
+    auto v3 = pool_->acquire_vector();
+    auto v4 = pool_->acquire_vector();
+
+    auto stats2 = pool_->stats();
+    EXPECT_EQ(stats2.vector_cache_hits, 2);
+    EXPECT_FLOAT_EQ(stats2.vector_hit_rate(), 0.5f);
+}
+
+// Total pooled count includes both raw and vector
+TEST_F(BufferPoolTest, TotalPooledCount) {
+    // Add raw buffer
+    auto raw = pool_->acquire(4096);
+    pool_->release(std::move(raw), 4096);
+
+    // Add vector buffer
+    {
+        auto vec = pool_->acquire_vector();
+    }
+
+    // Check counts
+    EXPECT_EQ(pool_->raw_pooled_count(), 1);
+    EXPECT_EQ(pool_->vector_pooled_count(), 1);
+    EXPECT_EQ(pool_->pooled_count(), 2);  // Total
 }
 
 int main(int argc, char** argv) {

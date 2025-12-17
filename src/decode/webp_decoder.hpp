@@ -20,7 +20,7 @@
 #ifdef HAVE_WEBP
 
 #include "../core/sample.hpp"
-#include "../core/object_pool.hpp"
+#include "../core/buffer_pool.hpp"
 #include "../core/compat.hpp"  // span polyfill for C++17
 #include <webp/decode.h>
 #include <cstddef>

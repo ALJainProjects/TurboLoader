@@ -183,65 +183,7 @@ private:
     size_t max_size_;
 };
 
-/**
- * @brief Specialized object pool for std::vector<uint8_t> buffers
- *
- * Optimized for image data buffers. Reuses memory to avoid
- * repeated allocations during image decoding.
- */
-class BufferPool {
-public:
-    /**
-     * @brief Construct buffer pool
-     *
-     * @param buffer_size Default size for each buffer
-     * @param initial_count Number of buffers to pre-allocate
-     * @param max_count Maximum pool size
-     */
-    explicit BufferPool(
-        size_t buffer_size = 256 * 256 * 3,  // Default: 256x256 RGB
-        size_t initial_count = 64,
-        size_t max_count = 1024
-    ) : buffer_size_(buffer_size),
-        pool_(initial_count, max_count) {
-        // Pre-allocate buffers with capacity
-        for (size_t i = 0; i < initial_count; ++i) {
-            auto buf = pool_.acquire();
-            buf->reserve(buffer_size_);
-        }
-    }
-
-    /**
-     * @brief Acquire a buffer from pool
-     *
-     * @return Smart pointer to buffer
-     */
-    auto acquire() {
-        auto buf = pool_.acquire();
-        buf->clear();  // Clear existing data but keep capacity
-        return buf;
-    }
-
-    /**
-     * @brief Get pool statistics
-     *
-     * @return Number of available buffers
-     */
-    size_t size() const {
-        return pool_.size();
-    }
-
-    /**
-     * @brief Clear all pooled buffers
-     */
-    void clear() {
-        pool_.clear();
-    }
-
-private:
-    size_t buffer_size_;
-    ObjectPool<std::vector<uint8_t>> pool_;
-};
-
+// BufferPool has been moved to buffer_pool.hpp with unified interface
+// supporting both raw byte arrays and vector buffers
 
 } // namespace turboloader

@@ -1,14 +1,15 @@
 /**
  * @file buffer_pool.hpp
- * @brief Thread-safe buffer pool for memory reuse
+ * @brief Unified thread-safe buffer pool for memory reuse
  *
- * Provides efficient buffer allocation by reusing previously allocated
- * buffers. Reduces allocation overhead in hot paths like image transforms.
+ * Consolidates buffer pooling for both:
+ * - Raw byte arrays (transforms, resize operations)
+ * - Vector buffers (image decoders)
  *
  * Features:
  * - Thread-safe with mutex protection
  * - Size-bucketed allocation for efficient reuse
- * - Automatic cleanup of unused buffers
+ * - Auto-releasing pooled pointers for vectors
  * - Statistics tracking for debugging
  */
 
@@ -20,147 +21,235 @@
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <functional>
 
 namespace turboloader {
 
 /**
- * @brief Thread-safe size-aware buffer pool for memory reuse
+ * @brief Unified thread-safe buffer pool for memory reuse
  *
- * Pools buffers by size buckets to enable efficient reuse.
- * When a buffer is released, it goes back to the pool for future use.
- *
- * Note: Named SizedBufferPool to avoid conflict with BufferPool in object_pool.hpp
+ * Supports two modes:
+ * 1. Raw buffers: acquire(size) / release() for transforms
+ * 2. Vector buffers: acquire_vector() for decoders (auto-releasing)
  */
-class SizedBufferPool {
+class BufferPool {
 public:
     /**
      * @brief Construct a buffer pool
      * @param max_buffers_per_bucket Maximum buffers to keep per size bucket
-     * @param max_buffer_size Maximum individual buffer size to pool (larger buffers not pooled)
+     * @param max_buffer_size Maximum individual buffer size to pool
+     * @param default_vector_size Default size for vector buffers
      */
-    explicit SizedBufferPool(size_t max_buffers_per_bucket = 16,
-                             size_t max_buffer_size = 64 * 1024 * 1024)  // 64MB default
+    explicit BufferPool(size_t max_buffers_per_bucket = 16,
+                        size_t max_buffer_size = 64 * 1024 * 1024,
+                        size_t default_vector_size = 256 * 256 * 3)
         : max_buffers_per_bucket_(max_buffers_per_bucket),
-          max_buffer_size_(max_buffer_size) {}
+          max_buffer_size_(max_buffer_size),
+          default_vector_size_(default_vector_size) {}
 
-    ~SizedBufferPool() = default;
+    ~BufferPool() = default;
 
     // Non-copyable, non-movable
-    SizedBufferPool(const SizedBufferPool&) = delete;
-    SizedBufferPool& operator=(const SizedBufferPool&) = delete;
-    SizedBufferPool(SizedBufferPool&&) = delete;
-    SizedBufferPool& operator=(SizedBufferPool&&) = delete;
+    BufferPool(const BufferPool&) = delete;
+    BufferPool& operator=(const BufferPool&) = delete;
+    BufferPool(BufferPool&&) = delete;
+    BufferPool& operator=(BufferPool&&) = delete;
+
+    // =========================================================================
+    // Raw Buffer Interface (for transforms)
+    // =========================================================================
 
     /**
-     * @brief Acquire a buffer of at least the specified size
-     *
-     * First tries to find a suitable buffer in the pool.
-     * If none available, allocates a new buffer.
-     *
+     * @brief Acquire a raw buffer of at least the specified size
      * @param size Minimum buffer size needed
      * @return Unique pointer to buffer (caller owns)
      */
     std::unique_ptr<uint8_t[]> acquire(size_t size) {
-        if (size == 0) {
-            return nullptr;
-        }
+        if (size == 0) return nullptr;
 
-        // Round up to bucket size for better reuse
         size_t bucket_size = round_to_bucket(size);
 
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> lock(raw_mutex_);
             stats_.acquire_calls++;
 
-            // Find a buffer in the appropriate bucket
-            auto it = std::find_if(pool_.begin(), pool_.end(),
-                [bucket_size](const PooledBuffer& buf) {
-                    return buf.size >= bucket_size && !buf.in_use;
+            auto it = std::find_if(raw_pool_.begin(), raw_pool_.end(),
+                [bucket_size](const RawBuffer& buf) {
+                    return buf.size >= bucket_size;
                 });
 
-            if (it != pool_.end()) {
-                // Found a suitable buffer
-                it->in_use = true;
+            if (it != raw_pool_.end()) {
                 stats_.cache_hits++;
-
-                // Move the buffer out and mark for removal
                 auto result = std::move(it->data);
-                pool_.erase(it);
+                raw_pool_.erase(it);
                 return result;
             }
 
             stats_.cache_misses++;
         }
 
-        // No suitable buffer found, allocate new
         stats_.allocations++;
         return std::make_unique<uint8_t[]>(bucket_size);
     }
 
     /**
-     * @brief Release a buffer back to the pool for reuse
-     *
-     * If the pool bucket is full or buffer is too large, the buffer is freed.
-     *
-     * @param buffer Buffer to release (transfers ownership)
+     * @brief Release a raw buffer back to the pool
+     * @param buffer Buffer to release
      * @param size Size of the buffer
      */
     void release(std::unique_ptr<uint8_t[]> buffer, size_t size) {
-        if (!buffer || size == 0) {
-            return;
-        }
-
-        // Don't pool very large buffers
+        if (!buffer || size == 0) return;
         if (size > max_buffer_size_) {
             stats_.oversized_releases++;
-            return;  // Buffer freed when unique_ptr goes out of scope
+            return;
         }
 
         size_t bucket_size = round_to_bucket(size);
 
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(raw_mutex_);
         stats_.release_calls++;
 
-        // Count buffers in this bucket
-        size_t bucket_count = std::count_if(pool_.begin(), pool_.end(),
-            [bucket_size](const PooledBuffer& buf) {
-                return buf.size == bucket_size;
-            });
+        size_t bucket_count = std::count_if(raw_pool_.begin(), raw_pool_.end(),
+            [bucket_size](const RawBuffer& buf) { return buf.size == bucket_size; });
 
-        // Only pool if we haven't hit the limit for this bucket
         if (bucket_count < max_buffers_per_bucket_) {
-            pool_.push_back({std::move(buffer), bucket_size, false});
+            raw_pool_.push_back({std::move(buffer), bucket_size});
             stats_.pooled_buffers++;
         } else {
             stats_.bucket_full_releases++;
-            // Buffer freed when unique_ptr goes out of scope
         }
     }
+
+    // =========================================================================
+    // Vector Buffer Interface (for decoders) - Compatible with old BufferPool
+    // =========================================================================
+
+    /**
+     * @brief Pooled pointer that auto-releases vector back to pool
+     */
+    class PooledVector {
+    public:
+        PooledVector(std::vector<uint8_t>&& vec, BufferPool* pool)
+            : vec_(std::move(vec)), pool_(pool) {}
+
+        ~PooledVector() {
+            if (pool_) {
+                pool_->release_vector(std::move(vec_));
+            }
+        }
+
+        // Non-copyable
+        PooledVector(const PooledVector&) = delete;
+        PooledVector& operator=(const PooledVector&) = delete;
+
+        // Movable
+        PooledVector(PooledVector&& other) noexcept
+            : vec_(std::move(other.vec_)), pool_(other.pool_) {
+            other.pool_ = nullptr;
+        }
+
+        PooledVector& operator=(PooledVector&& other) noexcept {
+            if (this != &other) {
+                if (pool_) pool_->release_vector(std::move(vec_));
+                vec_ = std::move(other.vec_);
+                pool_ = other.pool_;
+                other.pool_ = nullptr;
+            }
+            return *this;
+        }
+
+        std::vector<uint8_t>& operator*() { return vec_; }
+        const std::vector<uint8_t>& operator*() const { return vec_; }
+        std::vector<uint8_t>* operator->() { return &vec_; }
+        const std::vector<uint8_t>* operator->() const { return &vec_; }
+
+    private:
+        std::vector<uint8_t> vec_;
+        BufferPool* pool_;
+    };
+
+    /**
+     * @brief Acquire a vector buffer from pool (auto-releasing)
+     *
+     * This is the interface expected by decoders. The returned PooledVector
+     * automatically releases the buffer back to the pool when destroyed.
+     *
+     * @return PooledVector that auto-releases on destruction
+     */
+    PooledVector acquire_vector() {
+        std::lock_guard<std::mutex> lock(vec_mutex_);
+        stats_.vector_acquire_calls++;
+
+        if (!vec_pool_.empty()) {
+            stats_.vector_cache_hits++;
+            auto vec = std::move(vec_pool_.back());
+            vec_pool_.pop_back();
+            vec.clear();  // Clear but keep capacity
+            return PooledVector(std::move(vec), this);
+        }
+
+        stats_.vector_cache_misses++;
+        std::vector<uint8_t> vec;
+        vec.reserve(default_vector_size_);
+        return PooledVector(std::move(vec), this);
+    }
+
+    /**
+     * @brief Alias for acquire_vector() - backward compatibility
+     */
+    PooledVector acquire() {
+        return acquire_vector();
+    }
+
+    // =========================================================================
+    // Pool Management
+    // =========================================================================
 
     /**
      * @brief Clear all pooled buffers
      */
     void clear() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pool_.clear();
+        {
+            std::lock_guard<std::mutex> lock(raw_mutex_);
+            raw_pool_.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(vec_mutex_);
+            vec_pool_.clear();
+        }
         stats_.clears++;
     }
 
     /**
-     * @brief Get current number of pooled buffers
+     * @brief Get number of pooled raw buffers
      */
-    size_t pooled_count() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return pool_.size();
+    size_t raw_pooled_count() const {
+        std::lock_guard<std::mutex> lock(raw_mutex_);
+        return raw_pool_.size();
     }
 
     /**
-     * @brief Get total memory used by pooled buffers
+     * @brief Get number of pooled vector buffers
+     */
+    size_t vector_pooled_count() const {
+        std::lock_guard<std::mutex> lock(vec_mutex_);
+        return vec_pool_.size();
+    }
+
+    /**
+     * @brief Get total pooled count (both raw and vector)
+     */
+    size_t pooled_count() const {
+        return raw_pooled_count() + vector_pooled_count();
+    }
+
+    /**
+     * @brief Get total memory used by pooled raw buffers
      */
     size_t pooled_memory() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(raw_mutex_);
         size_t total = 0;
-        for (const auto& buf : pool_) {
+        for (const auto& buf : raw_pool_) {
             total += buf.size;
         }
         return total;
@@ -170,6 +259,7 @@ public:
      * @brief Statistics for debugging and monitoring
      */
     struct Stats {
+        // Raw buffer stats
         size_t acquire_calls = 0;
         size_t release_calls = 0;
         size_t cache_hits = 0;
@@ -178,70 +268,88 @@ public:
         size_t pooled_buffers = 0;
         size_t oversized_releases = 0;
         size_t bucket_full_releases = 0;
+
+        // Vector buffer stats
+        size_t vector_acquire_calls = 0;
+        size_t vector_cache_hits = 0;
+        size_t vector_cache_misses = 0;
+
         size_t clears = 0;
 
-        float hit_rate() const {
+        float raw_hit_rate() const {
             if (acquire_calls == 0) return 0.0f;
             return static_cast<float>(cache_hits) / acquire_calls;
         }
+
+        float vector_hit_rate() const {
+            if (vector_acquire_calls == 0) return 0.0f;
+            return static_cast<float>(vector_cache_hits) / vector_acquire_calls;
+        }
     };
 
-    /**
-     * @brief Get pool statistics
-     */
     Stats stats() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock1(raw_mutex_);
+        std::lock_guard<std::mutex> lock2(vec_mutex_);
         return stats_;
     }
 
-    /**
-     * @brief Reset statistics
-     */
     void reset_stats() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock1(raw_mutex_);
+        std::lock_guard<std::mutex> lock2(vec_mutex_);
         stats_ = Stats{};
     }
 
+    /**
+     * @brief Get number of available buffers (backward compatibility)
+     */
+    size_t size() const {
+        return vector_pooled_count();
+    }
+
 private:
-    struct PooledBuffer {
+    void release_vector(std::vector<uint8_t>&& vec) {
+        std::lock_guard<std::mutex> lock(vec_mutex_);
+        if (vec_pool_.size() < max_buffers_per_bucket_ * 4) {  // Higher limit for vectors
+            vec_pool_.push_back(std::move(vec));
+        }
+    }
+
+    struct RawBuffer {
         std::unique_ptr<uint8_t[]> data;
         size_t size;
-        bool in_use;
     };
 
-    /**
-     * @brief Round size up to nearest power of 2 bucket
-     *
-     * This ensures better buffer reuse by grouping similar sizes.
-     */
     static size_t round_to_bucket(size_t size) {
-        // Minimum bucket size is 4KB
         constexpr size_t MIN_BUCKET = 4096;
         if (size <= MIN_BUCKET) return MIN_BUCKET;
-
-        // Round up to next power of 2
         size_t bucket = MIN_BUCKET;
-        while (bucket < size) {
-            bucket *= 2;
-        }
+        while (bucket < size) bucket *= 2;
         return bucket;
     }
 
-    mutable std::mutex mutex_;
-    std::vector<PooledBuffer> pool_;
+    // Raw buffer pool
+    mutable std::mutex raw_mutex_;
+    std::vector<RawBuffer> raw_pool_;
+
+    // Vector buffer pool
+    mutable std::mutex vec_mutex_;
+    std::vector<std::vector<uint8_t>> vec_pool_;
+
+    // Configuration
     size_t max_buffers_per_bucket_;
     size_t max_buffer_size_;
+    size_t default_vector_size_;
+
+    // Statistics
     Stats stats_;
 };
 
 /**
- * @brief RAII wrapper for pooled buffers
- *
- * Automatically releases buffer back to pool when destroyed.
+ * @brief RAII wrapper for pooled raw buffers
  */
 class PooledBufferGuard {
 public:
-    PooledBufferGuard(SizedBufferPool& pool, size_t size)
+    PooledBufferGuard(BufferPool& pool, size_t size)
         : pool_(pool), size_(size), buffer_(pool.acquire(size)) {}
 
     ~PooledBufferGuard() {
@@ -250,11 +358,9 @@ public:
         }
     }
 
-    // Non-copyable
     PooledBufferGuard(const PooledBufferGuard&) = delete;
     PooledBufferGuard& operator=(const PooledBufferGuard&) = delete;
 
-    // Movable
     PooledBufferGuard(PooledBufferGuard&& other) noexcept
         : pool_(other.pool_), size_(other.size_), buffer_(std::move(other.buffer_)) {
         other.size_ = 0;
@@ -264,24 +370,26 @@ public:
     const uint8_t* get() const { return buffer_.get(); }
     size_t size() const { return size_; }
 
-    /**
-     * @brief Release ownership without returning to pool
-     */
     std::unique_ptr<uint8_t[]> release() {
         size_ = 0;
         return std::move(buffer_);
     }
 
 private:
-    SizedBufferPool& pool_;
+    BufferPool& pool_;
     size_t size_;
     std::unique_ptr<uint8_t[]> buffer_;
 };
 
 // Global buffer pool instance for transforms
-inline SizedBufferPool& get_resize_buffer_pool() {
-    static SizedBufferPool pool(32, 128 * 1024 * 1024);  // 32 buffers/bucket, 128MB max
+inline BufferPool& get_global_buffer_pool() {
+    static BufferPool pool(32, 128 * 1024 * 1024, 256 * 256 * 3);
     return pool;
+}
+
+// Alias for backward compatibility with resize transforms
+inline BufferPool& get_resize_buffer_pool() {
+    return get_global_buffer_pool();
 }
 
 } // namespace turboloader
