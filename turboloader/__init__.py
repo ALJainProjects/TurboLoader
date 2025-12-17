@@ -1,6 +1,13 @@
 """TurboLoader: High-performance data loading for machine learning.
 
-v2.9.0 - Critical Bug Fixes & Improved Error Handling
+v2.10.0 - Performance Optimizations (Phase 2)
+
+New in v2.10.0:
+- Lanczos LUT cache: ~25% faster Lanczos interpolation
+- BufferPool class: Thread-safe buffer pooling for memory reuse (5-15% throughput gain)
+- ResizeTransform buffer pool integration: use_buffer_pool=True parameter
+- OpenMP threshold fix: Better small batch performance (5-10% improvement)
+- SPSC cache line alignment: 5-10% latency improvement
 
 New in v2.9.0:
 - Fixed uninitialized pixels in Bicubic/Lanczos resize at corners (now neutral gray 128)

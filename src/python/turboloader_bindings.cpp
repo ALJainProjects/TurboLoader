@@ -235,7 +235,7 @@ public:
         {
             py::gil_scoped_release release;
 
-            #pragma omp parallel for if(batch_size > 4)
+            #pragma omp parallel for if(batch_size > 8)  // Threshold 8 for small batch perf
             for (size_t i = 0; i < batch_size; ++i) {
                 const auto& sample = samples[i];
 

@@ -265,5 +265,12 @@ target_link_libraries(test_autoaugment_ops PRIVATE turboloader gtest gtest_main)
 add_test(NAME autoaugment_ops COMMAND test_autoaugment_ops)
 message(STATUS "Building AutoAugment operations tests (v2.8.0)")
 
+# Test executable for BufferPool (v2.10.0)
+add_executable(test_buffer_pool test_buffer_pool.cpp)
+target_include_directories(test_buffer_pool PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_buffer_pool PRIVATE turboloader gtest gtest_main)
+add_test(NAME buffer_pool COMMAND test_buffer_pool)
+message(STATUS "Building BufferPool tests (v2.10.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
