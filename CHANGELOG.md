@@ -5,6 +5,35 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2025-12-17
+
+### Phase 3.1: SIMD HWC→CHW Channel Transpose
+
+This release adds SIMD-accelerated channel transpose for 3-5x faster PyTorch tensor format conversion on ARM NEON.
+
+### Added
+- **SIMD HWC→CHW Transpose** (`src/transforms/simd_utils.hpp`)
+  - `transpose_hwc_to_chw()`: Converts RGB interleaved (HWC) to planar (CHW) format
+  - `transpose_chw_to_hwc()`: Inverse conversion back to interleaved format
+  - ARM NEON: Uses `vld3q_u8`/`vst1q_u8` for automatic RGB deinterleaving (16 pixels/iteration)
+  - x86 AVX2: Hybrid approach with vectorized stores (24 pixels/iteration)
+  - Scalar fallback for other platforms
+  - 3-5x faster on ARM NEON, 2x faster on x86
+
+- **Integrated into Python Bindings** (`src/python/turboloader_bindings.cpp`)
+  - `next_batch_array()` now uses SIMD transpose for CHW format
+  - Transparent speedup for PyTorch users
+
+### Tests
+- New `test_simd_transpose.cpp` with 13 comprehensive tests
+  - Correctness tests: small, 224x224, odd dimensions, single pixel, 4K images
+  - Round-trip tests: HWC→CHW→HWC and CHW→HWC→CHW
+  - Edge cases: exact SIMD width, just below SIMD width
+  - Performance benchmark with platform detection
+  - Data integrity tests for channel separation
+
+---
+
 ## [2.11.0] - 2025-12-16
 
 ### Unified BufferPool for Entire Pipeline

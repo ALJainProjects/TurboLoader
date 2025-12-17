@@ -197,6 +197,13 @@ target_link_libraries(test_avx512_simd PRIVATE turboloader)
 add_test(NAME avx512_simd COMMAND test_avx512_simd)
 message(STATUS "Building AVX-512 SIMD tests (v1.1.0)")
 
+# Test executable for SIMD HWC→CHW transpose (v2.12.0 Phase 3.1)
+add_executable(test_simd_transpose test_simd_transpose.cpp)
+target_include_directories(test_simd_transpose PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_simd_transpose PRIVATE gtest gtest_main)
+add_test(NAME simd_transpose COMMAND test_simd_transpose)
+message(STATUS "Building SIMD HWC→CHW transpose tests (v2.12.0)")
+
 # Test executable for prefetch pipeline (v1.1.0)
 add_executable(test_prefetch_pipeline test_prefetch_pipeline.cpp)
 target_include_directories(test_prefetch_pipeline PRIVATE ${CMAKE_SOURCE_DIR}/src)
