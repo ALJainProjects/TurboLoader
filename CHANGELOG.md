@@ -5,6 +5,62 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.17.0] - 2025-12-18
+
+### Phase 2: Quasi-Random Sampling (Competitor Parity)
+
+This release adds FFCV-style quasi-random sampling for memory-efficient shuffling of large datasets.
+
+### Added
+- **QuasiRandomSampler** (`src/sampling/quasi_random_sampler.hpp`)
+  - Page-based shuffling: divides dataset into pages, shuffles pages then samples
+  - Constant memory usage O(page_size * buffer_pages) regardless of dataset size
+  - Near-random sample order with configurable randomness vs memory tradeoff
+  - Reproducible with seed for deterministic training
+  - Distributed training support with disjoint page assignment per rank
+
+- **OrderOption enum** - Choose between:
+  - `SEQUENTIAL` - No shuffling, samples in order
+  - `RANDOM` - Full random shuffle (requires all indices in memory)
+  - `QUASI_RANDOM` - Page-based shuffling (constant memory)
+
+- **SequentialSampler** - Simple in-order sampling
+- **RandomSampler** - Full random with epoch-based seeding
+
+### Features
+- 8MB default page size (FFCV default)
+- Configurable buffer pages (default 4)
+- Iterator interface for streaming access
+- `get_indices_for_rank()` for distributed training
+- `estimated_memory_usage()` for memory planning
+
+### Usage
+```cpp
+QuasiRandomSampler sampler(dataset_size, 8 * 1024 * 1024);  // 8MB pages
+sampler.set_buffer_pages(4);  // 4 pages in memory
+
+for (size_t idx : sampler.get_indices_for_epoch(epoch, seed)) {
+    // Process sample at idx
+}
+
+// Distributed training
+auto my_indices = sampler.get_indices_for_rank(epoch, seed, rank, world_size);
+```
+
+### Tests
+- New `test_quasi_random_sampler.cpp` with 14 tests
+  - All indices returned exactly once
+  - Reproducibility across runs
+  - Different epochs give different orders
+  - Shuffling quality (not sequential)
+  - Distribution quality across dataset
+  - Constant memory estimates
+  - Distributed sampling coverage and disjointness
+  - Iterator interface
+  - Benchmark: 1M samples
+
+---
+
 ## [2.16.0] - 2025-12-18
 
 ### Phase 1: GPU Transform Pipeline Integration (Competitor Parity)

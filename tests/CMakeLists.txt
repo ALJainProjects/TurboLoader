@@ -324,5 +324,13 @@ else()
     message(STATUS "Building GPU Pipeline Integration tests without CUDA (v2.16.0)")
 endif()
 
+# Test executable for Quasi-Random Sampler (v2.17.0)
+# FFCV-style memory-efficient shuffling
+add_executable(test_quasi_random_sampler test_quasi_random_sampler.cpp)
+target_include_directories(test_quasi_random_sampler PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_quasi_random_sampler PRIVATE gtest gtest_main)
+add_test(NAME quasi_random_sampler COMMAND test_quasi_random_sampler)
+message(STATUS "Building Quasi-Random Sampler tests (v2.17.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
