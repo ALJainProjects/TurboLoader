@@ -340,5 +340,13 @@ target_link_libraries(test_trivial_augment PRIVATE turboloader gtest gtest_main)
 add_test(NAME trivial_augment COMMAND test_trivial_augment)
 message(STATUS "Building TrivialAugment tests (v2.18.0)")
 
+# Test executable for Audio Decoder (v2.19.0)
+# Multi-modal audio support: WAV, FLAC, MP3, OGG
+add_executable(test_audio_decoder test_audio_decoder.cpp)
+target_include_directories(test_audio_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_audio_decoder PRIVATE gtest gtest_main)
+add_test(NAME audio_decoder COMMAND test_audio_decoder)
+message(STATUS "Building Audio Decoder tests (v2.19.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)

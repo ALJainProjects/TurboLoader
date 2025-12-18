@@ -5,6 +5,88 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] - 2025-12-18
+
+### Phase 4: Audio Decoding (Competitor Parity)
+
+This release adds audio codec support for multi-modal training, matching NVIDIA DALI capabilities.
+
+### Added
+- **AudioDecoder** (`src/decode/audio_decoder.hpp`)
+  - Unified audio decoder with automatic format detection
+  - Native C++ WAV decoder (no external dependencies)
+  - Stub implementations for FLAC, MP3, OGG (extensible)
+  - PCM float output normalized to [-1, 1] range
+
+- **AudioResult struct**
+  - `samples`: PCM float samples (interleaved for multi-channel)
+  - `sample_rate`: Audio sample rate
+  - `channels`: Number of audio channels
+  - `bit_depth`: Original bit depth (8/16/24/32)
+  - `duration_seconds`: Audio duration
+  - `is_success()`: Check decode status
+
+- **WavDecoder** - Full native implementation
+  - 8-bit unsigned PCM (converted to float)
+  - 16-bit signed PCM
+  - 24-bit signed PCM
+  - 32-bit signed PCM
+  - 32-bit IEEE float
+  - 64-bit IEEE float (converted to 32-bit)
+  - Mono and stereo support
+  - All standard sample rates (8kHz to 96kHz+)
+
+- **Audio Transforms**
+  - `Resample` - Linear interpolation resampling
+  - `ToMono` - Stereo to mono conversion (channel averaging)
+  - `Normalize` - Peak normalization to target dB level
+  - `TrimSilence` - Remove silence from beginning/end
+
+- **Format Detection**
+  - `detect_format()` - Auto-detect from magic bytes
+  - WAV: RIFF/WAVE header
+  - FLAC: fLaC magic
+  - MP3: ID3v2 tag or frame sync
+  - OGG: OggS magic
+
+### Features
+- Zero-copy where possible (IEEE float input)
+- Header-only implementation
+- Extensible architecture for additional codecs
+- Transform chaining support
+- Thread-safe decode operations
+
+### Usage
+```cpp
+// Decode audio with auto-detection
+AudioDecoder decoder;
+auto result = decoder.decode(audio_data, audio_size);
+if (result.is_success()) {
+    // result.samples contains normalized PCM float data
+}
+
+// Apply transforms
+ToMono to_mono;
+Resample resample(16000);  // Target 16kHz
+Normalize normalize(-3.0f);  // -3dB peak
+
+auto mono = to_mono.apply(result);
+auto resampled = resample.apply(mono);
+auto normalized = normalize.apply(resampled);
+```
+
+### Tests
+- New `test_audio_decoder.cpp` with 35+ tests
+  - Format detection (WAV, FLAC, MP3, OGG, unknown)
+  - WAV decode (8/16/24/32-bit, float, stereo)
+  - Different sample rates (8kHz to 96kHz)
+  - Audio transforms (resample, mono, normalize, trim)
+  - Transform chaining
+  - Error handling (invalid headers, too small)
+  - Performance (10s file, 100 decode iterations)
+
+---
+
 ## [2.18.0] - 2025-12-18
 
 ### Phase 3: TrivialAugment (Competitor Parity)
