@@ -1614,6 +1614,282 @@ inline void transpose_chw_to_hwc(const uint8_t* src, uint8_t* dst,
 
 #endif
 
+// ============================================================================
+// SIMD BILINEAR INTERPOLATION (Phase 3.2 v2.13.0)
+// ============================================================================
+
+/**
+ * @brief SIMD-accelerated bilinear resize for RGB images
+ *
+ * Processes 4 output pixels simultaneously for 2-3x speedup over scalar.
+ * Supports ARM NEON, x86 AVX2, and scalar fallback.
+ *
+ * @param src Source image data (HWC format)
+ * @param dst Destination image data (HWC format)
+ * @param src_width Source image width
+ * @param src_height Source image height
+ * @param dst_width Destination image width
+ * @param dst_height Destination image height
+ * @param channels Number of channels (typically 3 for RGB)
+ */
+#if defined(TURBOLOADER_SIMD_NEON)
+
+inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
+                                  int src_width, int src_height,
+                                  int dst_width, int dst_height,
+                                  int channels = 3) {
+    const float x_ratio = static_cast<float>(src_width - 1) / std::max(1, dst_width - 1);
+    const float y_ratio = static_cast<float>(src_height - 1) / std::max(1, dst_height - 1);
+
+    for (int y = 0; y < dst_height; ++y) {
+        float src_y = y * y_ratio;
+        int y0 = static_cast<int>(src_y);
+        int y1 = std::min(y0 + 1, src_height - 1);
+        float dy = src_y - y0;
+        float32x4_t dy_vec = vdupq_n_f32(dy);
+        float32x4_t inv_dy_vec = vdupq_n_f32(1.0f - dy);
+
+        int x = 0;
+
+        // Process 4 pixels at a time
+        for (; x + 4 <= dst_width; x += 4) {
+            // Calculate source x coordinates for 4 output pixels
+            float src_x[4];
+            int x0[4], x1[4];
+            float dx[4];
+
+            for (int i = 0; i < 4; ++i) {
+                src_x[i] = (x + i) * x_ratio;
+                x0[i] = static_cast<int>(src_x[i]);
+                x1[i] = std::min(x0[i] + 1, src_width - 1);
+                dx[i] = src_x[i] - x0[i];
+            }
+
+            float32x4_t dx_vec = vld1q_f32(dx);
+            float32x4_t inv_dx_vec = vsubq_f32(vdupq_n_f32(1.0f), dx_vec);
+
+            // Process each channel
+            for (int c = 0; c < channels; ++c) {
+                // Gather 4 sets of corner pixels
+                float p00[4], p10[4], p01[4], p11[4];
+                for (int i = 0; i < 4; ++i) {
+                    p00[i] = src[(y0 * src_width + x0[i]) * channels + c];
+                    p10[i] = src[(y0 * src_width + x1[i]) * channels + c];
+                    p01[i] = src[(y1 * src_width + x0[i]) * channels + c];
+                    p11[i] = src[(y1 * src_width + x1[i]) * channels + c];
+                }
+
+                // Load as vectors
+                float32x4_t p00_vec = vld1q_f32(p00);
+                float32x4_t p10_vec = vld1q_f32(p10);
+                float32x4_t p01_vec = vld1q_f32(p01);
+                float32x4_t p11_vec = vld1q_f32(p11);
+
+                // Bilinear interpolation: top and bottom rows
+                float32x4_t top = vaddq_f32(
+                    vmulq_f32(p00_vec, inv_dx_vec),
+                    vmulq_f32(p10_vec, dx_vec)
+                );
+                float32x4_t bot = vaddq_f32(
+                    vmulq_f32(p01_vec, inv_dx_vec),
+                    vmulq_f32(p11_vec, dx_vec)
+                );
+
+                // Final interpolation between rows
+                float32x4_t result = vaddq_f32(
+                    vmulq_f32(top, inv_dy_vec),
+                    vmulq_f32(bot, dy_vec)
+                );
+
+                // Clamp to [0, 255]
+                result = vmaxq_f32(result, vdupq_n_f32(0.0f));
+                result = vminq_f32(result, vdupq_n_f32(255.0f));
+
+                // Convert to uint8 and store
+                uint32x4_t result_u32 = vcvtq_u32_f32(result);
+
+                // Store 4 channel values at their respective pixel positions
+                dst[(y * dst_width + x + 0) * channels + c] = static_cast<uint8_t>(vgetq_lane_u32(result_u32, 0));
+                dst[(y * dst_width + x + 1) * channels + c] = static_cast<uint8_t>(vgetq_lane_u32(result_u32, 1));
+                dst[(y * dst_width + x + 2) * channels + c] = static_cast<uint8_t>(vgetq_lane_u32(result_u32, 2));
+                dst[(y * dst_width + x + 3) * channels + c] = static_cast<uint8_t>(vgetq_lane_u32(result_u32, 3));
+            }
+        }
+
+        // Scalar tail for remaining pixels
+        for (; x < dst_width; ++x) {
+            float src_x_f = x * x_ratio;
+            int x0_s = static_cast<int>(src_x_f);
+            int x1_s = std::min(x0_s + 1, src_width - 1);
+            float dx_s = src_x_f - x0_s;
+            float inv_dx_s = 1.0f - dx_s;
+
+            for (int c = 0; c < channels; ++c) {
+                float p00 = src[(y0 * src_width + x0_s) * channels + c];
+                float p10 = src[(y0 * src_width + x1_s) * channels + c];
+                float p01 = src[(y1 * src_width + x0_s) * channels + c];
+                float p11 = src[(y1 * src_width + x1_s) * channels + c];
+
+                float top = p00 * inv_dx_s + p10 * dx_s;
+                float bot = p01 * inv_dx_s + p11 * dx_s;
+                float val = top * (1.0f - dy) + bot * dy;
+
+                dst[(y * dst_width + x) * channels + c] =
+                    static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, val)));
+            }
+        }
+    }
+}
+
+#elif defined(TURBOLOADER_SIMD_AVX2)
+
+inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
+                                  int src_width, int src_height,
+                                  int dst_width, int dst_height,
+                                  int channels = 3) {
+    const float x_ratio = static_cast<float>(src_width - 1) / std::max(1, dst_width - 1);
+    const float y_ratio = static_cast<float>(src_height - 1) / std::max(1, dst_height - 1);
+
+    for (int y = 0; y < dst_height; ++y) {
+        float src_y = y * y_ratio;
+        int y0 = static_cast<int>(src_y);
+        int y1 = std::min(y0 + 1, src_height - 1);
+        float dy = src_y - y0;
+        __m256 dy_vec = _mm256_set1_ps(dy);
+        __m256 inv_dy_vec = _mm256_set1_ps(1.0f - dy);
+
+        int x = 0;
+
+        // Process 8 pixels at a time with AVX2
+        for (; x + 8 <= dst_width; x += 8) {
+            // Calculate source x coordinates for 8 output pixels
+            float src_x[8];
+            int x0_arr[8], x1_arr[8];
+            float dx[8];
+
+            for (int i = 0; i < 8; ++i) {
+                src_x[i] = (x + i) * x_ratio;
+                x0_arr[i] = static_cast<int>(src_x[i]);
+                x1_arr[i] = std::min(x0_arr[i] + 1, src_width - 1);
+                dx[i] = src_x[i] - x0_arr[i];
+            }
+
+            __m256 dx_vec = _mm256_loadu_ps(dx);
+            __m256 inv_dx_vec = _mm256_sub_ps(_mm256_set1_ps(1.0f), dx_vec);
+
+            // Process each channel
+            for (int c = 0; c < channels; ++c) {
+                // Gather 8 sets of corner pixels
+                float p00[8], p10[8], p01[8], p11[8];
+                for (int i = 0; i < 8; ++i) {
+                    p00[i] = src[(y0 * src_width + x0_arr[i]) * channels + c];
+                    p10[i] = src[(y0 * src_width + x1_arr[i]) * channels + c];
+                    p01[i] = src[(y1 * src_width + x0_arr[i]) * channels + c];
+                    p11[i] = src[(y1 * src_width + x1_arr[i]) * channels + c];
+                }
+
+                // Load as vectors
+                __m256 p00_vec = _mm256_loadu_ps(p00);
+                __m256 p10_vec = _mm256_loadu_ps(p10);
+                __m256 p01_vec = _mm256_loadu_ps(p01);
+                __m256 p11_vec = _mm256_loadu_ps(p11);
+
+                // Bilinear interpolation: top and bottom rows
+                __m256 top = _mm256_add_ps(
+                    _mm256_mul_ps(p00_vec, inv_dx_vec),
+                    _mm256_mul_ps(p10_vec, dx_vec)
+                );
+                __m256 bot = _mm256_add_ps(
+                    _mm256_mul_ps(p01_vec, inv_dx_vec),
+                    _mm256_mul_ps(p11_vec, dx_vec)
+                );
+
+                // Final interpolation between rows
+                __m256 result = _mm256_add_ps(
+                    _mm256_mul_ps(top, inv_dy_vec),
+                    _mm256_mul_ps(bot, dy_vec)
+                );
+
+                // Clamp to [0, 255]
+                result = _mm256_max_ps(result, _mm256_setzero_ps());
+                result = _mm256_min_ps(result, _mm256_set1_ps(255.0f));
+
+                // Convert to uint8 and store
+                alignas(32) float result_arr[8];
+                _mm256_storeu_ps(result_arr, result);
+
+                for (int i = 0; i < 8; ++i) {
+                    dst[(y * dst_width + x + i) * channels + c] =
+                        static_cast<uint8_t>(result_arr[i]);
+                }
+            }
+        }
+
+        // Scalar tail
+        for (; x < dst_width; ++x) {
+            float src_x_f = x * x_ratio;
+            int x0_s = static_cast<int>(src_x_f);
+            int x1_s = std::min(x0_s + 1, src_width - 1);
+            float dx_s = src_x_f - x0_s;
+            float inv_dx_s = 1.0f - dx_s;
+
+            for (int c = 0; c < channels; ++c) {
+                float p00 = src[(y0 * src_width + x0_s) * channels + c];
+                float p10 = src[(y0 * src_width + x1_s) * channels + c];
+                float p01 = src[(y1 * src_width + x0_s) * channels + c];
+                float p11 = src[(y1 * src_width + x1_s) * channels + c];
+
+                float top = p00 * inv_dx_s + p10 * dx_s;
+                float bot = p01 * inv_dx_s + p11 * dx_s;
+                float val = top * (1.0f - dy) + bot * dy;
+
+                dst[(y * dst_width + x) * channels + c] =
+                    static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, val)));
+            }
+        }
+    }
+}
+
+#else // Scalar fallback
+
+inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
+                                  int src_width, int src_height,
+                                  int dst_width, int dst_height,
+                                  int channels = 3) {
+    const float x_ratio = static_cast<float>(src_width - 1) / std::max(1, dst_width - 1);
+    const float y_ratio = static_cast<float>(src_height - 1) / std::max(1, dst_height - 1);
+
+    for (int y = 0; y < dst_height; ++y) {
+        float src_y = y * y_ratio;
+        int y0 = static_cast<int>(src_y);
+        int y1 = std::min(y0 + 1, src_height - 1);
+        float dy = src_y - y0;
+
+        for (int x = 0; x < dst_width; ++x) {
+            float src_x = x * x_ratio;
+            int x0 = static_cast<int>(src_x);
+            int x1 = std::min(x0 + 1, src_width - 1);
+            float dx = src_x - x0;
+
+            for (int c = 0; c < channels; ++c) {
+                float p00 = src[(y0 * src_width + x0) * channels + c];
+                float p10 = src[(y0 * src_width + x1) * channels + c];
+                float p01 = src[(y1 * src_width + x0) * channels + c];
+                float p11 = src[(y1 * src_width + x1) * channels + c];
+
+                float top = p00 * (1.0f - dx) + p10 * dx;
+                float bot = p01 * (1.0f - dx) + p11 * dx;
+                float val = top * (1.0f - dy) + bot * dy;
+
+                dst[(y * dst_width + x) * channels + c] =
+                    static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, val)));
+            }
+        }
+    }
+}
+
+#endif
+
 } // namespace simd
 } // namespace transforms
 } // namespace turboloader

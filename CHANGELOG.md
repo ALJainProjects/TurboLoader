@@ -5,6 +5,36 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] - 2025-12-17
+
+### Phase 3.2: SIMD Bilinear Interpolation
+
+This release adds SIMD-accelerated bilinear interpolation for image resizing, completing Phase 3 SIMD optimizations.
+
+### Added
+- **SIMD Bilinear Resize** (`src/transforms/simd_utils.hpp`)
+  - `resize_bilinear_simd()`: SIMD-accelerated bilinear image resize
+  - ARM NEON: Processes 4 output pixels per iteration using float32x4 vectors
+  - x86 AVX2: Processes 8 output pixels per iteration using __m256 vectors
+  - Scalar fallback for other platforms
+  - Full support for non-power-of-2 dimensions and edge cases
+
+- **Integrated into ResizeTransform** (`src/transforms/resize_transform.hpp`)
+  - `resize_bilinear()` now uses SIMD-accelerated implementation
+  - Transparent speedup for all bilinear resize operations
+
+### Tests
+- New `test_simd_bilinear.cpp` with 13 comprehensive tests
+  - Downscale/upscale correctness tests (224→112, 112→224)
+  - Asymmetric resize (320x240→224x224)
+  - Non-multiple-of-4 dimensions (127x97)
+  - Edge cases: same size, single row/column, 4K to 224x224
+  - Gradient preservation verification
+  - ResizeTransform integration test
+  - Performance benchmarks with ImageNet-standard sizes
+
+---
+
 ## [2.12.0] - 2025-12-17
 
 ### Phase 3.1: SIMD HWC→CHW Channel Transpose

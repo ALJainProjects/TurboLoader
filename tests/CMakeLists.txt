@@ -204,6 +204,13 @@ target_link_libraries(test_simd_transpose PRIVATE gtest gtest_main)
 add_test(NAME simd_transpose COMMAND test_simd_transpose)
 message(STATUS "Building SIMD HWC→CHW transpose tests (v2.12.0)")
 
+# Test executable for SIMD bilinear interpolation (v2.13.0 Phase 3.2)
+add_executable(test_simd_bilinear test_simd_bilinear.cpp)
+target_include_directories(test_simd_bilinear PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_simd_bilinear PRIVATE turboloader gtest gtest_main)
+add_test(NAME simd_bilinear COMMAND test_simd_bilinear)
+message(STATUS "Building SIMD bilinear interpolation tests (v2.13.0)")
+
 # Test executable for prefetch pipeline (v1.1.0)
 add_executable(test_prefetch_pipeline test_prefetch_pipeline.cpp)
 target_include_directories(test_prefetch_pipeline PRIVATE ${CMAKE_SOURCE_DIR}/src)
