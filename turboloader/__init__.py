@@ -1338,6 +1338,222 @@ try:
                 f"Must be 'fast', 'memory_efficient', or 'standard'."
             )
 
+    class ProgressiveResizeLoader:
+        """Progressive Resizing DataLoader for curriculum learning (Phase 5.5 v2.15.0).
+
+        Implements progressive resizing as described in fastai/FFCV: start training
+        with smaller images and gradually increase resolution. This provides:
+        - Faster initial training epochs (smaller images = faster processing)
+        - Regularization effect (prevents overfitting on low-level features)
+        - 10-15% faster overall training time with minimal accuracy loss
+
+        Args:
+            data_path (str): Path to data (TAR, video, CSV, Parquet)
+            batch_size (int): Samples per batch (default: 32)
+            num_workers (int): Worker threads (default: 4)
+            initial_size (int): Starting image size (default: 128)
+            final_size (int): Final image size (default: 224)
+            warmup_epochs (int): Epochs to reach final size (default: 5)
+            output_format (str): 'numpy', 'numpy_chw', 'pytorch', 'tensorflow'
+            transform: Additional transforms to apply after resize
+            **kwargs: Additional arguments passed to FastDataLoader
+
+        Example:
+            >>> # Progressive resize from 128 to 224 over 5 epochs
+            >>> loader = turboloader.ProgressiveResizeLoader(
+            ...     'imagenet.tar',
+            ...     batch_size=128,
+            ...     num_workers=8,
+            ...     initial_size=128,
+            ...     final_size=224,
+            ...     warmup_epochs=5
+            ... )
+            >>>
+            >>> for epoch in range(10):
+            ...     loader.set_epoch(epoch)  # Updates current size
+            ...     print(f"Epoch {epoch}: size={loader.current_size}")
+            ...     for images, metadata in loader:
+            ...         # images shape changes as size increases
+            ...         pass
+
+        Size Schedule:
+            - Epoch 0: 128x128
+            - Epoch 1: 152x152
+            - Epoch 2: 176x176
+            - Epoch 3: 200x200
+            - Epoch 4: 224x224
+            - Epoch 5+: 224x224 (stays at final)
+        """
+
+        def __init__(
+            self,
+            data_path,
+            batch_size=32,
+            num_workers=4,
+            initial_size=128,
+            final_size=224,
+            warmup_epochs=5,
+            output_format="numpy",
+            transform=None,
+            shuffle=False,
+            enable_distributed=False,
+            world_rank=0,
+            world_size=1,
+            drop_last=False,
+            distributed_seed=42,
+            enable_cache=False,
+            cache_l1_mb=512,
+            cache_l2_gb=0,
+            cache_dir="/tmp/turboloader_cache",
+            auto_smart_batching=True,
+            enable_smart_batching=False,
+            prefetch_batches=4,
+        ):
+            import numpy as np
+
+            self._data_path = data_path
+            self._batch_size = batch_size
+            self._num_workers = num_workers
+            self._initial_size = initial_size
+            self._final_size = final_size
+            self._warmup_epochs = warmup_epochs
+            self._output_format = output_format
+            self._base_transform = transform
+            self._shuffle = shuffle
+            self._enable_distributed = enable_distributed
+            self._world_rank = world_rank
+            self._world_size = world_size
+            self._drop_last = drop_last
+            self._distributed_seed = distributed_seed
+            self._enable_cache = enable_cache
+            self._cache_l1_mb = cache_l1_mb
+            self._cache_l2_gb = cache_l2_gb
+            self._cache_dir = cache_dir
+            self._auto_smart_batching = auto_smart_batching
+            self._enable_smart_batching = enable_smart_batching
+            self._prefetch_batches = prefetch_batches
+
+            # Calculate size schedule (linear interpolation)
+            self._sizes = np.linspace(
+                initial_size, final_size, warmup_epochs, dtype=int
+            )
+
+            # Current epoch and size
+            self._current_epoch = 0
+            self._current_size = initial_size
+
+            # Create the underlying loader with current size
+            self._loader = None
+            self._update_loader()
+
+        def _update_loader(self):
+            """Update the underlying loader with current size."""
+            # Stop existing loader if any
+            if self._loader is not None:
+                self._loader.stop()
+
+            # Create resize transform with current size
+            current_resize = Resize(self._current_size, self._current_size)
+
+            # Compose with base transform if provided
+            if self._base_transform is not None:
+                full_transform = current_resize | self._base_transform
+            else:
+                full_transform = current_resize
+
+            # Create new FastDataLoader with current settings
+            self._loader = FastDataLoader(
+                data_path=self._data_path,
+                batch_size=self._batch_size,
+                num_workers=self._num_workers,
+                output_format=self._output_format,
+                target_height=self._current_size,
+                target_width=self._current_size,
+                transform=full_transform,
+                shuffle=self._shuffle,
+                enable_distributed=self._enable_distributed,
+                world_rank=self._world_rank,
+                world_size=self._world_size,
+                drop_last=self._drop_last,
+                distributed_seed=self._distributed_seed,
+                enable_cache=self._enable_cache,
+                cache_l1_mb=self._cache_l1_mb,
+                cache_l2_gb=self._cache_l2_gb,
+                cache_dir=self._cache_dir,
+                auto_smart_batching=self._auto_smart_batching,
+                enable_smart_batching=self._enable_smart_batching,
+                prefetch_batches=self._prefetch_batches,
+            )
+
+        def set_epoch(self, epoch: int):
+            """Set the epoch and update image size accordingly.
+
+            Call this at the start of each epoch. The image size will be
+            updated based on the warmup schedule:
+            - During warmup: size = linspace(initial, final, warmup_epochs)[epoch]
+            - After warmup: size = final_size
+
+            Args:
+                epoch (int): The epoch number (0, 1, 2, ...)
+            """
+            self._current_epoch = epoch
+
+            # Calculate current size
+            if epoch < self._warmup_epochs:
+                self._current_size = int(self._sizes[epoch])
+            else:
+                self._current_size = self._final_size
+
+            # Update the loader with new size
+            self._update_loader()
+
+        @property
+        def current_size(self):
+            """Get the current image size."""
+            return self._current_size
+
+        @property
+        def current_epoch(self):
+            """Get the current epoch."""
+            return self._current_epoch
+
+        @property
+        def size_schedule(self):
+            """Get the full size schedule for warmup epochs."""
+            return self._sizes.tolist()
+
+        def next_batch(self):
+            """Get next batch with current size."""
+            return self._loader.next_batch()
+
+        def is_finished(self):
+            """Check if all data has been processed."""
+            return self._loader.is_finished()
+
+        def stop(self):
+            """Stop the pipeline and clean up resources."""
+            if self._loader is not None:
+                self._loader.stop()
+
+        def __enter__(self):
+            """Context manager entry."""
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            """Context manager exit."""
+            self.stop()
+
+        def __iter__(self):
+            """Make ProgressiveResizeLoader iterable."""
+            return self._loader.__iter__()
+
+        def __next__(self):
+            """Get next batch (iterator protocol)."""
+            return self.next_batch()
+
+    # Add ProgressiveResizeLoader to exports
+    __all__.append("ProgressiveResizeLoader")
+
 except ImportError:
     # Fallback for development/documentation builds
     __all__ = ["__version__"]
