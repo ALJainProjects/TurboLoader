@@ -5,6 +5,53 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.0] - 2025-12-18
+
+### Phase 3: TrivialAugment (Competitor Parity)
+
+This release adds TrivialAugment, a simpler and often better alternative to RandAugment.
+
+### Added
+- **TrivialAugmentTransform** (`src/transforms/trivial_augment_transform.hpp`)
+  - Single random operation per sample (vs N operations in RandAugment)
+  - Uniform magnitude sampling (vs fixed M in RandAugment)
+  - No hyperparameter tuning needed
+  - Simpler, often better performance
+
+- **14 Operations (Wide Space)**
+  - Identity, AutoContrast, Equalize, Rotate
+  - Solarize, Color, Posterize, Contrast
+  - Brightness, Sharpness, ShearX, ShearY
+  - TranslateX, TranslateY
+
+- **Two Augmentation Spaces**
+  - `STANDARD` - 10 basic operations
+  - `WIDE` - 14 operations (recommended)
+
+### Features
+- Thread-safe random number generation
+- Configurable seed for reproducibility
+- Grayscale and RGB image support
+- Operation introspection via `operation_names()`
+
+### Usage
+```cpp
+TrivialAugmentTransform aug(TrivialAugmentTransform::AugmentSpace::WIDE);
+auto augmented = aug.apply(image);  // Single random operation applied
+```
+
+### Tests
+- New `test_trivial_augment.cpp` with 13 tests
+  - Standard and Wide space creation
+  - Output validity
+  - Reproducibility with seed
+  - Operation distribution
+  - Pixel values in valid range
+  - Edge cases (small/large/non-square/grayscale)
+  - Performance benchmark
+
+---
+
 ## [2.17.0] - 2025-12-18
 
 ### Phase 2: Quasi-Random Sampling (Competitor Parity)

@@ -332,5 +332,13 @@ target_link_libraries(test_quasi_random_sampler PRIVATE gtest gtest_main)
 add_test(NAME quasi_random_sampler COMMAND test_quasi_random_sampler)
 message(STATUS "Building Quasi-Random Sampler tests (v2.17.0)")
 
+# Test executable for TrivialAugment (v2.18.0)
+# Simpler and often better than RandAugment
+add_executable(test_trivial_augment test_trivial_augment.cpp)
+target_include_directories(test_trivial_augment PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_trivial_augment PRIVATE turboloader gtest gtest_main)
+add_test(NAME trivial_augment COMMAND test_trivial_augment)
+message(STATUS "Building TrivialAugment tests (v2.18.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
