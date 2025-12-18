@@ -293,5 +293,36 @@ target_link_libraries(test_buffer_pool PRIVATE turboloader gtest gtest_main)
 add_test(NAME buffer_pool COMMAND test_buffer_pool)
 message(STATUS "Building BufferPool tests (v2.10.0)")
 
+# Test executable for GPU Pipeline Integration (v2.16.0)
+# GPU-resident data flow: decode -> transform -> tensor output
+if(CMAKE_CUDA_COMPILER AND NVJPEG_LIBRARY)
+    add_executable(test_gpu_pipeline_integration test_gpu_pipeline_integration.cpp)
+    target_include_directories(test_gpu_pipeline_integration PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
+    )
+    target_link_libraries(test_gpu_pipeline_integration PRIVATE
+        turboloader
+        ${NVJPEG_LIBRARY}
+        CUDA::cudart
+        CUDA::nppc
+        CUDA::nppig
+        CUDA::nppicc
+    )
+    target_compile_definitions(test_gpu_pipeline_integration PRIVATE
+        TURBOLOADER_HAS_CUDA
+        HAVE_NVJPEG
+    )
+    add_test(NAME gpu_pipeline_integration COMMAND test_gpu_pipeline_integration)
+    message(STATUS "Building GPU Pipeline Integration tests with CUDA/nvJPEG (v2.16.0)")
+else()
+    # Build test without GPU (will show skipped tests)
+    add_executable(test_gpu_pipeline_integration test_gpu_pipeline_integration.cpp)
+    target_include_directories(test_gpu_pipeline_integration PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_gpu_pipeline_integration PRIVATE turboloader)
+    add_test(NAME gpu_pipeline_integration COMMAND test_gpu_pipeline_integration)
+    message(STATUS "Building GPU Pipeline Integration tests without CUDA (v2.16.0)")
+endif()
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)

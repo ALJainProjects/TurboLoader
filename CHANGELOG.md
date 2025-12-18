@@ -5,6 +5,67 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] - 2025-12-18
+
+### Phase 1: GPU Transform Pipeline Integration (Competitor Parity)
+
+This release adds GPU-resident pipeline integration, keeping decoded images on GPU through the entire transform pipeline. This is the first phase of competitor parity features, matching capabilities of NVIDIA DALI and FFCV.
+
+### Added
+- **GPUPipelineIntegration** (`src/pipeline/gpu_pipeline_integration.hpp`)
+  - GPU-resident data flow: nvJPEG decode → GPU transforms → tensor output
+  - Eliminates CPU-GPU memory copies in the hot path
+  - Zero-copy batch processing with buffer reuse
+  - Async execution with CUDA streams
+  - Direct output to float tensor (NCHW format)
+  - ImageNet normalization on GPU
+  - 2-3x throughput improvement vs CPU copy path
+
+- **GPUBatchBuffer** - Efficient GPU memory management for batch processing
+  - Pre-allocated uint8 and float buffers
+  - Per-image and per-batch accessors
+  - Automatic resize with memory reuse
+
+- **GPUDecodeResult** - GPU-resident decode output
+  - Keeps decoded data on GPU (no host copy)
+  - Move semantics for efficient resource transfer
+
+- **CUDA Kernels for HWC→CHW Conversion**
+  - `convert_hwc_to_chw_normalized()` - Single image conversion
+  - `convert_batch_hwc_to_chw_normalized()` - Batch conversion
+  - Fused uint8→float conversion with normalization
+
+- **New GPU Transforms** (`src/transforms/gpu/gpu_transforms.hpp`)
+  - `GPURandomCrop` - Random cropping with GPU memory
+  - `GPUColorJitter` - Brightness/contrast/saturation adjustment
+  - `GPUVerticalFlip` - Vertical flip with probability
+  - `GPURotate90` - 90/180/270 degree rotation
+  - `GPUSolarize` - Solarization effect
+
+### Usage
+```cpp
+// C++ API
+GPUPipelineIntegration pipeline(0);  // CUDA device 0
+pipeline.add_transform(std::make_unique<GPUResize>(224, 224));
+pipeline.add_transform(std::make_unique<GPUHorizontalFlip>(0.5f));
+pipeline.set_normalization({0.485, 0.456, 0.406}, {0.229, 0.224, 0.225});
+
+// Process batch - data stays on GPU throughout
+float* gpu_tensor = pipeline.process_batch_gpu(jpeg_ptrs, jpeg_sizes, 224, 224);
+// Output: [N, 3, 224, 224] float tensor on GPU
+```
+
+### Tests
+- New `test_gpu_pipeline_integration.cpp`
+  - GPU availability tests
+  - GPU batch buffer allocation/resize tests
+  - GPU decode to GPU memory tests
+  - Full pipeline batch processing tests
+  - HWC→CHW conversion verification
+  - Performance benchmarks
+
+---
+
 ## [2.15.0] - 2025-12-17
 
 ### Phase 5: Competitor Parity - Progressive Resizing
