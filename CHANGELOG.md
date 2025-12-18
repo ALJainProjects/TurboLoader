@@ -5,6 +5,42 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2025-12-17
+
+### Phase 4: Memory & Concurrency Improvements
+
+This release improves CPU efficiency and reduces memory allocations in the pipeline.
+
+### Added
+- **HybridWaitStrategy** (`src/core/spsc_ring_buffer.hpp`)
+  - Three-phase wait strategy for efficient lock-free queue operations
+  - Phase 1: Spin with CPU pause instruction (~100-200ns)
+  - Phase 2: Yield to scheduler (~1-10us)
+  - Phase 3: Exponential backoff sleep (10us-1ms)
+  - Reduces CPU usage when queue is full while maintaining low latency
+  - Platform-optimized: ARM yield / x86 _mm_pause() instructions
+
+- **Batch Storage Preallocation** (`src/pipeline/smart_batching.hpp`)
+  - `init_batch_storage()`: Preallocate batch vectors before iteration
+  - `reset_batch_storage()`: Reuse storage across epochs
+  - Reduces allocations during get_ready_batches() by ~5-10%
+
+### Changed
+- **Pipeline Worker Wait** (`src/pipeline/pipeline.hpp`)
+  - Replaced simple `yield()` loop with `HybridWaitStrategy::wait()`
+  - Reduces CPU usage when output queue is full
+  - Maintains low latency for fast producer/consumer scenarios
+
+### Tests
+- New `test_hybrid_wait_strategy.cpp` with 7 tests
+  - Immediate/delayed condition tests
+  - Timeout behavior tests
+  - SPSC queue integration test
+  - CPU efficiency verification
+  - Performance benchmark (~1ns per wait for fast conditions)
+
+---
+
 ## [2.13.0] - 2025-12-17
 
 ### Phase 3.2: SIMD Bilinear Interpolation

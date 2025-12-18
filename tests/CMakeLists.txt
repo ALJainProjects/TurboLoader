@@ -211,6 +211,13 @@ target_link_libraries(test_simd_bilinear PRIVATE turboloader gtest gtest_main)
 add_test(NAME simd_bilinear COMMAND test_simd_bilinear)
 message(STATUS "Building SIMD bilinear interpolation tests (v2.13.0)")
 
+# Test executable for HybridWaitStrategy (v2.14.0 Phase 4.1)
+add_executable(test_hybrid_wait_strategy test_hybrid_wait_strategy.cpp)
+target_include_directories(test_hybrid_wait_strategy PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_hybrid_wait_strategy PRIVATE gtest gtest_main pthread)
+add_test(NAME hybrid_wait_strategy COMMAND test_hybrid_wait_strategy)
+message(STATUS "Building HybridWaitStrategy tests (v2.14.0)")
+
 # Test executable for prefetch pipeline (v1.1.0)
 add_executable(test_prefetch_pipeline test_prefetch_pipeline.cpp)
 target_include_directories(test_prefetch_pipeline PRIVATE ${CMAKE_SOURCE_DIR}/src)

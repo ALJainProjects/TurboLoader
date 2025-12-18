@@ -527,10 +527,11 @@ private:
                 }
             }
 
-            // Push to lock-free SPSC queue (busy-wait if full)
-            while (running_ && !queue_->try_push(std::move(usample))) {
-                std::this_thread::yield();  // Yield if queue is full
-            }
+            // Push to lock-free SPSC queue using hybrid wait strategy (Phase 4.1)
+            // Spin briefly for low latency, then yield, then sleep with backoff
+            HybridWaitStrategy::wait([&] {
+                return !running_ || queue_->try_push(std::move(usample));
+            });
 
             if (!running_) {
                 break;
