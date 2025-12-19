@@ -5,6 +5,76 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.23.0] - 2025-12-18
+
+### Phase 8: Advanced Features (Competitor Parity)
+
+This release completes the competitor parity implementation with advanced sharding strategies, GPU prefetching, and text/NLP data loading.
+
+### Added
+- **Advanced Sharding Strategies** (`src/distributed/sharding_strategies.hpp`)
+  - `CONTIGUOUS` - Traditional range-based sharding [start, end)
+  - `INTERLEAVED` - Every N-th sample per rank (better load balancing)
+  - `HASH_BASED` - Deterministic hash-based assignment
+  - `ShardingCoordinator` for multi-worker coordination
+  - Coverage verification and imbalance ratio metrics
+
+- **GPU Memory Prefetcher** (`src/pipeline/gpu_prefetch.hpp`)
+  - Double-buffered asynchronous GPU transfers
+  - Overlap data transfer with computation
+  - Pinned memory for fast host→device transfers
+  - CUDA stream-based async operations
+  - CPU fallback for systems without GPU
+  - `TripleBufferPrefetcher` for even higher throughput
+
+- **Text/NLP Data Loading** (`src/decode/text_decoder.hpp`)
+  - `Vocabulary` class with special token support
+  - `BasicTokenizer` with encode/decode
+  - `SequenceBatcher` with padding/truncation
+  - `SequencePacker` for efficient sequence packing
+  - `TextDataset` for file-based loading
+  - Left/right padding and truncation options
+
+### Features
+- Factory method `ShardingStrategy::create()` for all sharding types
+- Iterator interface for all sharding strategies
+- String conversion utilities for sharding types
+- HWC→CHW conversion with normalization in prefetcher
+- Configurable special tokens (PAD, UNK, BOS, EOS, etc.)
+- Min frequency filtering in vocabulary building
+- Max vocab size limiting
+- Vocabulary save/load to file
+
+### Usage
+```cpp
+// Sharding - distribute data across workers
+auto sharder = ShardingStrategy::create(
+    ShardingType::INTERLEAVED, total_samples, world_size, rank);
+for (size_t idx : *sharder) {
+    // Process sample at idx
+}
+
+// GPU Prefetching - overlap transfer with compute
+GPUPrefetcher prefetcher(batch_size, 3, 224, 224, 0);
+prefetcher.prefetch_async(next_batch.data(), batch_size);
+float* current = prefetcher.get_current();  // Process current
+prefetcher.swap_buffers();  // Ready for next
+
+// Text Tokenization
+Vocabulary vocab;
+vocab.build_from_file("corpus.txt", max_size);
+BasicTokenizer tokenizer(vocab);
+auto ids = tokenizer.encode("Hello world!", true, true);  // With BOS/EOS
+auto text = tokenizer.decode(ids);
+```
+
+### Tests
+- `test_sharding_strategies.cpp` - 40+ tests for all sharding strategies
+- `test_gpu_prefetch.cpp` - 30+ tests for prefetcher functionality
+- `test_text_decoder.cpp` - 50+ tests for tokenization and batching
+
+---
+
 ## [2.22.0] - 2025-12-18
 
 ### Phase 7: LMDB Format Support (Competitor Parity)

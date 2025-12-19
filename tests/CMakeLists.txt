@@ -372,5 +372,36 @@ target_link_libraries(test_lmdb_reader PRIVATE gtest gtest_main)
 add_test(NAME lmdb_reader COMMAND test_lmdb_reader)
 message(STATUS "Building LMDB Reader tests (v2.22.0)")
 
+# Test executable for Sharding Strategies (v2.23.0)
+# Advanced sharding: contiguous, interleaved, hash-based
+add_executable(test_sharding_strategies test_sharding_strategies.cpp)
+target_include_directories(test_sharding_strategies PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_sharding_strategies PRIVATE gtest gtest_main)
+add_test(NAME sharding_strategies COMMAND test_sharding_strategies)
+message(STATUS "Building Sharding Strategies tests (v2.23.0)")
+
+# Test executable for GPU Prefetch (v2.23.0)
+# Double-buffered GPU memory prefetching
+add_executable(test_gpu_prefetch test_gpu_prefetch.cpp)
+target_include_directories(test_gpu_prefetch PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_gpu_prefetch PRIVATE gtest gtest_main)
+# Add CUDA if available
+if(CMAKE_CUDA_COMPILER)
+    target_link_libraries(test_gpu_prefetch PRIVATE CUDA::cudart)
+    target_compile_definitions(test_gpu_prefetch PRIVATE TURBOLOADER_HAS_CUDA)
+    message(STATUS "Building GPU Prefetch tests with CUDA support (v2.23.0)")
+else()
+    message(STATUS "Building GPU Prefetch tests with CPU fallback (v2.23.0)")
+endif()
+add_test(NAME gpu_prefetch COMMAND test_gpu_prefetch)
+
+# Test executable for Text Decoder (v2.23.0)
+# Text/NLP data loading and tokenization
+add_executable(test_text_decoder test_text_decoder.cpp)
+target_include_directories(test_text_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_text_decoder PRIVATE gtest gtest_main)
+add_test(NAME text_decoder COMMAND test_text_decoder)
+message(STATUS "Building Text Decoder tests (v2.23.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
