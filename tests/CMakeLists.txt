@@ -356,5 +356,13 @@ target_link_libraries(test_checkpointing PRIVATE gtest gtest_main pthread)
 add_test(NAME checkpointing COMMAND test_checkpointing)
 message(STATUS "Building Checkpointing tests (v2.20.0)")
 
+# Test executable for Weighted Sampling (v2.21.0)
+# Weighted/class-balanced sampling for imbalanced datasets
+add_executable(test_weighted_sampler test_weighted_sampler.cpp)
+target_include_directories(test_weighted_sampler PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_weighted_sampler PRIVATE gtest gtest_main)
+add_test(NAME weighted_sampler COMMAND test_weighted_sampler)
+message(STATUS "Building Weighted Sampler tests (v2.21.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)

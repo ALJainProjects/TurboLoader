@@ -5,6 +5,84 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.21.0] - 2025-12-18
+
+### Phase 6: Weighted Sampling (Competitor Parity)
+
+This release adds weighted sampling for imbalanced datasets.
+
+### Added
+- **WeightedRandomSampler** (`src/sampling/weighted_sampler.hpp`)
+  - Per-sample weight-based sampling
+  - With/without replacement options
+  - Discrete distribution for efficient sampling
+  - Reproducible with seed
+
+- **ClassBalancedSampler** - Automatic class balancing
+  - Computes weights inversely proportional to class frequency
+  - Reports imbalance ratio
+  - Returns balanced class distribution
+
+- **OverSampler** - Minority class oversampling
+  - Repeats minority samples to match majority
+  - Preserves original indices
+
+- **UnderSampler** - Majority class undersampling
+  - Randomly selects from majority to match minority
+  - Maintains class balance
+
+- **ImportanceSampler** - Temperature-adjusted sampling
+  - Softens (T>1) or sharpens (T<1) distribution
+  - Adjustable temperature parameter
+
+- **StratifiedSampler** - Proportional class sampling
+  - Maintains original class proportions
+  - Round-robin interleaving for even distribution
+
+### Features
+- Multiple sampling strategies for different use cases
+- Thread-safe random number generation
+- Reproducible with configurable seeds
+- Efficient discrete_distribution for O(1) sampling
+- Edge case handling (empty, negative weights)
+
+### Usage
+```cpp
+// Weighted random sampling
+WeightedRandomSampler weighted(weights, num_samples, replacement);
+auto indices = weighted.sample();
+
+// Class-balanced sampling for imbalanced datasets
+ClassBalancedSampler balanced(labels);
+auto batch = balanced.sample(batch_size);
+std::cout << "Imbalance ratio: " << balanced.imbalance_ratio() << std::endl;
+
+// Oversampling minority classes
+OverSampler over(labels);
+auto epoch = over.sample_epoch();  // Includes repeated minority samples
+
+// Undersampling majority classes
+UnderSampler under(labels);
+auto epoch = under.sample_epoch();  // Reduced majority samples
+
+// Stratified sampling with interleaving
+StratifiedSampler stratified(labels);
+auto epoch = stratified.sample_epoch();  // Round-robin class order
+```
+
+### Tests
+- New `test_weighted_sampler.cpp` with 35+ tests
+  - WeightedRandomSampler construction and sampling
+  - With/without replacement behavior
+  - Weight distribution verification
+  - ClassBalancedSampler balancing
+  - Over/undersampling correctness
+  - ImportanceSampler temperature effects
+  - StratifiedSampler interleaving
+  - Edge cases (empty, negative weights)
+
+---
+
 ## [2.20.0] - 2025-12-18
 
 ### Phase 5: Mid-Epoch Checkpointing (Competitor Parity)
