@@ -348,5 +348,13 @@ target_link_libraries(test_audio_decoder PRIVATE gtest gtest_main)
 add_test(NAME audio_decoder COMMAND test_audio_decoder)
 message(STATUS "Building Audio Decoder tests (v2.19.0)")
 
+# Test executable for Checkpointing (v2.20.0)
+# Mid-epoch checkpointing for resumable training
+add_executable(test_checkpointing test_checkpointing.cpp)
+target_include_directories(test_checkpointing PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_checkpointing PRIVATE gtest gtest_main pthread)
+add_test(NAME checkpointing COMMAND test_checkpointing)
+message(STATUS "Building Checkpointing tests (v2.20.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)

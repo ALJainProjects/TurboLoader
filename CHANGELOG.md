@@ -5,6 +5,99 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.20.0] - 2025-12-18
+
+### Phase 5: Mid-Epoch Checkpointing (Competitor Parity)
+
+This release adds mid-epoch checkpointing for resumable training, matching TorchData StatefulDataLoader capabilities.
+
+### Added
+- **PipelineState** (`src/pipeline/checkpointing.hpp`)
+  - Complete pipeline state capture for checkpointing
+  - Binary serialization with checksum verification
+  - Epoch, sample, batch position tracking
+  - Per-worker state preservation
+  - RNG state for reproducibility
+  - Shuffle order storage for exact resume
+
+- **StateTracker** - Thread-safe state tracking
+  - Sample queuing and completion tracking
+  - Worker position management
+  - Batch return counting
+  - Distributed training support
+
+- **ResumableIndexGenerator** - Deterministic index generation
+  - Epoch-based seeding for reproducibility
+  - Skip-to for resume functionality
+  - Shuffle order preservation
+
+- **StatefulDataLoader** - Main API
+  - `state_dict()` - Get checkpoint state
+  - `load_state_dict()` - Resume from checkpoint
+  - `start_epoch()` - Begin new or resume epoch
+  - `next_batch()` - Get next batch indices
+  - `mark_completed()` - Track completion
+
+- **CheckpointableIterator** - Position-aware iterator
+  - Automatic state tracking
+  - Skip-to support for resume
+
+### Features
+- Exact position resume within epoch
+- RNG state preservation for deterministic replay
+- Shuffle order storage (for datasets < 10M samples)
+- Per-worker progress tracking
+- Binary serialization with magic number and checksum
+- Human-readable state summary
+- Progress percentage reporting
+
+### Usage
+```cpp
+// Create loader
+StatefulLoaderConfig config;
+config.batch_size = 64;
+config.shuffle = true;
+config.seed = 42;
+
+StatefulDataLoader loader(config);
+loader.initialize(total_samples);
+
+// Training loop with checkpointing
+for (int epoch = 0; epoch < 10; ++epoch) {
+    loader.start_epoch(epoch);
+
+    while (!loader.epoch_complete()) {
+        auto batch = loader.next_batch();
+        // ... train ...
+        loader.mark_completed(batch, worker_id);
+
+        // Save checkpoint periodically
+        if (should_checkpoint) {
+            auto state = loader.state_dict();
+            auto bytes = state.serialize();
+            save_to_file(bytes);
+        }
+    }
+}
+
+// Resume from checkpoint
+auto bytes = load_from_file();
+auto state = PipelineState::deserialize(bytes.data(), bytes.size());
+loader.load_state_dict(state);
+// Continues from exact saved position
+```
+
+### Tests
+- New `test_checkpointing.cpp` with 40+ tests
+  - PipelineState serialization/deserialization
+  - StateTracker initialization and tracking
+  - ResumableIndexGenerator determinism
+  - StatefulDataLoader save/resume
+  - Thread safety tests
+  - Edge cases (corrupted data, invalid format)
+
+---
+
 ## [2.19.0] - 2025-12-18
 
 ### Phase 4: Audio Decoding (Competitor Parity)
