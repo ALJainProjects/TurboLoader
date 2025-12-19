@@ -5,6 +5,86 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.22.0] - 2025-12-18
+
+### Phase 7: LMDB Format Support (Competitor Parity)
+
+This release adds LMDB database reading for computer vision benchmarks like ImageNet, COCO, and Caffe datasets.
+
+### Added
+- **LMDBReader** (`src/readers/lmdb_reader.hpp`)
+  - Memory-mapped read-only access to LMDB databases
+  - Efficient random access by key or index
+  - Iterator interface for sequential access
+  - Thread-safe read operations
+  - Pure C++ implementation (no liblmdb dependency)
+
+- **LMDBEntry** - Key-value pair structure
+  - Binary key and value vectors
+  - Helper method for string key conversion
+  - Efficient memory layout
+
+- **Database Statistics**
+  - Entry count, total bytes
+  - Min/max/average value sizes
+  - Key byte totals
+
+### Features
+- Automatic detection of LMDB directories (data.mdb)
+- Direct data.mdb file access support
+- Cross-platform support (Windows/macOS/Linux)
+- Memory-mapped I/O for efficient access
+- Simplified B+ tree parser for ML datasets
+- Factory function `make_lmdb_reader()`
+- Detection helper `is_lmdb_database()`
+
+### Usage
+```cpp
+// Open LMDB database
+LMDBReader reader("dataset.lmdb");
+
+// Access by index
+auto entry = reader.get(0);
+std::cout << "Key: " << entry.key_string() << std::endl;
+
+// Access by key
+auto data = reader.get("image_001");
+
+// Iterate all entries
+for (const auto& entry : reader) {
+    // Process key-value pairs
+}
+
+// Check existence
+if (reader.contains("sample_key")) {
+    // Key exists
+}
+
+// Get all keys
+auto keys = reader.keys();
+
+// Get statistics
+auto stats = reader.stats();
+std::cout << "Entries: " << stats.num_entries << std::endl;
+std::cout << "Avg value size: " << stats.avg_value_size << std::endl;
+```
+
+### Tests
+- New `test_lmdb_reader.cpp` with 40+ tests
+  - Basic construction and validation
+  - Size, empty, path getters
+  - Get by index and key
+  - Contains and keys methods
+  - Iterator interface (begin/end/++/*/->)
+  - Statistics calculation
+  - Move semantics
+  - Factory function
+  - is_lmdb_database detection
+  - Large datasets and values
+  - Edge cases (single byte keys, special characters)
+
+---
+
 ## [2.21.0] - 2025-12-18
 
 ### Phase 6: Weighted Sampling (Competitor Parity)

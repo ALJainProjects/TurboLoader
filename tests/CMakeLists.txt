@@ -364,5 +364,13 @@ target_link_libraries(test_weighted_sampler PRIVATE gtest gtest_main)
 add_test(NAME weighted_sampler COMMAND test_weighted_sampler)
 message(STATUS "Building Weighted Sampler tests (v2.21.0)")
 
+# Test executable for LMDB Reader (v2.22.0)
+# Read LMDB databases commonly used for CV benchmarks
+add_executable(test_lmdb_reader test_lmdb_reader.cpp)
+target_include_directories(test_lmdb_reader PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_lmdb_reader PRIVATE gtest gtest_main)
+add_test(NAME lmdb_reader COMMAND test_lmdb_reader)
+message(STATUS "Building LMDB Reader tests (v2.22.0)")
+
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
