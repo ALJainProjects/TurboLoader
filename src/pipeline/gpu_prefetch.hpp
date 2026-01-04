@@ -36,6 +36,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 #include <memory>
 #include <stdexcept>
