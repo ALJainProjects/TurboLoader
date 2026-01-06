@@ -1,5 +1,16 @@
 """TurboLoader: High-performance data loading for machine learning.
 
+v2.24.0 - PyTorch Compatibility Layer
+
+New in v2.24.0:
+- PyTorchCompatibleLoader: Drop-in replacement for torch.utils.data.DataLoader
+- Returns (images, labels) tuples exactly like PyTorch DataLoader
+- Automatic label extraction from folder structure (ImageFolder style)
+- ImageFolderConverter: Convert ImageFolder datasets to TAR format
+- TransformAdapter: Convert torchvision transforms to TurboLoader transforms
+- FolderLabelExtractor, FilenamePatternExtractor, MetadataLabelExtractor
+- Full PyTorch training loop compatibility
+
 v2.10.0 - Performance Optimizations (Phase 2)
 
 New in v2.10.0:
@@ -89,7 +100,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.8.0"
+__version__ = "2.24.0"
 
 # Import C++ extension module
 try:
@@ -1553,6 +1564,39 @@ try:
 
     # Add ProgressiveResizeLoader to exports
     __all__.append("ProgressiveResizeLoader")
+
+    # Import PyTorch compatibility layer
+    try:
+        from turboloader.pytorch_compat import (
+            PyTorchCompatibleLoader,
+            ImageFolderConverter,
+            TransformAdapter,
+            LabelExtractor,
+            FolderLabelExtractor,
+            FilenamePatternExtractor,
+            MetadataLabelExtractor,
+            JSONSidecarExtractor,
+            CallableLabelExtractor,
+            create_loader as create_pytorch_loader,
+            convert_imagefolder,
+        )
+
+        __all__.extend([
+            "PyTorchCompatibleLoader",
+            "ImageFolderConverter",
+            "TransformAdapter",
+            "LabelExtractor",
+            "FolderLabelExtractor",
+            "FilenamePatternExtractor",
+            "MetadataLabelExtractor",
+            "JSONSidecarExtractor",
+            "CallableLabelExtractor",
+            "create_pytorch_loader",
+            "convert_imagefolder",
+        ])
+    except ImportError:
+        # PyTorch not available - skip compatibility layer
+        pass
 
 except ImportError:
     # Fallback for development/documentation builds
