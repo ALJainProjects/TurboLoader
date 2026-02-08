@@ -12,8 +12,13 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Compiler flags
+option(TURBOLOADER_PORTABLE "Build portable binaries (no -march=native)" OFF)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
+    if(TURBOLOADER_PORTABLE)
+        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -msse4.2 -DNDEBUG")
+    else()
+        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
+    endif()
     set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -Wall -Wextra -Wpedantic")
 endif()
 

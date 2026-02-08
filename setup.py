@@ -360,9 +360,13 @@ class BuildExt(build_ext):
                         if lib_dir and os.path.exists(lib_dir):
                             link_opts.append(f"-Wl,-rpath,{lib_dir}")
                 else:
-                    # Linux - use march=native for x86
+                    # Linux x86 SIMD flags
                     if "x86" in arch or "amd64" in arch:
-                        opts.append("-march=native")
+                        if os.environ.get("TURBOLOADER_PORTABLE", "0") == "1":
+                            # Portable: SSE4.2 baseline (compatible with all modern x86_64)
+                            opts.append("-msse4.2")
+                        else:
+                            opts.append("-march=native")
             elif ct == "msvc":
                 opts.append("/std:c++17")
 

@@ -61,6 +61,7 @@ jobs:
             CFLAGS="-I/usr/include -I/usr/include/lz4"
             LDFLAGS="-L/usr/lib64 -L/usr/lib"
             PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/pkgconfig"
+            TURBOLOADER_PORTABLE="1"
 
           CIBW_BUILD_VERBOSITY: 1
 
