@@ -882,11 +882,16 @@ public:
 
     bool is_finished() const {
         if (config_.format == DataFormat::TAR) {
-            // Check if all workers are finished AND all queues are empty
+            // Two-pass check: first verify all workers are finished, then
+            // verify all queues are empty. The second pass catches items that
+            // may have been enqueued between individual worker checks.
             for (const auto& worker : tar_workers_) {
                 if (!worker->is_finished()) {
                     return false;
                 }
+            }
+            // All workers done - now check queues (items may still be in-flight)
+            for (const auto& worker : tar_workers_) {
                 if (!worker->get_queue()->empty()) {
                     return false;
                 }
@@ -904,7 +909,8 @@ public:
             }
             return true;
         } else {
-            return !running_ && fallback_queue_ && fallback_queue_->empty();
+            return !running_.load(std::memory_order_acquire) &&
+                   fallback_queue_ && fallback_queue_->empty();
         }
     }
 

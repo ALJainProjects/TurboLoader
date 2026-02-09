@@ -87,6 +87,60 @@ TEST(TransformTest, ImageNetNormalize) {
     EXPECT_EQ(output->channels, 3);
 }
 
+// Test Normalize uint8 roundtrip (denormalization must include *255)
+TEST(TransformTest, NormalizeUint8Roundtrip) {
+    // Create a uniform image with known pixel value
+    int width = 4, height = 4, channels = 3;
+    size_t size = width * height * channels;
+    auto data = new uint8_t[size];
+    // Set all pixels to 128
+    std::memset(data, 128, size);
+    auto input = std::make_unique<ImageData>(data, width, height, channels,
+                                              width * channels, true);
+
+    std::vector<float> mean = {0.5f, 0.5f, 0.5f};
+    std::vector<float> std_vals = {0.5f, 0.5f, 0.5f};
+
+    // With these values: normalize = (128/255 - 0.5) / 0.5 ≈ 0.00392
+    // Denormalize: (0.00392 * 0.5 + 0.5) * 255 ≈ 128
+    NormalizeTransform normalize(mean, std_vals, false);
+    auto output = normalize.apply(*input);
+
+    EXPECT_EQ(output->width, width);
+    EXPECT_EQ(output->height, height);
+
+    // After normalize+denormalize roundtrip, pixel values should be close to original
+    for (size_t i = 0; i < size; ++i) {
+        EXPECT_NEAR(output->data[i], 128, 2)
+            << "Pixel " << i << " diverged after normalize roundtrip";
+    }
+}
+
+// Test Normalize denorm produces values in valid [0,255] range
+TEST(TransformTest, NormalizeDenormRange) {
+    auto input = create_test_image(10, 10, 3);
+    std::vector<float> mean = {0.485f, 0.456f, 0.406f};
+    std::vector<float> std_vals = {0.229f, 0.224f, 0.225f};
+
+    NormalizeTransform normalize(mean, std_vals, false);
+    auto output = normalize.apply(*input);
+
+    size_t size = 10 * 10 * 3;
+    for (size_t i = 0; i < size; ++i) {
+        // uint8 values are always in [0,255] by type, but we verify
+        // the denorm formula doesn't produce garbage (e.g., all zeros or all 255)
+        // by checking that at least some variation exists
+    }
+    // Verify we have pixel variation (not all clamped to 0 or 255)
+    int min_val = 255, max_val = 0;
+    for (size_t i = 0; i < size; ++i) {
+        min_val = std::min(min_val, (int)output->data[i]);
+        max_val = std::max(max_val, (int)output->data[i]);
+    }
+    EXPECT_LT(min_val, 200) << "All pixels clamped high - denorm likely broken";
+    EXPECT_GT(max_val, 50) << "All pixels clamped low - denorm likely broken";
+}
+
 // Test Flips
 TEST(TransformTest, HorizontalFlip) {
     auto input = create_test_image(10, 10, 3);

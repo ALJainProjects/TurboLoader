@@ -128,14 +128,14 @@ private:
             simd::normalize_f32(temp.data(), normalized.data(),
                                mean_[c], std_[c], num_pixels);
 
-            // Scale back to [0,255] range and convert to uint8
-            // Typical normalized values are in [-3, 3], we'll map to [0,255]
-            // using (val + 3) / 6 * 255 approximation
+            // Denormalize back to [0,255]: reverse the (pixel/255 - mean)/std transform
+            // normalized = (pixel/255 - mean) / std
+            // => pixel/255 = normalized * std + mean
+            // => pixel = (normalized * std + mean) * 255
             for (size_t i = 0; i < num_pixels; ++i) {
-                // Simple clamp to [0,1] after denormalization
-                float val = normalized[i] * std_[c] + mean_[c];
-                val = std::max(0.0f, std::min(1.0f, val));
-                output->data[i * input.channels + c] = static_cast<uint8_t>(val * 255.0f);
+                float val = (normalized[i] * std_[c] + mean_[c]) * 255.0f;
+                val = std::max(0.0f, std::min(255.0f, val));
+                output->data[i * input.channels + c] = static_cast<uint8_t>(val);
             }
         }
 
