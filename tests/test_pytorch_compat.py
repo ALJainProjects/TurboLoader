@@ -116,7 +116,6 @@ class TestLoaderAPIProperties:
                 "torch.utils": MagicMock(),
                 "torch.utils.data": MagicMock(),
                 "_turboloader": MagicMock(),
-                "turboloader": MagicMock(),
             },
         ):
             # Force reimport with mocks
