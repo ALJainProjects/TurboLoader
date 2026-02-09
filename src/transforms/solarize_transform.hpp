@@ -64,15 +64,20 @@ private:
 
 #ifdef TURBOLOADER_SIMD_AVX2
         // AVX2: Process 32 bytes at a time
+        // Note: _mm256_cmpgt_epi8 is SIGNED comparison, so XOR with 0x80
+        // to convert unsigned [0,255] to signed [-128,127] range
+        __m256i bias = _mm256_set1_epi8(static_cast<char>(0x80));
         __m256i threshold_vec = _mm256_set1_epi8(threshold_);
-        __m256i max_val = _mm256_set1_epi8(255);
+        __m256i max_val = _mm256_set1_epi8(static_cast<char>(0xFF));
         size_t i = 0;
 
         for (; i + 32 <= total_pixels; i += 32) {
             __m256i pixels = _mm256_loadu_si256((__m256i*)(input.data + i));
 
-            // Create mask: pixels > threshold
-            __m256i mask = _mm256_cmpgt_epi8(pixels, threshold_vec);
+            // Create mask: pixels > threshold (unsigned comparison via XOR bias)
+            __m256i mask = _mm256_cmpgt_epi8(
+                _mm256_xor_si256(pixels, bias),
+                _mm256_xor_si256(threshold_vec, bias));
 
             // Invert pixels: 255 - pixels
             __m256i inverted = _mm256_sub_epi8(max_val, pixels);

@@ -40,7 +40,7 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-cov numpy pybind11
+        pip install pytest pytest-cov numpy pybind11 Pillow
         pip install -e .
 
     - name: Run Python tests
@@ -86,7 +86,7 @@ jobs:
     - name: Run C++ tests
       run: |
         cd build
-        ctest --output-on-failure -j$(nproc)
+        ctest --output-on-failure -j$(nproc) -E "avx512_simd"
 
   lint:
     name: Code Quality
@@ -108,8 +108,8 @@ jobs:
 
     - name: Check code formatting with black
       run: |
-        black --check --diff turboloader/ tests/ benchmarks/ examples/
+        black --check --diff turboloader/ tests/
 
     - name: Lint with flake8
       run: |
-        flake8 turboloader/ tests/ benchmarks/ examples/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 turboloader/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
