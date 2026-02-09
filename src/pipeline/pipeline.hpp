@@ -487,6 +487,7 @@ private:
                             throw std::runtime_error(
                                 "GPU decode failed for: " + entry.name);
                         }
+                        samples_skipped_.fetch_add(1, std::memory_order_relaxed);
                         continue;  // Skip corrupted (config allows)
                     }
                 } else
@@ -506,6 +507,7 @@ private:
                         if (!config_.skip_corrupted) {
                             throw;  // Re-throw if not skipping
                         }
+                        samples_skipped_.fetch_add(1, std::memory_order_relaxed);
                         continue;  // Skip corrupted (config allows)
                     }
                     usample.image_data = std::move(sample.decoded_rgb);
@@ -1173,6 +1175,7 @@ private:
     std::atomic<bool> running_;
     std::atomic<size_t> samples_processed_;
     std::atomic<size_t> batches_produced_;
+    std::atomic<size_t> samples_skipped_{0};  // Corrupted/failed samples skipped
 
     // Smart Batching (NEW in v1.5.1, auto-detection in v2.3.0)
     std::unique_ptr<pipeline::SmartBatcher<UnifiedSample>> smart_batcher_;
@@ -1203,6 +1206,16 @@ public:
      */
     bool cache_enabled() const {
         return tiered_cache_ != nullptr;
+    }
+
+    /**
+     * @brief Get number of samples skipped due to decode errors
+     *
+     * Incremented when skip_corrupted=true and a sample fails to decode.
+     * Useful for monitoring data quality and detecting silent data loss.
+     */
+    size_t skipped_samples() const {
+        return samples_skipped_.load(std::memory_order_relaxed);
     }
 
     /**

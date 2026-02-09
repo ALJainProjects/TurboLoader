@@ -430,6 +430,32 @@ TEST_F(BufferPoolTest, TotalPooledCount) {
     EXPECT_EQ(pool_->pooled_count(), 2);  // Total
 }
 
+// Test that oversized vectors are discarded, not pooled
+TEST_F(BufferPoolTest, OversizedVectorDiscard) {
+    // default_vector_size is 256*256*3 = 196608
+    // Threshold is 2x = 393216
+    // Acquire a vector, grow it beyond 2x, then let it release
+    {
+        auto vec = pool_->acquire_vector();
+        // Grow the internal vector way beyond 2x default size
+        vec->resize(500000);  // ~500KB, well above 2*196608
+    }
+    // The oversized vector should NOT be pooled
+    EXPECT_EQ(pool_->vector_pooled_count(), 0u);
+
+    // Now do the same with a normal-sized vector
+    {
+        auto vec = pool_->acquire_vector();
+        vec->resize(1000);  // Small, well within 2x
+    }
+    // Normal vector should be pooled
+    EXPECT_EQ(pool_->vector_pooled_count(), 1u);
+
+    // Check that the oversized release was tracked in stats
+    auto s = pool_->stats();
+    EXPECT_GE(s.oversized_releases, 1u);
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

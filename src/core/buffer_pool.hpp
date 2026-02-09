@@ -310,6 +310,13 @@ private:
     void release_vector(std::vector<uint8_t>&& vec) {
         std::lock_guard<std::mutex> lock(vec_mutex_);
         if (vec_pool_.size() < max_buffers_per_bucket_ * 4) {  // Higher limit for vectors
+            // Discard oversized buffers to prevent memory bloat from outlier images.
+            // If a single large image expanded the vector beyond 2x the default,
+            // let it deallocate rather than keeping it in the pool forever.
+            if (vec.capacity() > default_vector_size_ * 2) {
+                stats_.oversized_releases++;
+                return;  // Let the vector deallocate
+            }
             vec_pool_.push_back(std::move(vec));
         }
     }
