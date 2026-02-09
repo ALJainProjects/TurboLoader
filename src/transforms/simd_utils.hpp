@@ -1338,16 +1338,19 @@ inline void gaussian_blur_3x3_neon(const uint8_t* src, uint8_t* dst,
  */
 inline float bilinear_interpolate(const uint8_t* data, int width, int height,
                                   float x, float y, int channel, int num_channels) {
-    int x0 = static_cast<int>(std::floor(x));
-    int y0 = static_cast<int>(std::floor(y));
+    // Clamp source coordinates first, then compute neighbors and fractional parts.
+    // This prevents out-of-bounds reads when x or y are negative or >= dimension-1.
+    int x0 = std::max(0, static_cast<int>(std::floor(x)));
+    int y0 = std::max(0, static_cast<int>(std::floor(y)));
+    x0 = std::min(x0, width - 1);
+    y0 = std::min(y0, height - 1);
     int x1 = std::min(x0 + 1, width - 1);
     int y1 = std::min(y0 + 1, height - 1);
 
-    x0 = std::max(0, x0);
-    y0 = std::max(0, y0);
-
-    float dx = x - x0;
-    float dy = y - y0;
+    float dx = x - static_cast<float>(x0);
+    float dy = y - static_cast<float>(y0);
+    dx = std::max(0.0f, std::min(1.0f, dx));
+    dy = std::max(0.0f, std::min(1.0f, dy));
 
     auto get_pixel = [&](int px, int py) -> float {
         return static_cast<float>(data[(py * width + px) * num_channels + channel]);
