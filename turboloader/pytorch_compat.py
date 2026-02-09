@@ -281,6 +281,9 @@ class PyTorchCompatibleLoader:
         target_transform: Optional[Callable] = None,
         device: Optional[str] = None,
         prefetch_factor: int = 2,
+        collate_fn: Optional[Callable] = None,
+        sampler: Optional[Any] = None,
+        worker_init_fn: Optional[Callable] = None,
         # TurboLoader-specific
         enable_cache: bool = False,
         cache_l1_mb: int = 512,
@@ -292,13 +295,22 @@ class PyTorchCompatibleLoader:
             batch_size: Samples per batch
             shuffle: Whether to shuffle data
             num_workers: Number of worker threads
-            pin_memory: Ignored (TurboLoader handles this internally)
+            pin_memory: Pin memory for faster GPU transfer (used for
+                       torch.Tensor.pin_memory() on output tensors)
             drop_last: Drop the last incomplete batch
             label_extractor: LabelExtractor instance for extracting labels
             transform: TurboLoader transform or Compose object
             target_transform: Optional transform for labels
             device: Target device ('cuda', 'cpu', or None for CPU)
             prefetch_factor: Batches to prefetch per worker
+            collate_fn: Optional function to merge a list of samples into a
+                       mini-batch. Applied after TurboLoader produces
+                       (images, labels) tuples.
+            sampler: Optional sampler (e.g., DistributedSampler). When provided,
+                    shuffle is determined by the sampler and the shuffle
+                    argument is ignored.
+            worker_init_fn: Optional callable invoked on each worker at startup.
+                          Called with worker_id (int) as the single argument.
             enable_cache: Enable TurboLoader caching
             cache_l1_mb: L1 cache size in MB
             output_size: Optional (height, width) for resizing
@@ -310,14 +322,30 @@ class PyTorchCompatibleLoader:
         self._batch_size = batch_size
         self._shuffle = shuffle
         self._num_workers = num_workers
+        self._pin_memory = pin_memory
         self._drop_last = drop_last
         self._transform = transform
         self._target_transform = target_transform
+        self._collate_fn = collate_fn
+        self._sampler = sampler
+        self._worker_init_fn = worker_init_fn
         self._device = device
         self._output_size = output_size
 
         # Default to folder-based label extraction
         self._label_extractor = label_extractor or FolderLabelExtractor()
+
+        # If a sampler is provided, use its shuffle behavior
+        effective_shuffle = shuffle if sampler is None else False
+
+        # Detect distributed sampler for world_size/rank
+        enable_distributed = False
+        world_rank = 0
+        world_size = 1
+        if sampler is not None and hasattr(sampler, 'num_replicas'):
+            enable_distributed = True
+            world_rank = getattr(sampler, 'rank', 0)
+            world_size = getattr(sampler, 'num_replicas', 1)
 
         # Create underlying TurboLoader
         self._loader = turboloader.FastDataLoader(
@@ -328,15 +356,24 @@ class PyTorchCompatibleLoader:
             target_height=output_size[0] if output_size else 224,
             target_width=output_size[1] if output_size else 224,
             transform=transform,
-            shuffle=shuffle,
+            shuffle=effective_shuffle,
             drop_last=drop_last,
             enable_cache=enable_cache,
             cache_l1_mb=cache_l1_mb,
             prefetch_batches=prefetch_factor * num_workers,
+            enable_distributed=enable_distributed,
+            world_rank=world_rank,
+            world_size=world_size,
         )
+
+        # Call worker_init_fn for each worker if provided
+        if worker_init_fn is not None:
+            for wid in range(num_workers):
+                worker_init_fn(wid)
 
         self._epoch = 0
         self._iterator = None
+        self._num_batches = None  # Tracked from first full epoch
 
     def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
         """Iterate over batches, yielding (images, labels) tuples."""
@@ -348,8 +385,18 @@ class PyTorchCompatibleLoader:
         # Reset loader for new epoch
         try:
             self._loader.stop()
-        except:
+        except Exception:
             pass
+
+        # Detect distributed config from sampler
+        effective_shuffle = self._shuffle if self._sampler is None else False
+        enable_distributed = False
+        world_rank = 0
+        world_size = 1
+        if self._sampler is not None and hasattr(self._sampler, 'num_replicas'):
+            enable_distributed = True
+            world_rank = getattr(self._sampler, 'rank', 0)
+            world_size = getattr(self._sampler, 'num_replicas', 1)
 
         self._loader = turboloader.FastDataLoader(
             self._data_path,
@@ -359,10 +406,14 @@ class PyTorchCompatibleLoader:
             target_height=self._output_size[0] if self._output_size else 224,
             target_width=self._output_size[1] if self._output_size else 224,
             transform=self._transform,
-            shuffle=self._shuffle,
+            shuffle=effective_shuffle,
             drop_last=self._drop_last,
+            enable_distributed=enable_distributed,
+            world_rank=world_rank,
+            world_size=world_size,
         )
 
+        batch_count = 0
         while True:
             try:
                 images, metadata = self._loader.next_batch_torch(
@@ -386,16 +437,28 @@ class PyTorchCompatibleLoader:
 
                 labels_tensor = torch.tensor(labels, dtype=torch.long)
 
+                if self._pin_memory and labels_tensor.device.type == 'cpu':
+                    labels_tensor = labels_tensor.pin_memory()
+
                 if self._device:
                     labels_tensor = labels_tensor.to(self._device)
 
                 if self._target_transform:
                     labels_tensor = self._target_transform(labels_tensor)
 
-                yield images, labels_tensor
+                result = (images, labels_tensor)
+                if self._collate_fn is not None:
+                    result = self._collate_fn([result])
+
+                batch_count += 1
+                yield result
 
             except StopIteration:
                 break
+
+        # Update batch count after first full epoch
+        if self._num_batches is None:
+            self._num_batches = batch_count
 
     def __next__(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get next batch."""
@@ -404,9 +467,18 @@ class PyTorchCompatibleLoader:
         return next(self._iterator)
 
     def __len__(self) -> int:
-        """Approximate length (number of batches)."""
-        # This is an estimate; TurboLoader doesn't expose exact length
-        return 0  # Unknown length
+        """Number of batches per epoch.
+
+        Returns the batch count observed during the first complete epoch.
+        Before the first epoch completes, raises TypeError to match
+        PyTorch's behavior for unsized iterables.
+        """
+        if self._num_batches is not None:
+            return self._num_batches
+        raise TypeError(
+            "PyTorchCompatibleLoader length is unknown until the first epoch "
+            "completes. Iterate once to determine the number of batches."
+        )
 
     def set_epoch(self, epoch: int):
         """Set epoch for reproducible shuffling."""
@@ -426,14 +498,39 @@ class PyTorchCompatibleLoader:
         return self._num_workers
 
     @property
+    def pin_memory(self) -> bool:
+        return self._pin_memory
+
+    @property
+    def drop_last(self) -> bool:
+        return self._drop_last
+
+    @property
+    def sampler(self):
+        """Return the sampler, if any."""
+        return self._sampler
+
+    @property
+    def collate_fn(self) -> Optional[Callable]:
+        return self._collate_fn
+
+    @property
+    def worker_init_fn(self) -> Optional[Callable]:
+        return self._worker_init_fn
+
+    @property
     def label_extractor(self) -> LabelExtractor:
         return self._label_extractor
+
+    @property
+    def prefetch_factor(self) -> int:
+        return self._prefetch_factor if hasattr(self, '_prefetch_factor') else 2
 
     def close(self):
         """Clean up resources."""
         try:
             self._loader.stop()
-        except:
+        except Exception:
             pass
 
     def __del__(self):
