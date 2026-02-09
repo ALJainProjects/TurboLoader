@@ -12,7 +12,6 @@ import pytest
 import sys
 from unittest.mock import MagicMock, patch
 
-
 # ============================================================================
 # Label extractor tests (no C++ dependency)
 # ============================================================================
@@ -110,19 +109,23 @@ class TestLoaderAPIProperties:
     @pytest.fixture
     def mock_loader_class(self):
         """Set up mocks for turboloader and torch imports."""
-        with patch.dict(sys.modules, {
-            "torch": MagicMock(),
-            "torch.utils": MagicMock(),
-            "torch.utils.data": MagicMock(),
-            "_turboloader": MagicMock(),
-            "turboloader": MagicMock(),
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "torch": MagicMock(),
+                "torch.utils": MagicMock(),
+                "torch.utils.data": MagicMock(),
+                "_turboloader": MagicMock(),
+                "turboloader": MagicMock(),
+            },
+        ):
             # Force reimport with mocks
             if "turboloader.pytorch_compat" in sys.modules:
                 del sys.modules["turboloader.pytorch_compat"]
 
             # Patch module-level flags
             import turboloader.pytorch_compat as compat
+
             compat.TORCH_AVAILABLE = True
             compat.TURBOLOADER_AVAILABLE = True
             compat.turboloader = MagicMock()

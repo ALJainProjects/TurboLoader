@@ -338,10 +338,10 @@ class PyTorchCompatibleLoader:
         enable_distributed = False
         world_rank = 0
         world_size = 1
-        if sampler is not None and hasattr(sampler, 'num_replicas'):
+        if sampler is not None and hasattr(sampler, "num_replicas"):
             enable_distributed = True
-            world_rank = getattr(sampler, 'rank', 0)
-            world_size = getattr(sampler, 'num_replicas', 1)
+            world_rank = getattr(sampler, "rank", 0)
+            world_size = getattr(sampler, "num_replicas", 1)
 
         # Create underlying TurboLoader
         self._loader = turboloader.FastDataLoader(
@@ -389,10 +389,10 @@ class PyTorchCompatibleLoader:
         enable_distributed = False
         world_rank = 0
         world_size = 1
-        if self._sampler is not None and hasattr(self._sampler, 'num_replicas'):
+        if self._sampler is not None and hasattr(self._sampler, "num_replicas"):
             enable_distributed = True
-            world_rank = getattr(self._sampler, 'rank', 0)
-            world_size = getattr(self._sampler, 'num_replicas', 1)
+            world_rank = getattr(self._sampler, "rank", 0)
+            world_size = getattr(self._sampler, "num_replicas", 1)
 
         self._loader = turboloader.FastDataLoader(
             self._data_path,
@@ -432,7 +432,7 @@ class PyTorchCompatibleLoader:
 
                 labels_tensor = torch.tensor(labels, dtype=torch.long)
 
-                if self._pin_memory and labels_tensor.device.type == 'cpu':
+                if self._pin_memory and labels_tensor.device.type == "cpu":
                     labels_tensor = labels_tensor.pin_memory()
 
                 if self._device:
@@ -519,7 +519,7 @@ class PyTorchCompatibleLoader:
 
     @property
     def prefetch_factor(self) -> int:
-        return self._prefetch_factor if hasattr(self, '_prefetch_factor') else 2
+        return self._prefetch_factor if hasattr(self, "_prefetch_factor") else 2
 
     def close(self):
         """Clean up resources."""
