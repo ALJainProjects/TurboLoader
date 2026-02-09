@@ -41,16 +41,7 @@ import sys
 import json
 import tarfile
 from pathlib import Path
-from typing import (
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
-    Any,
-    Iterator
-)
+from typing import Callable, Dict, List, Optional, Tuple, Union, Any, Iterator
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -58,6 +49,7 @@ import numpy as np
 try:
     import torch
     from torch.utils.data import IterableDataset
+
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -67,6 +59,7 @@ except ImportError:
 try:
     from _turboloader import DataLoader as _DataLoaderBase
     import turboloader
+
     TURBOLOADER_AVAILABLE = True
 except ImportError:
     TURBOLOADER_AVAILABLE = False
@@ -75,6 +68,7 @@ except ImportError:
 # =============================================================================
 # LABEL EXTRACTORS
 # =============================================================================
+
 
 class LabelExtractor(ABC):
     """Base class for extracting labels from sample metadata."""
@@ -130,12 +124,12 @@ class FolderLabelExtractor(LabelExtractor):
     def extract(self, filename: str, metadata: Dict[str, Any]) -> int:
         """Extract label from folder name."""
         # Handle various path formats
-        parts = filename.replace('\\', '/').split('/')
+        parts = filename.replace("\\", "/").split("/")
 
         if len(parts) >= 2:
             class_name = parts[0]  # First directory is the class
         else:
-            class_name = 'unknown'
+            class_name = "unknown"
 
         # Get or assign index
         if class_name not in self._class_to_idx:
@@ -171,6 +165,7 @@ class FilenamePatternExtractor(LabelExtractor):
             group: Which capture group contains the label (default: 1)
         """
         import re
+
         self._pattern = re.compile(pattern)
         self._group = group
 
@@ -187,7 +182,7 @@ class MetadataLabelExtractor(LabelExtractor):
     Useful when labels are stored in sidecar files or TAR metadata.
     """
 
-    def __init__(self, key: str = 'label', default: int = 0):
+    def __init__(self, key: str = "label", default: int = 0):
         """
         Args:
             key: Metadata key containing the label
@@ -206,7 +201,7 @@ class JSONSidecarExtractor(LabelExtractor):
     For each image, looks for a corresponding .json file with label info.
     """
 
-    def __init__(self, label_key: str = 'label', cache: bool = True):
+    def __init__(self, label_key: str = "label", cache: bool = True):
         self._label_key = label_key
         self._cache = cache
         self._label_cache: Dict[str, int] = {}
@@ -217,9 +212,9 @@ class JSONSidecarExtractor(LabelExtractor):
             return self._label_cache[filename]
 
         # Try to find JSON in metadata
-        json_key = filename.rsplit('.', 1)[0] + '.json'
-        if 'json_data' in metadata:
-            data = metadata['json_data']
+        json_key = filename.rsplit(".", 1)[0] + ".json"
+        if "json_data" in metadata:
+            data = metadata["json_data"]
             label = data.get(self._label_key, 0)
         else:
             label = 0
@@ -249,6 +244,7 @@ class CallableLabelExtractor(LabelExtractor):
 # =============================================================================
 # PYTORCH COMPATIBLE LOADER
 # =============================================================================
+
 
 class PyTorchCompatibleLoader:
     """TurboLoader with PyTorch DataLoader-compatible interface.
@@ -342,17 +338,17 @@ class PyTorchCompatibleLoader:
         enable_distributed = False
         world_rank = 0
         world_size = 1
-        if sampler is not None and hasattr(sampler, 'num_replicas'):
+        if sampler is not None and hasattr(sampler, "num_replicas"):
             enable_distributed = True
-            world_rank = getattr(sampler, 'rank', 0)
-            world_size = getattr(sampler, 'num_replicas', 1)
+            world_rank = getattr(sampler, "rank", 0)
+            world_size = getattr(sampler, "num_replicas", 1)
 
         # Create underlying TurboLoader
         self._loader = turboloader.FastDataLoader(
             data_path,
             batch_size=batch_size,
             num_workers=num_workers,
-            output_format='pytorch',
+            output_format="pytorch",
             target_height=output_size[0] if output_size else 224,
             target_width=output_size[1] if output_size else 224,
             transform=transform,
@@ -393,16 +389,16 @@ class PyTorchCompatibleLoader:
         enable_distributed = False
         world_rank = 0
         world_size = 1
-        if self._sampler is not None and hasattr(self._sampler, 'num_replicas'):
+        if self._sampler is not None and hasattr(self._sampler, "num_replicas"):
             enable_distributed = True
-            world_rank = getattr(self._sampler, 'rank', 0)
-            world_size = getattr(self._sampler, 'num_replicas', 1)
+            world_rank = getattr(self._sampler, "rank", 0)
+            world_size = getattr(self._sampler, "num_replicas", 1)
 
         self._loader = turboloader.FastDataLoader(
             self._data_path,
             batch_size=self._batch_size,
             num_workers=self._num_workers,
-            output_format='pytorch',
+            output_format="pytorch",
             target_height=self._output_size[0] if self._output_size else 224,
             target_width=self._output_size[1] if self._output_size else 224,
             transform=self._transform,
@@ -416,9 +412,7 @@ class PyTorchCompatibleLoader:
         batch_count = 0
         while True:
             try:
-                images, metadata = self._loader.next_batch_torch(
-                    device=self._device
-                )
+                images, metadata = self._loader.next_batch_torch(device=self._device)
 
                 if images.numel() == 0:
                     if self._loader.is_finished():
@@ -426,18 +420,19 @@ class PyTorchCompatibleLoader:
                     continue
 
                 # Extract labels
-                filenames = metadata.get('filenames', [])
+                filenames = metadata.get("filenames", [])
                 labels = []
 
                 for i, fn in enumerate(filenames):
-                    sample_meta = {k: v[i] if isinstance(v, list) else v
-                                   for k, v in metadata.items()}
+                    sample_meta = {
+                        k: v[i] if isinstance(v, list) else v for k, v in metadata.items()
+                    }
                     label = self._label_extractor.extract(fn, sample_meta)
                     labels.append(label)
 
                 labels_tensor = torch.tensor(labels, dtype=torch.long)
 
-                if self._pin_memory and labels_tensor.device.type == 'cpu':
+                if self._pin_memory and labels_tensor.device.type == "cpu":
                     labels_tensor = labels_tensor.pin_memory()
 
                 if self._device:
@@ -524,7 +519,7 @@ class PyTorchCompatibleLoader:
 
     @property
     def prefetch_factor(self) -> int:
-        return self._prefetch_factor if hasattr(self, '_prefetch_factor') else 2
+        return self._prefetch_factor if hasattr(self, "_prefetch_factor") else 2
 
     def close(self):
         """Clean up resources."""
@@ -546,6 +541,7 @@ class PyTorchCompatibleLoader:
 # =============================================================================
 # IMAGE FOLDER CONVERTER
 # =============================================================================
+
 
 class ImageFolderConverter:
     """Convert ImageFolder-style directories to TurboLoader TAR format.
@@ -569,8 +565,17 @@ class ImageFolderConverter:
     """
 
     VALID_EXTENSIONS = {
-        '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp',
-        '.tiff', '.tif', '.ppm', '.pgm', '.pbm'
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".bmp",
+        ".gif",
+        ".webp",
+        ".tiff",
+        ".tif",
+        ".ppm",
+        ".pgm",
+        ".pbm",
     }
 
     def __init__(self, extensions: Optional[set] = None):
@@ -606,10 +611,9 @@ class ImageFolderConverter:
             raise ValueError(f"Source directory not found: {source_dir}")
 
         # Discover classes
-        classes = sorted([
-            d.name for d in source_path.iterdir()
-            if d.is_dir() and not d.name.startswith('.')
-        ])
+        classes = sorted(
+            [d.name for d in source_path.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        )
 
         if not classes:
             raise ValueError(f"No class directories found in {source_dir}")
@@ -621,15 +625,9 @@ class ImageFolderConverter:
         for class_name in classes:
             class_dir = source_path / class_name
             for ext in self._extensions:
-                all_files.extend([
-                    (f, class_name)
-                    for f in class_dir.rglob(f'*{ext}')
-                ])
+                all_files.extend([(f, class_name) for f in class_dir.rglob(f"*{ext}")])
                 # Also check uppercase
-                all_files.extend([
-                    (f, class_name)
-                    for f in class_dir.rglob(f'*{ext.upper()}')
-                ])
+                all_files.extend([(f, class_name) for f in class_dir.rglob(f"*{ext.upper()}")])
 
         # Remove duplicates and sort
         all_files = sorted(set(all_files), key=lambda x: str(x[0]))
@@ -641,14 +639,15 @@ class ImageFolderConverter:
 
         # Determine TAR mode
         if compression:
-            mode = f'w:{compression}'
+            mode = f"w:{compression}"
         else:
-            mode = 'w'
+            mode = "w"
 
         # Create TAR file
         if show_progress:
             try:
                 from tqdm import tqdm
+
                 iterator = tqdm(all_files, desc="Converting", unit="img")
             except ImportError:
                 iterator = all_files
@@ -664,13 +663,17 @@ class ImageFolderConverter:
 
         # Save class mapping
         if save_class_mapping:
-            mapping_path = output_path.rsplit('.', 1)[0] + '_classes.json'
-            with open(mapping_path, 'w') as f:
-                json.dump({
-                    'class_to_idx': class_to_idx,
-                    'classes': classes,
-                    'num_images': len(all_files),
-                }, f, indent=2)
+            mapping_path = output_path.rsplit(".", 1)[0] + "_classes.json"
+            with open(mapping_path, "w") as f:
+                json.dump(
+                    {
+                        "class_to_idx": class_to_idx,
+                        "classes": classes,
+                        "num_images": len(all_files),
+                    },
+                    f,
+                    indent=2,
+                )
             print(f"Saved class mapping to: {mapping_path}")
 
         print(f"Created TAR file: {output_path}")
@@ -701,15 +704,15 @@ class ImageFolderConverter:
         from PIL import Image
         from io import BytesIO
 
-        if not hasattr(dataset, 'samples'):
+        if not hasattr(dataset, "samples"):
             raise ValueError("Dataset must have 'samples' attribute (like ImageFolder)")
 
-        if hasattr(dataset, 'class_to_idx'):
+        if hasattr(dataset, "class_to_idx"):
             class_to_idx = dataset.class_to_idx
         else:
             class_to_idx = {}
 
-        if hasattr(dataset, 'classes'):
+        if hasattr(dataset, "classes"):
             classes = dataset.classes
         else:
             classes = list(class_to_idx.keys())
@@ -719,26 +722,32 @@ class ImageFolderConverter:
         if show_progress:
             try:
                 from tqdm import tqdm
-                iterator = tqdm(enumerate(samples), total=len(samples),
-                               desc="Converting", unit="img")
+
+                iterator = tqdm(
+                    enumerate(samples), total=len(samples), desc="Converting", unit="img"
+                )
             except ImportError:
                 iterator = enumerate(samples)
 
-        with tarfile.open(output_path, 'w') as tar:
+        with tarfile.open(output_path, "w") as tar:
             for idx, (path, label) in iterator:
                 file_path = Path(path)
-                class_name = classes[label] if classes else f'class_{label}'
+                class_name = classes[label] if classes else f"class_{label}"
                 rel_path = f"{class_name}/{file_path.name}"
                 tar.add(str(file_path), arcname=rel_path)
 
         # Save class mapping
-        mapping_path = output_path.rsplit('.', 1)[0] + '_classes.json'
-        with open(mapping_path, 'w') as f:
-            json.dump({
-                'class_to_idx': class_to_idx,
-                'classes': classes,
-                'num_images': len(samples),
-            }, f, indent=2)
+        mapping_path = output_path.rsplit(".", 1)[0] + "_classes.json"
+        with open(mapping_path, "w") as f:
+            json.dump(
+                {
+                    "class_to_idx": class_to_idx,
+                    "classes": classes,
+                    "num_images": len(samples),
+                },
+                f,
+                indent=2,
+            )
 
         print(f"Created TAR file: {output_path}")
         return class_to_idx
@@ -748,6 +757,7 @@ class ImageFolderConverter:
 # TRANSFORM COMPATIBILITY
 # =============================================================================
 
+
 class TransformAdapter:
     """Adapt torchvision transforms to work with TurboLoader.
 
@@ -756,21 +766,21 @@ class TransformAdapter:
 
     # Mapping from torchvision transform names to TurboLoader equivalents
     TRANSFORM_MAP = {
-        'Resize': 'Resize',
-        'CenterCrop': 'CenterCrop',
-        'RandomCrop': 'RandomCrop',
-        'RandomHorizontalFlip': 'RandomHorizontalFlip',
-        'RandomVerticalFlip': 'RandomVerticalFlip',
-        'ColorJitter': 'ColorJitter',
-        'Normalize': 'Normalize',
-        'ToTensor': 'ToTensor',
-        'RandomRotation': 'RandomRotation',
-        'GaussianBlur': 'GaussianBlur',
-        'Grayscale': 'Grayscale',
-        'Pad': 'Pad',
-        'RandomAffine': 'RandomAffine',
-        'RandomPerspective': 'RandomPerspective',
-        'RandomErasing': 'RandomErasing',
+        "Resize": "Resize",
+        "CenterCrop": "CenterCrop",
+        "RandomCrop": "RandomCrop",
+        "RandomHorizontalFlip": "RandomHorizontalFlip",
+        "RandomVerticalFlip": "RandomVerticalFlip",
+        "ColorJitter": "ColorJitter",
+        "Normalize": "Normalize",
+        "ToTensor": "ToTensor",
+        "RandomRotation": "RandomRotation",
+        "GaussianBlur": "GaussianBlur",
+        "Grayscale": "Grayscale",
+        "Pad": "Pad",
+        "RandomAffine": "RandomAffine",
+        "RandomPerspective": "RandomPerspective",
+        "RandomErasing": "RandomErasing",
     }
 
     @classmethod
@@ -798,58 +808,62 @@ class TransformAdapter:
         for t in tv_transforms.transforms:
             name = type(t).__name__
 
-            if name == 'Resize':
+            if name == "Resize":
                 size = t.size
                 if isinstance(size, int):
                     turbo_transforms.append(turboloader.Resize(size, size))
                 else:
                     turbo_transforms.append(turboloader.Resize(size[0], size[1]))
 
-            elif name == 'CenterCrop':
+            elif name == "CenterCrop":
                 size = t.size
                 if isinstance(size, int):
                     turbo_transforms.append(turboloader.CenterCrop(size, size))
                 else:
                     turbo_transforms.append(turboloader.CenterCrop(size[0], size[1]))
 
-            elif name == 'RandomCrop':
+            elif name == "RandomCrop":
                 size = t.size
                 if isinstance(size, int):
                     turbo_transforms.append(turboloader.RandomCrop(size, size))
                 else:
                     turbo_transforms.append(turboloader.RandomCrop(size[0], size[1]))
 
-            elif name == 'RandomHorizontalFlip':
-                p = getattr(t, 'p', 0.5)
+            elif name == "RandomHorizontalFlip":
+                p = getattr(t, "p", 0.5)
                 turbo_transforms.append(turboloader.RandomHorizontalFlip(p))
 
-            elif name == 'RandomVerticalFlip':
-                p = getattr(t, 'p', 0.5)
+            elif name == "RandomVerticalFlip":
+                p = getattr(t, "p", 0.5)
                 turbo_transforms.append(turboloader.RandomVerticalFlip(p))
 
-            elif name == 'ColorJitter':
-                turbo_transforms.append(turboloader.ColorJitter(
-                    brightness=t.brightness or 0,
-                    contrast=t.contrast or 0,
-                    saturation=t.saturation or 0,
-                    hue=t.hue or 0,
-                ))
+            elif name == "ColorJitter":
+                turbo_transforms.append(
+                    turboloader.ColorJitter(
+                        brightness=t.brightness or 0,
+                        contrast=t.contrast or 0,
+                        saturation=t.saturation or 0,
+                        hue=t.hue or 0,
+                    )
+                )
 
-            elif name == 'Normalize':
-                mean = list(t.mean) if hasattr(t.mean, '__iter__') else [t.mean]
-                std = list(t.std) if hasattr(t.std, '__iter__') else [t.std]
+            elif name == "Normalize":
+                mean = list(t.mean) if hasattr(t.mean, "__iter__") else [t.mean]
+                std = list(t.std) if hasattr(t.std, "__iter__") else [t.std]
                 # Check for ImageNet normalization
-                if (abs(mean[0] - 0.485) < 0.01 and
-                    abs(mean[1] - 0.456) < 0.01 and
-                    abs(mean[2] - 0.406) < 0.01):
+                if (
+                    abs(mean[0] - 0.485) < 0.01
+                    and abs(mean[1] - 0.456) < 0.01
+                    and abs(mean[2] - 0.406) < 0.01
+                ):
                     turbo_transforms.append(turboloader.ImageNetNormalize())
                 else:
                     turbo_transforms.append(turboloader.Normalize(mean, std))
 
-            elif name == 'ToTensor':
+            elif name == "ToTensor":
                 turbo_transforms.append(turboloader.ToTensor())
 
-            elif name == 'GaussianBlur':
+            elif name == "GaussianBlur":
                 kernel_size = t.kernel_size
                 if isinstance(kernel_size, (list, tuple)):
                     kernel_size = kernel_size[0]
@@ -858,10 +872,10 @@ class TransformAdapter:
                     sigma = sigma[0]
                 turbo_transforms.append(turboloader.GaussianBlur(kernel_size, sigma))
 
-            elif name == 'Grayscale':
+            elif name == "Grayscale":
                 turbo_transforms.append(turboloader.Grayscale())
 
-            elif name == 'RandomRotation':
+            elif name == "RandomRotation":
                 degrees = t.degrees
                 if isinstance(degrees, (list, tuple)):
                     max_deg = max(abs(degrees[0]), abs(degrees[1]))
@@ -869,11 +883,11 @@ class TransformAdapter:
                     max_deg = degrees
                 turbo_transforms.append(turboloader.RandomRotation(max_deg))
 
-            elif name == 'ToPILImage':
+            elif name == "ToPILImage":
                 # Skip - TurboLoader works with numpy arrays
                 pass
 
-            elif name == 'Lambda':
+            elif name == "Lambda":
                 # Can't convert lambdas - skip with warning
                 print(f"Warning: Cannot convert Lambda transform, skipping")
 
@@ -894,22 +908,22 @@ class TransformAdapter:
     def imagenet_train(cls):
         """Standard ImageNet training transforms."""
         return (
-            turboloader.Resize(256, 256) |
-            turboloader.RandomCrop(224, 224) |
-            turboloader.RandomHorizontalFlip(0.5) |
-            turboloader.ColorJitter(0.4, 0.4, 0.4, 0.1) |
-            turboloader.ImageNetNormalize() |
-            turboloader.ToTensor()
+            turboloader.Resize(256, 256)
+            | turboloader.RandomCrop(224, 224)
+            | turboloader.RandomHorizontalFlip(0.5)
+            | turboloader.ColorJitter(0.4, 0.4, 0.4, 0.1)
+            | turboloader.ImageNetNormalize()
+            | turboloader.ToTensor()
         )
 
     @classmethod
     def imagenet_val(cls):
         """Standard ImageNet validation transforms."""
         return (
-            turboloader.Resize(256, 256) |
-            turboloader.CenterCrop(224, 224) |
-            turboloader.ImageNetNormalize() |
-            turboloader.ToTensor()
+            turboloader.Resize(256, 256)
+            | turboloader.CenterCrop(224, 224)
+            | turboloader.ImageNetNormalize()
+            | turboloader.ToTensor()
         )
 
 
@@ -917,14 +931,15 @@ class TransformAdapter:
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
+
 def create_loader(
     data_path: str,
     batch_size: int = 32,
     shuffle: bool = True,
     num_workers: int = 4,
-    transform: str = 'imagenet_train',
+    transform: str = "imagenet_train",
     device: Optional[str] = None,
-    **kwargs
+    **kwargs,
 ) -> PyTorchCompatibleLoader:
     """Convenience function to create a PyTorch-compatible loader.
 
@@ -940,9 +955,9 @@ def create_loader(
     Returns:
         PyTorchCompatibleLoader instance
     """
-    if transform == 'imagenet_train':
+    if transform == "imagenet_train":
         transform = TransformAdapter.imagenet_train()
-    elif transform == 'imagenet_val':
+    elif transform == "imagenet_val":
         transform = TransformAdapter.imagenet_val()
 
     return PyTorchCompatibleLoader(
@@ -952,15 +967,11 @@ def create_loader(
         num_workers=num_workers,
         transform=transform,
         device=device,
-        **kwargs
+        **kwargs,
     )
 
 
-def convert_imagefolder(
-    source_dir: str,
-    output_tar: str,
-    **kwargs
-) -> Dict[str, int]:
+def convert_imagefolder(source_dir: str, output_tar: str, **kwargs) -> Dict[str, int]:
     """Convenience function to convert ImageFolder to TAR.
 
     Args:
@@ -981,19 +992,17 @@ def convert_imagefolder(
 
 __all__ = [
     # Main classes
-    'PyTorchCompatibleLoader',
-    'ImageFolderConverter',
-    'TransformAdapter',
-
+    "PyTorchCompatibleLoader",
+    "ImageFolderConverter",
+    "TransformAdapter",
     # Label extractors
-    'LabelExtractor',
-    'FolderLabelExtractor',
-    'FilenamePatternExtractor',
-    'MetadataLabelExtractor',
-    'JSONSidecarExtractor',
-    'CallableLabelExtractor',
-
+    "LabelExtractor",
+    "FolderLabelExtractor",
+    "FilenamePatternExtractor",
+    "MetadataLabelExtractor",
+    "JSONSidecarExtractor",
+    "CallableLabelExtractor",
     # Convenience functions
-    'create_loader',
-    'convert_imagefolder',
+    "create_loader",
+    "convert_imagefolder",
 ]

@@ -22,6 +22,7 @@ from io import BytesIO
 # Try to import PIL for creating test images
 try:
     from PIL import Image
+
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -29,14 +30,16 @@ except ImportError:
 # Try to import PyTorch
 try:
     import torch
+
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
 
 # Try to import TensorFlow
 try:
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TF warnings
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TF warnings
     import tensorflow as tf
+
     HAS_TF = True
 except ImportError:
     HAS_TF = False
@@ -48,10 +51,10 @@ def create_test_tar(num_images=20, width=256, height=192):
         pytest.skip("PIL not available for creating test images")
 
     # Create temp file
-    fd, tar_path = tempfile.mkstemp(suffix='.tar')
+    fd, tar_path = tempfile.mkstemp(suffix=".tar")
     os.close(fd)
 
-    with tarfile.open(tar_path, 'w') as tar:
+    with tarfile.open(tar_path, "w") as tar:
         for i in range(num_images):
             # Create a random RGB image
             img_array = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
@@ -59,11 +62,11 @@ def create_test_tar(num_images=20, width=256, height=192):
 
             # Save to buffer
             buf = BytesIO()
-            img.save(buf, format='JPEG', quality=90)
+            img.save(buf, format="JPEG", quality=90)
             buf.seek(0)
 
             # Add to tar
-            tarinfo = tarfile.TarInfo(name=f'image_{i:04d}.jpg')
+            tarinfo = tarfile.TarInfo(name=f"image_{i:04d}.jpg")
             tarinfo.size = len(buf.getvalue())
             tar.addfile(tarinfo, buf)
 
@@ -86,11 +89,7 @@ class TestNextBatchTorch:
         """Test that next_batch_torch returns a torch.Tensor."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=10, num_workers=2)
 
         images, metadata = loader.next_batch_torch()
 
@@ -102,18 +101,14 @@ class TestNextBatchTorch:
         """Test that PyTorch tensor has correct CHW shape."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=10, num_workers=2)
 
         images, _ = loader.next_batch_torch()
 
         # Should be (N, C, H, W)
         assert len(images.shape) == 4
         assert images.shape[0] <= 10  # batch size
-        assert images.shape[1] == 3   # channels first
+        assert images.shape[1] == 3  # channels first
         loader.stop()
 
     @pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not installed")
@@ -121,11 +116,7 @@ class TestNextBatchTorch:
         """Test default dtype is float32 (normalized)."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
         images, _ = loader.next_batch_torch()
 
@@ -140,11 +131,7 @@ class TestNextBatchTorch:
         """Test custom dtype conversion."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
         # Request float16
         images, _ = loader.next_batch_torch(dtype=torch.float16)
@@ -157,33 +144,26 @@ class TestNextBatchTorch:
         """Test CPU device placement."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
-        images, _ = loader.next_batch_torch(device='cpu')
+        images, _ = loader.next_batch_torch(device="cpu")
 
-        assert images.device.type == 'cpu'
+        assert images.device.type == "cpu"
         loader.stop()
 
     @pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not installed")
-    @pytest.mark.skipif(not torch.cuda.is_available() if HAS_TORCH else True,
-                       reason="CUDA not available")
+    @pytest.mark.skipif(
+        not torch.cuda.is_available() if HAS_TORCH else True, reason="CUDA not available"
+    )
     def test_torch_tensor_cuda_device(self, test_tar):
         """Test CUDA device placement."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
-        images, _ = loader.next_batch_torch(device='cuda')
+        images, _ = loader.next_batch_torch(device="cuda")
 
-        assert images.device.type == 'cuda'
+        assert images.device.type == "cuda"
         loader.stop()
 
     @pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not installed")
@@ -191,11 +171,7 @@ class TestNextBatchTorch:
         """Test that output tensor is contiguous."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
         images, _ = loader.next_batch_torch()
 
@@ -207,16 +183,12 @@ class TestNextBatchTorch:
         """Test that metadata is returned with tensors."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
         images, metadata = loader.next_batch_torch()
 
         assert isinstance(metadata, dict)
-        assert 'filenames' in metadata or 'indices' in metadata
+        assert "filenames" in metadata or "indices" in metadata
         loader.stop()
 
 
@@ -228,11 +200,7 @@ class TestNextBatchTF:
         """Test that next_batch_tf returns a tf.Tensor."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=10, num_workers=2)
 
         images, metadata = loader.next_batch_tf()
 
@@ -244,11 +212,7 @@ class TestNextBatchTF:
         """Test that TensorFlow tensor has correct HWC shape."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=10, num_workers=2)
 
         images, _ = loader.next_batch_tf()
 
@@ -263,11 +227,7 @@ class TestNextBatchTF:
         """Test default dtype is float32 (normalized)."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
         images, _ = loader.next_batch_tf()
 
@@ -282,11 +242,7 @@ class TestNextBatchTF:
         """Test custom dtype conversion."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
         # Request float16
         images, _ = loader.next_batch_tf(dtype=tf.float16)
@@ -299,11 +255,7 @@ class TestNextBatchTF:
         """Test that metadata is returned with tensors."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
         images, metadata = loader.next_batch_tf()
 
@@ -319,11 +271,7 @@ class TestFrameworkIntegration:
         """Test iterating through batches with PyTorch tensors."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=10, num_workers=2)
 
         total_images = 0
         batches = 0
@@ -341,11 +289,7 @@ class TestFrameworkIntegration:
         """Test iterating through batches with TensorFlow tensors."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=10, num_workers=2)
 
         total_images = 0
         batches = 0
@@ -363,11 +307,7 @@ class TestFrameworkIntegration:
         """Simulate a training loop with PyTorch tensors."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=8,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=8, num_workers=2)
 
         # Simulate simple model (just sum)
         for i in range(3):
@@ -385,11 +325,7 @@ class TestFrameworkIntegration:
         """Simulate a training loop with TensorFlow tensors."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=8,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=8, num_workers=2)
 
         # Simulate simple model (just sum)
         for i in range(3):
@@ -411,11 +347,7 @@ class TestEdgeCases:
         """Test with batch size of 1."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=1,
-            num_workers=1
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=1, num_workers=1)
 
         images, _ = loader.next_batch_torch()
 
@@ -427,11 +359,7 @@ class TestEdgeCases:
         """Test with batch size of 1."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=1,
-            num_workers=1
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=1, num_workers=1)
 
         images, _ = loader.next_batch_tf()
 
@@ -443,11 +371,7 @@ class TestEdgeCases:
         """Test getting multiple batches sequentially."""
         import turboloader
 
-        loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=5,
-            num_workers=2
-        )
+        loader = turboloader.FastDataLoader(test_tar, batch_size=5, num_workers=2)
 
         batches = []
         for _ in range(4):
@@ -469,21 +393,21 @@ class TestVersionInfo:
         """Test that version string is available."""
         import turboloader
 
-        assert hasattr(turboloader, '__version__')
-        assert turboloader.__version__.startswith('2.')
+        assert hasattr(turboloader, "__version__")
+        assert turboloader.__version__.startswith("2.")
 
     def test_fastdataloader_has_torch_method(self):
         """Test that FastDataLoader has next_batch_torch method."""
         import turboloader
 
-        assert hasattr(turboloader.FastDataLoader, 'next_batch_torch')
+        assert hasattr(turboloader.FastDataLoader, "next_batch_torch")
 
     def test_fastdataloader_has_tf_method(self):
         """Test that FastDataLoader has next_batch_tf method."""
         import turboloader
 
-        assert hasattr(turboloader.FastDataLoader, 'next_batch_tf')
+        assert hasattr(turboloader.FastDataLoader, "next_batch_tf")
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

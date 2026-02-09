@@ -15,6 +15,7 @@ from io import BytesIO
 # Try to import PIL for creating test images
 try:
     from PIL import Image
+
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -26,10 +27,10 @@ def create_test_tar(num_images=20, width=64, height=48):
         pytest.skip("PIL not available for creating test images")
 
     # Create temp file
-    fd, tar_path = tempfile.mkstemp(suffix='.tar')
+    fd, tar_path = tempfile.mkstemp(suffix=".tar")
     os.close(fd)
 
-    with tarfile.open(tar_path, 'w') as tar:
+    with tarfile.open(tar_path, "w") as tar:
         for i in range(num_images):
             # Create a random RGB image
             img_array = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
@@ -37,11 +38,11 @@ def create_test_tar(num_images=20, width=64, height=48):
 
             # Save to buffer
             buf = BytesIO()
-            img.save(buf, format='JPEG')
+            img.save(buf, format="JPEG")
             buf.seek(0)
 
             # Add to tar
-            tarinfo = tarfile.TarInfo(name=f'image_{i:04d}.jpg')
+            tarinfo = tarfile.TarInfo(name=f"image_{i:04d}.jpg")
             tarinfo.size = len(buf.getvalue())
             tar.addfile(tarinfo, buf)
 
@@ -62,12 +63,14 @@ class TestMemoryEfficientDataLoader:
     def test_import(self):
         """Test that MemoryEfficientDataLoader can be imported."""
         import turboloader
-        assert hasattr(turboloader, 'MemoryEfficientDataLoader')
+
+        assert hasattr(turboloader, "MemoryEfficientDataLoader")
 
     def test_in_all_exports(self):
         """Test that MemoryEfficientDataLoader is in __all__."""
         import turboloader
-        assert 'MemoryEfficientDataLoader' in turboloader.__all__
+
+        assert "MemoryEfficientDataLoader" in turboloader.__all__
 
     def test_creation_default(self, test_tar):
         """Test that MemoryEfficientDataLoader can be created with defaults."""
@@ -140,7 +143,7 @@ class TestMemoryEfficientDataLoader:
             test_tar,
             batch_size=10,
             max_memory_mb=512,
-            output_format='numpy',
+            output_format="numpy",
         )
 
         count = 0
@@ -159,7 +162,7 @@ class TestMemoryEfficientDataLoader:
             test_tar,
             batch_size=10,
             max_memory_mb=512,
-            output_format='numpy',
+            output_format="numpy",
         )
 
         images, _ = next(iter(loader))
@@ -175,6 +178,7 @@ class TestMemoryEfficientDataLoader:
 
         try:
             import torch
+
             HAS_TORCH = True
         except ImportError:
             HAS_TORCH = False
@@ -188,7 +192,7 @@ class TestMemoryEfficientDataLoader:
             test_tar,
             batch_size=10,
             max_memory_mb=512,
-            output_format='torch',
+            output_format="torch",
         )
 
         images, _ = next(iter(loader))
@@ -203,12 +207,14 @@ class TestCreateLoaderFactory:
     def test_import(self):
         """Test that create_loader can be imported."""
         import turboloader
-        assert hasattr(turboloader, 'create_loader')
+
+        assert hasattr(turboloader, "create_loader")
 
     def test_in_all_exports(self):
         """Test that create_loader is in __all__."""
         import turboloader
-        assert 'create_loader' in turboloader.__all__
+
+        assert "create_loader" in turboloader.__all__
 
     def test_create_fast_loader(self, test_tar):
         """Test creating a FastDataLoader via factory."""
@@ -216,7 +222,7 @@ class TestCreateLoaderFactory:
 
         loader = turboloader.create_loader(
             test_tar,
-            loader_type='fast',
+            loader_type="fast",
             batch_size=10,
         )
         assert isinstance(loader, turboloader.FastDataLoader)
@@ -228,7 +234,7 @@ class TestCreateLoaderFactory:
 
         loader = turboloader.create_loader(
             test_tar,
-            loader_type='memory_efficient',
+            loader_type="memory_efficient",
             batch_size=10,
             max_memory_mb=512,
         )
@@ -241,7 +247,7 @@ class TestCreateLoaderFactory:
 
         loader = turboloader.create_loader(
             test_tar,
-            loader_type='standard',
+            loader_type="standard",
             batch_size=10,
         )
         assert isinstance(loader, turboloader.DataLoader)
@@ -265,7 +271,7 @@ class TestCreateLoaderFactory:
         with pytest.raises(ValueError):
             turboloader.create_loader(
                 test_tar,
-                loader_type='invalid_type',
+                loader_type="invalid_type",
                 batch_size=10,
             )
 
@@ -275,10 +281,10 @@ class TestCreateLoaderFactory:
 
         loader = turboloader.create_loader(
             test_tar,
-            loader_type='memory_efficient',
+            loader_type="memory_efficient",
             batch_size=16,
             max_memory_mb=1024,
-            output_format='numpy',
+            output_format="numpy",
         )
         # Verify max_memory_mb was passed through
         assert loader.max_memory_mb == 1024
@@ -326,5 +332,5 @@ class TestMemoryComparison:
         mem_loader.stop()
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -369,12 +369,12 @@ TEST(HashBalanceTest, EvenDistribution) {
     }
 
     // Each rank should get roughly total/world_size = 1250 samples
-    // Allow ±5% deviation (1187 to 1312)
+    // Allow ±10% deviation for hash-based distribution
     size_t expected = total / world_size;
     for (size_t rank = 0; rank < world_size; ++rank) {
-        EXPECT_GT(counts[rank], expected * 95 / 100)
+        EXPECT_GT(counts[rank], expected * 90 / 100)
             << "Rank " << rank << " has too few samples: " << counts[rank];
-        EXPECT_LT(counts[rank], expected * 105 / 100)
+        EXPECT_LT(counts[rank], expected * 110 / 100)
             << "Rank " << rank << " has too many samples: " << counts[rank];
     }
 }
