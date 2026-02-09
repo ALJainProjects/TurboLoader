@@ -410,14 +410,21 @@ public:
 
     /**
      * @brief Set shuffle order for current epoch
+     *
+     * For small datasets (<10M samples), stores the full permutation.
+     * For large datasets, the shuffle order is regenerated from (rng_seed, epoch)
+     * during resume, which is always stored in the checkpoint state.
+     * This ensures reproducibility regardless of dataset size.
      */
     void set_shuffle_order(const std::vector<size_t>& order) {
         std::lock_guard<std::mutex> lock(mutex_);
-        // Only store if reasonably small (< 10M samples)
         if (order.size() < 10000000) {
             state_.shuffle_order = order;
             state_.shuffle_order_stored = true;
         } else {
+            // For large datasets, rely on seed + epoch for regeneration.
+            // The seed (rng_seed) and epoch are always stored in the state,
+            // so the shuffle order can be deterministically regenerated.
             state_.shuffle_order.clear();
             state_.shuffle_order_stored = false;
         }
@@ -751,6 +758,11 @@ public:
 
     /**
      * @brief Load state dict for resumption
+     *
+     * Restores exact iteration position. For shuffled datasets:
+     * - If shuffle order was stored (small datasets), restores it directly.
+     * - If not stored (large datasets >10M), regenerates from seed+epoch
+     *   to produce the identical permutation.
      */
     void load_state_dict(const PipelineState& state) {
         tracker_.load_state_dict(state);
@@ -759,7 +771,12 @@ public:
         if (index_gen_) {
             index_gen_->set_epoch(state.epoch);
             if (state.shuffle_order_stored && !state.shuffle_order.empty()) {
+                // Small dataset: restore stored order directly
                 index_gen_->set_indices(state.shuffle_order);
+            } else if (state.shuffled) {
+                // Large dataset: regenerate from seed+epoch (deterministic)
+                index_gen_->set_shuffle(true);
+                index_gen_->set_epoch(state.epoch);
             }
             index_gen_->skip_to(state.samples_processed);
         }
