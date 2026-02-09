@@ -367,6 +367,105 @@ void test_sample_integration() {
 }
 
 /**
+ * @brief Helper to create a TAR file with mixed image format filenames
+ *
+ * Creates TAR entries with different extensions to test that the reader
+ * indexes all supported image formats, not just JPEG.
+ */
+void create_mixed_format_tar(const std::string& path,
+                             const std::vector<std::string>& filenames) {
+    std::ofstream tar(path, std::ios::binary);
+    if (!tar) {
+        throw std::runtime_error("Failed to create test TAR file");
+    }
+
+    // Dummy image data (not a real image, just for indexing test)
+    const uint8_t dummy_data[] = {0x89, 0x50, 0x4E, 0x47, 0x00, 0x00, 0x00, 0x00};
+    const size_t data_size = sizeof(dummy_data);
+
+    for (const auto& filename : filenames) {
+        char header[512];
+        std::memset(header, 0, sizeof(header));
+        std::strncpy(header, filename.c_str(), 100);
+        std::snprintf(header + 100, 8, "%07o", 0644);
+        std::snprintf(header + 108, 8, "%07o", 0);
+        std::snprintf(header + 116, 8, "%07o", 0);
+        std::snprintf(header + 124, 12, "%011lo", data_size);
+        std::snprintf(header + 136, 12, "%011lo", 1234567890UL);
+        std::memset(header + 148, ' ', 8);
+        header[156] = '0';
+        std::memcpy(header + 257, "ustar\0", 6);
+        std::memcpy(header + 263, "00", 2);
+
+        unsigned int checksum = 0;
+        for (int j = 0; j < 512; ++j) {
+            checksum += static_cast<unsigned char>(header[j]);
+        }
+        std::snprintf(header + 148, 8, "%06o", checksum);
+        header[154] = '\0';
+        header[155] = ' ';
+
+        tar.write(header, sizeof(header));
+        tar.write(reinterpret_cast<const char*>(dummy_data), data_size);
+
+        size_t padding = (512 - (data_size % 512)) % 512;
+        if (padding > 0) {
+            char pad[512] = {0};
+            tar.write(pad, padding);
+        }
+    }
+
+    char zero_block[1024] = {0};
+    tar.write(zero_block, sizeof(zero_block));
+    tar.close();
+}
+
+/**
+ * @brief Test: Multi-format image indexing
+ *
+ * Verifies that the TAR reader indexes PNG, WebP, BMP, TIFF, PPM files
+ * in addition to JPEG, and correctly skips non-image files.
+ */
+void test_multi_format_indexing() {
+    std::cout << BOLD << "\n[TEST] Multi-Format Image Indexing" << RESET << std::endl;
+
+    const std::string tar_path = "/tmp/test_tar_mixed.tar";
+
+    std::vector<std::string> filenames = {
+        "cat/image1.jpg",
+        "cat/image2.jpeg",
+        "cat/image3.png",
+        "cat/image4.webp",
+        "cat/image5.bmp",
+        "cat/image6.tiff",
+        "cat/image7.tif",
+        "cat/image8.ppm",
+        "cat/image9.pgm",
+        "cat/image10.pbm",
+        "cat/image11.JPG",      // uppercase
+        "cat/image12.PNG",      // uppercase
+        "cat/readme.txt",       // non-image: should be skipped
+        "cat/data.json",        // non-image: should be skipped
+        "cat/model.bin",        // non-image: should be skipped
+    };
+
+    create_mixed_format_tar(tar_path, filenames);
+
+    TarReader reader(tar_path, 0, 1);
+
+    // 12 image files should be indexed, 3 non-image files skipped
+    size_t expected = 12;
+    assert(reader.total_samples() == expected);
+
+    std::cout << "  " << GREEN << "✓" << RESET << " Indexed " << expected
+              << " image files across all formats" << std::endl;
+    std::cout << "  " << GREEN << "✓" << RESET << " Skipped 3 non-image files (txt, json, bin)" << std::endl;
+
+    std::remove(tar_path.c_str());
+    std::cout << GREEN << "  PASSED" << RESET << std::endl;
+}
+
+/**
  * @brief Main test runner
  */
 int main() {
@@ -380,6 +479,7 @@ int main() {
         test_zero_copy_access();
         test_edge_cases();
         test_sample_integration();
+        test_multi_format_indexing();
 
         std::cout << BOLD << "\n╔═══════════════════════════════════════════════════════╗" << RESET << std::endl;
         std::cout << BOLD << "║  " << GREEN << "✓ ALL TESTS PASSED" << RESET << BOLD << "                                ║" << RESET << std::endl;
