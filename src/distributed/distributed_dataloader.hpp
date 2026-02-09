@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -116,15 +117,13 @@ public:
             indices.push_back(i);
         }
 
-        // Shuffle if requested (deterministically based on epoch)
+        // Shuffle using Fisher-Yates with deterministic PRNG seeded by (seed + epoch)
         if (shuffle_) {
-            // Simple deterministic shuffle using epoch and seed
-            // In production, would use std::mt19937 with (seed_ + epoch)
-            size_t shuffle_seed = seed_ + epoch;
+            std::mt19937 rng(static_cast<uint32_t>(seed_ + epoch));
             for (size_t i = indices.size() - 1; i > 0; --i) {
-                size_t j = (shuffle_seed * (i + 1)) % (i + 1);
+                std::uniform_int_distribution<size_t> dist(0, i);
+                size_t j = dist(rng);
                 std::swap(indices[i], indices[j]);
-                shuffle_seed = (shuffle_seed * 1103515245 + 12345) & 0x7FFFFFFF;
             }
         }
 

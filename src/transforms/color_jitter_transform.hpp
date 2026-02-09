@@ -74,20 +74,25 @@ private:
         );
         float factor = dist(rng_);
 
-        // Calculate mean brightness
+        // Calculate per-channel mean (matches torchvision behavior)
         size_t num_pixels = image.width * image.height;
-        float mean = 0.0f;
+        int ch = image.channels;
+        float channel_mean[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         for (size_t i = 0; i < num_pixels; ++i) {
-            for (int c = 0; c < image.channels; ++c) {
-                mean += image.data[i * image.channels + c];
+            for (int c = 0; c < ch; ++c) {
+                channel_mean[c] += image.data[i * ch + c];
             }
         }
-        mean /= (num_pixels * image.channels);
+        for (int c = 0; c < ch; ++c) {
+            channel_mean[c] /= num_pixels;
+        }
 
-        // Apply contrast: pixel = mean + factor * (pixel - mean)
-        for (size_t i = 0; i < num_pixels * image.channels; ++i) {
-            float val = mean + factor * (image.data[i] - mean);
-            image.data[i] = static_cast<uint8_t>(simd::clamp(val, 0.0f, 255.0f));
+        // Apply contrast per channel: pixel = mean[c] + factor * (pixel - mean[c])
+        for (size_t i = 0; i < num_pixels; ++i) {
+            for (int c = 0; c < ch; ++c) {
+                float val = channel_mean[c] + factor * (image.data[i * ch + c] - channel_mean[c]);
+                image.data[i * ch + c] = static_cast<uint8_t>(simd::clamp(val, 0.0f, 255.0f));
+            }
         }
     }
 

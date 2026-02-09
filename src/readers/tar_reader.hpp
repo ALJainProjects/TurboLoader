@@ -33,6 +33,7 @@
 #include <vector>
 #include <memory>
 #include <stdexcept>
+#include <cctype>
 #include <cstring>
 
 namespace turboloader {
@@ -379,8 +380,8 @@ private:
             size_t file_size = header->get_size();
             std::string filename = header->get_name();
 
-            // Only index JPEG files
-            if (is_jpeg_file(filename)) {
+            // Index all supported image formats
+            if (is_supported_image_file(filename)) {
                 size_t data_offset = offset + 512;  // Data starts after header
                 all_entries_.emplace_back(filename, data_offset, file_size, sample_index);
                 sample_index++;
@@ -424,29 +425,30 @@ private:
     }
 
     /**
-     * @brief Check if filename is JPEG
+     * @brief Check if filename is a supported image format
      *
      * @param filename File name to check
-     * @return true if .jpg or .jpeg extension
+     * @return true if a recognized image extension
      */
-    static bool is_jpeg_file(const std::string& filename) {
-        if (filename.size() < 4) {
+    static bool is_supported_image_file(const std::string& filename) {
+        // Find the last '.' for the extension
+        auto dot_pos = filename.rfind('.');
+        if (dot_pos == std::string::npos || dot_pos + 1 >= filename.size()) {
             return false;
         }
 
-        std::string ext = filename.substr(filename.size() - 4);
-        if (ext == ".jpg" || ext == ".JPG") {
-            return true;
+        // Extract extension and convert to lowercase
+        std::string ext = filename.substr(dot_pos);
+        for (auto& c : ext) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         }
 
-        if (filename.size() >= 5) {
-            ext = filename.substr(filename.size() - 5);
-            if (ext == ".jpeg" || ext == ".JPEG") {
-                return true;
-            }
-        }
-
-        return false;
+        return ext == ".jpg" || ext == ".jpeg" ||
+               ext == ".png" ||
+               ext == ".webp" ||
+               ext == ".bmp" ||
+               ext == ".tiff" || ext == ".tif" ||
+               ext == ".ppm" || ext == ".pgm" || ext == ".pbm";
     }
 
     size_t worker_id_;                  // Worker ID (0-based)

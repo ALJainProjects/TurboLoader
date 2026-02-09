@@ -310,10 +310,28 @@ std::mutex S3Reader::init_mutex_;
  *
  * This implementation uses signed URLs or public S3 URLs via HTTP.
  * Performance will be lower than native AWS SDK but works without dependencies.
+ *
+ * NOTE: This fallback only works for public buckets or pre-signed URLs.
+ * For private buckets, compile with HAVE_AWS_SDK for proper authentication.
  */
 class S3Reader {
 private:
     std::unique_ptr<HTTPReader> http_reader_;
+
+    /**
+     * @brief Check if response data looks like an S3/XML error page
+     *
+     * S3 returns XML error documents for auth failures, missing keys, etc.
+     * These must NOT be silently passed to image decoders.
+     */
+    static bool is_xml_error_response(const std::vector<uint8_t>& data) {
+        if (data.size() < 6) return false;
+        // Check for "<?xml" or "<Error" prefix (S3 error responses)
+        return (data[0] == '<' && data[1] == '?' && data[2] == 'x' &&
+                data[3] == 'm' && data[4] == 'l') ||
+               (data[0] == '<' && data[1] == 'E' && data[2] == 'r' &&
+                data[3] == 'r' && data[4] == 'o' && data[5] == 'r');
+    }
 
 public:
     explicit S3Reader(const S3Config& config) {
@@ -341,6 +359,10 @@ public:
 
     /**
      * @brief Fetch object from S3 via HTTP
+     *
+     * Validates that the response is actual object data, not an S3 XML
+     * error page (which happens when accessing private buckets without
+     * AWS SDK authentication).
      */
     bool fetch(const S3Request& request, S3Response& response) {
         std::string url = construct_url(request.config);
@@ -354,6 +376,14 @@ public:
 
         HTTPResponse http_response;
         if (http_reader_->fetch(http_request, http_response)) {
+            // Check for S3 XML error responses (auth failures, missing keys)
+            if (is_xml_error_response(http_response.data)) {
+                response.error_message =
+                    "S3 returned an XML error response. The bucket may require "
+                    "authentication. Compile with HAVE_AWS_SDK for proper S3 "
+                    "access, or use pre-signed URLs.";
+                return false;
+            }
             response.data = std::move(http_response.data);
             response.bytes_downloaded = http_response.bytes_downloaded;
             response.download_time_ms = http_response.download_time_ms;
@@ -369,7 +399,14 @@ public:
      */
     bool fetch_object(const S3Config& config, std::vector<uint8_t>& output) {
         std::string url = construct_url(config);
-        return http_reader_->fetch_file(url, output, config.timeout_ms);
+        if (!http_reader_->fetch_file(url, output, config.timeout_ms)) {
+            return false;
+        }
+        if (is_xml_error_response(output)) {
+            output.clear();
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -378,7 +415,14 @@ public:
     bool fetch_range(const S3Config& config, size_t offset, size_t size,
                      std::vector<uint8_t>& output) {
         std::string url = construct_url(config);
-        return http_reader_->fetch_range(url, offset, size, output, config.timeout_ms);
+        if (!http_reader_->fetch_range(url, offset, size, output, config.timeout_ms)) {
+            return false;
+        }
+        if (is_xml_error_response(output)) {
+            output.clear();
+            return false;
+        }
+        return true;
     }
 
     /**

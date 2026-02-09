@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 #include "../src/distributed/sharding_strategies.hpp"
+#include "../src/distributed/distributed_dataloader.hpp"
 #include <algorithm>
 #include <numeric>
 #include <set>
@@ -350,6 +351,82 @@ TEST(ShardingStringTest, StringToType) {
 
 TEST(ShardingStringTest, InvalidString) {
     EXPECT_THROW(string_to_sharding_type("INVALID"), std::invalid_argument);
+}
+
+// ============================================================================
+// Hash Distribution Balance Tests
+// ============================================================================
+
+TEST(HashBalanceTest, EvenDistribution) {
+    // With splitmix64 hash, distribution across ranks should be near-uniform
+    size_t total = 10000;
+    size_t world_size = 8;
+
+    std::vector<size_t> counts(world_size, 0);
+    for (size_t rank = 0; rank < world_size; ++rank) {
+        HashBasedSharding shard(total, world_size, rank);
+        counts[rank] = shard.size();
+    }
+
+    // Each rank should get roughly total/world_size = 1250 samples
+    // Allow ±5% deviation (1187 to 1312)
+    size_t expected = total / world_size;
+    for (size_t rank = 0; rank < world_size; ++rank) {
+        EXPECT_GT(counts[rank], expected * 95 / 100)
+            << "Rank " << rank << " has too few samples: " << counts[rank];
+        EXPECT_LT(counts[rank], expected * 105 / 100)
+            << "Rank " << rank << " has too many samples: " << counts[rank];
+    }
+}
+
+// ============================================================================
+// Distributed Sampler Shuffle Tests
+// ============================================================================
+
+TEST(DistributedShuffleTest, FisherYatesProducesPermutation) {
+    // Verify the shuffle produces a valid permutation (no duplicates, all present)
+    turboloader::distributed::DistributedConfig config;
+    config.world_size = 1;
+    config.rank = 0;
+    config.shuffle = true;
+    config.seed = 42;
+
+    turboloader::distributed::DistributedSampler sampler(100, config);
+    auto indices = sampler.get_indices(0);
+
+    // Should have all 100 indices
+    EXPECT_EQ(indices.size(), 100);
+
+    std::set<size_t> unique_indices(indices.begin(), indices.end());
+    EXPECT_EQ(unique_indices.size(), 100) << "Shuffle produced duplicates!";
+}
+
+TEST(DistributedShuffleTest, DifferentEpochsDifferentOrder) {
+    turboloader::distributed::DistributedConfig config;
+    config.world_size = 1;
+    config.rank = 0;
+    config.shuffle = true;
+    config.seed = 42;
+
+    turboloader::distributed::DistributedSampler sampler(100, config);
+    auto epoch0 = sampler.get_indices(0);
+    auto epoch1 = sampler.get_indices(1);
+
+    EXPECT_NE(epoch0, epoch1) << "Same order for different epochs";
+}
+
+TEST(DistributedShuffleTest, SameEpochSameOrder) {
+    turboloader::distributed::DistributedConfig config;
+    config.world_size = 1;
+    config.rank = 0;
+    config.shuffle = true;
+    config.seed = 42;
+
+    turboloader::distributed::DistributedSampler sampler(100, config);
+    auto run1 = sampler.get_indices(5);
+    auto run2 = sampler.get_indices(5);
+
+    EXPECT_EQ(run1, run2) << "Same epoch+seed should produce same order";
 }
 
 // ============================================================================

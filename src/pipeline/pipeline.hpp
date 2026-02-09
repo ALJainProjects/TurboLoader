@@ -327,7 +327,8 @@ public:
               std::shared_ptr<std::vector<uint8_t>> remote_tar_data = nullptr,
               size_t distributed_start_idx = 0,
               size_t distributed_end_idx = 0,
-              cache::TieredCache* cache = nullptr)
+              cache::TieredCache* cache = nullptr,
+              std::atomic<size_t>* samples_skipped = nullptr)
         : config_(config),
           worker_id_(worker_id),
           buffer_pool_(buffer_pool),
@@ -336,7 +337,8 @@ public:
           samples_processed_(0),
           distributed_start_idx_(distributed_start_idx),
           distributed_end_idx_(distributed_end_idx),
-          cache_(cache) {
+          cache_(cache),
+          samples_skipped_(samples_skipped) {
 
         // Per-worker TAR reader
         // Check if using remote TAR data (already fetched)
@@ -487,6 +489,7 @@ private:
                             throw std::runtime_error(
                                 "GPU decode failed for: " + entry.name);
                         }
+                        if (samples_skipped_) samples_skipped_->fetch_add(1, std::memory_order_relaxed);
                         continue;  // Skip corrupted (config allows)
                     }
                 } else
@@ -506,6 +509,7 @@ private:
                         if (!config_.skip_corrupted) {
                             throw;  // Re-throw if not skipping
                         }
+                        if (samples_skipped_) samples_skipped_->fetch_add(1, std::memory_order_relaxed);
                         continue;  // Skip corrupted (config allows)
                     }
                     usample.image_data = std::move(sample.decoded_rgb);
@@ -566,6 +570,9 @@ private:
 
     // Caching (NEW in v2.0.0)
     cache::TieredCache* cache_;
+
+    // Skip counter (shared with pipeline)
+    std::atomic<size_t>* samples_skipped_ = nullptr;
 
     // Shuffle support (NEW in v2.8.0)
     size_t epoch_ = 0;
@@ -687,7 +694,8 @@ public:
                 tar_workers_.push_back(std::make_unique<TarWorker>(
                     config_, i, buffer_pool_.get(), remote_tar_data,
                     distributed_start_idx_, distributed_end_idx_,
-                    tiered_cache_.get()
+                    tiered_cache_.get(),
+                    &samples_skipped_
                 ));
                 tar_workers_.back()->start();
             }
@@ -882,11 +890,16 @@ public:
 
     bool is_finished() const {
         if (config_.format == DataFormat::TAR) {
-            // Check if all workers are finished AND all queues are empty
+            // Two-pass check: first verify all workers are finished, then
+            // verify all queues are empty. The second pass catches items that
+            // may have been enqueued between individual worker checks.
             for (const auto& worker : tar_workers_) {
                 if (!worker->is_finished()) {
                     return false;
                 }
+            }
+            // All workers done - now check queues (items may still be in-flight)
+            for (const auto& worker : tar_workers_) {
                 if (!worker->get_queue()->empty()) {
                     return false;
                 }
@@ -904,7 +917,8 @@ public:
             }
             return true;
         } else {
-            return !running_ && fallback_queue_ && fallback_queue_->empty();
+            return !running_.load(std::memory_order_acquire) &&
+                   fallback_queue_ && fallback_queue_->empty();
         }
     }
 
@@ -1173,6 +1187,7 @@ private:
     std::atomic<bool> running_;
     std::atomic<size_t> samples_processed_;
     std::atomic<size_t> batches_produced_;
+    std::atomic<size_t> samples_skipped_{0};  // Corrupted/failed samples skipped
 
     // Smart Batching (NEW in v1.5.1, auto-detection in v2.3.0)
     std::unique_ptr<pipeline::SmartBatcher<UnifiedSample>> smart_batcher_;
@@ -1203,6 +1218,16 @@ public:
      */
     bool cache_enabled() const {
         return tiered_cache_ != nullptr;
+    }
+
+    /**
+     * @brief Get number of samples skipped due to decode errors
+     *
+     * Incremented when skip_corrupted=true and a sample fails to decode.
+     * Useful for monitoring data quality and detecting silent data loss.
+     */
+    size_t skipped_samples() const {
+        return samples_skipped_.load(std::memory_order_relaxed);
     }
 
     /**

@@ -451,17 +451,41 @@ private:
  * @brief Helper to convert ImageData to NumPy array
  */
 py::array_t<uint8_t> imagedata_to_numpy(const ImageData& img) {
-    py::array_t<uint8_t> array({
-        static_cast<py::ssize_t>(img.height),
-        static_cast<py::ssize_t>(img.width),
-        static_cast<py::ssize_t>(img.channels)
-    });
+    py::ssize_t h = static_cast<py::ssize_t>(img.height);
+    py::ssize_t w = static_cast<py::ssize_t>(img.width);
+    py::ssize_t c = static_cast<py::ssize_t>(img.channels);
 
+    py::array_t<uint8_t> array({h, w, c});
     auto buf = array.request();
-    uint8_t* ptr = static_cast<uint8_t*>(buf.ptr);
-    std::memcpy(ptr, img.data, img.width * img.height * img.channels);
+    std::memcpy(buf.ptr, img.data, static_cast<size_t>(h * w * c));
 
     return array;
+}
+
+/**
+ * @brief Zero-copy version: transfer ownership of ImageData to numpy via capsule
+ *
+ * When the caller can move the ImageData, this avoids the memcpy entirely.
+ * The ImageData is moved into a capsule that Python will destroy when the
+ * numpy array is garbage collected.
+ */
+py::array_t<uint8_t> imagedata_to_numpy_zerocopy(std::unique_ptr<ImageData> img) {
+    uint8_t* data_ptr = img->data;
+    py::ssize_t h = static_cast<py::ssize_t>(img->height);
+    py::ssize_t w = static_cast<py::ssize_t>(img->width);
+    py::ssize_t c = static_cast<py::ssize_t>(img->channels);
+
+    // Transfer ownership: the capsule destructor frees the ImageData
+    auto capsule = py::capsule(img.release(), [](void* p) {
+        delete static_cast<ImageData*>(p);
+    });
+
+    return py::array_t<uint8_t>(
+        {h, w, c},                              // shape
+        {w * c, c, static_cast<py::ssize_t>(1)}, // strides
+        data_ptr,                                // data pointer (no copy)
+        capsule                                  // prevent premature free
+    );
 }
 
 /**
@@ -794,7 +818,7 @@ PYBIND11_MODULE(_turboloader, m) {
         .def("apply", [](Transform& self, py::array_t<uint8_t> img) {
             auto input = numpy_to_imagedata(img);
             auto output = self.apply(*input);
-            return imagedata_to_numpy(*output);
+            return imagedata_to_numpy_zerocopy(std::move(output));
         }, "Apply transform to image\n\n"
            "Args:\n"
            "    img (np.ndarray): Input image (H, W, C) uint8\n\n"

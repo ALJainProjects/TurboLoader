@@ -87,6 +87,60 @@ TEST(TransformTest, ImageNetNormalize) {
     EXPECT_EQ(output->channels, 3);
 }
 
+// Test Normalize uint8 roundtrip (denormalization must include *255)
+TEST(TransformTest, NormalizeUint8Roundtrip) {
+    // Create a uniform image with known pixel value
+    int width = 4, height = 4, channels = 3;
+    size_t size = width * height * channels;
+    auto data = new uint8_t[size];
+    // Set all pixels to 128
+    std::memset(data, 128, size);
+    auto input = std::make_unique<ImageData>(data, width, height, channels,
+                                              width * channels, true);
+
+    std::vector<float> mean = {0.5f, 0.5f, 0.5f};
+    std::vector<float> std_vals = {0.5f, 0.5f, 0.5f};
+
+    // With these values: normalize = (128/255 - 0.5) / 0.5 ≈ 0.00392
+    // Denormalize: (0.00392 * 0.5 + 0.5) * 255 ≈ 128
+    NormalizeTransform normalize(mean, std_vals, false);
+    auto output = normalize.apply(*input);
+
+    EXPECT_EQ(output->width, width);
+    EXPECT_EQ(output->height, height);
+
+    // After normalize+denormalize roundtrip, pixel values should be close to original
+    for (size_t i = 0; i < size; ++i) {
+        EXPECT_NEAR(output->data[i], 128, 2)
+            << "Pixel " << i << " diverged after normalize roundtrip";
+    }
+}
+
+// Test Normalize denorm produces values in valid [0,255] range
+TEST(TransformTest, NormalizeDenormRange) {
+    auto input = create_test_image(10, 10, 3);
+    std::vector<float> mean = {0.485f, 0.456f, 0.406f};
+    std::vector<float> std_vals = {0.229f, 0.224f, 0.225f};
+
+    NormalizeTransform normalize(mean, std_vals, false);
+    auto output = normalize.apply(*input);
+
+    size_t size = 10 * 10 * 3;
+    for (size_t i = 0; i < size; ++i) {
+        // uint8 values are always in [0,255] by type, but we verify
+        // the denorm formula doesn't produce garbage (e.g., all zeros or all 255)
+        // by checking that at least some variation exists
+    }
+    // Verify we have pixel variation (not all clamped to 0 or 255)
+    int min_val = 255, max_val = 0;
+    for (size_t i = 0; i < size; ++i) {
+        min_val = std::min(min_val, (int)output->data[i]);
+        max_val = std::max(max_val, (int)output->data[i]);
+    }
+    EXPECT_LT(min_val, 200) << "All pixels clamped high - denorm likely broken";
+    EXPECT_GT(max_val, 50) << "All pixels clamped low - denorm likely broken";
+}
+
 // Test Flips
 TEST(TransformTest, HorizontalFlip) {
     auto input = create_test_image(10, 10, 3);
@@ -369,6 +423,84 @@ TEST(SIMDTest, HSVConversion) {
     EXPECT_NEAR(r2, r, 1);
     EXPECT_NEAR(g2, g, 1);
     EXPECT_NEAR(b2, b, 1);
+}
+
+// Test that color jitter contrast uses per-channel mean
+// With channels having very different mean values, global-mean contrast
+// would produce different results than per-channel mean contrast.
+TEST(ColorJitterTest, ContrastPerChannelMean) {
+    // Create a 4x4 image with very distinct channel means:
+    // R channel: all 200, G channel: all 50, B channel: all 100
+    const int w = 4, h = 4, ch = 3;
+    auto data = new uint8_t[w * h * ch];
+    for (int i = 0; i < w * h; ++i) {
+        data[i * 3 + 0] = 200;  // R
+        data[i * 3 + 1] = 50;   // G
+        data[i * 3 + 2] = 100;  // B
+    }
+    auto image = std::make_unique<ImageData>(data, w, h, ch, w * ch, true);
+
+    // Apply zero-contrast (factor=1.0 exactly) — with a fixed seed
+    // This effectively does: pixel = mean[c] + 1.0 * (pixel - mean[c]) = pixel
+    // So output should equal input regardless of per-channel vs global mean.
+    // But if we apply contrast factor=0.0 (full mean):
+    // Per-channel: R→200, G→50, B→100 (each becomes its own mean)
+    // Global mean: all→(200+50+100)/3 ≈ 117 — WRONG for per-channel
+
+    // For this test, we create a known image and verify that after contrast
+    // with a specific seed, each channel's pixels are within a valid range
+    // centered around their own mean (not a global mean).
+    ColorJitterTransform jitter(0.0f, 0.5f, 0.0f, 0.0f, 42);
+    auto output = jitter.apply(*image);
+
+    // Compute per-channel means of the output
+    float r_mean = 0, g_mean = 0, b_mean = 0;
+    for (int i = 0; i < w * h; ++i) {
+        r_mean += output->data[i * 3 + 0];
+        g_mean += output->data[i * 3 + 1];
+        b_mean += output->data[i * 3 + 2];
+    }
+    r_mean /= (w * h);
+    g_mean /= (w * h);
+    b_mean /= (w * h);
+
+    // With per-channel contrast, the mean of each channel should remain
+    // close to the original mean (contrast shifts toward the mean).
+    // Global mean (~117) would drag all channels toward 117.
+    EXPECT_NEAR(r_mean, 200.0f, 30.0f);  // R stays near 200
+    EXPECT_NEAR(g_mean, 50.0f, 30.0f);   // G stays near 50
+    EXPECT_NEAR(b_mean, 100.0f, 30.0f);  // B stays near 100
+}
+
+// Test bilinear interpolation at edges doesn't read out of bounds
+TEST(SIMDTest, BilinearBoundarySafety) {
+    // 2x2 image, 3 channels
+    const uint8_t data[] = {
+        10, 20, 30,   // (0,0)
+        40, 50, 60,   // (1,0)
+        70, 80, 90,   // (0,1)
+        100, 110, 120  // (1,1)
+    };
+
+    // Test at exact corners — should not crash or read OOB
+    float val = simd::bilinear_interpolate(data, 2, 2, 0.0f, 0.0f, 0, 3);
+    EXPECT_NEAR(val, 10.0f, 0.1f);
+
+    val = simd::bilinear_interpolate(data, 2, 2, 1.0f, 1.0f, 0, 3);
+    EXPECT_NEAR(val, 100.0f, 0.1f);
+
+    // Test at negative coordinates — should clamp safely
+    val = simd::bilinear_interpolate(data, 2, 2, -0.5f, -0.5f, 0, 3);
+    EXPECT_NEAR(val, 10.0f, 1.0f);  // Should clamp to (0,0)
+
+    // Test beyond image bounds — should clamp safely
+    val = simd::bilinear_interpolate(data, 2, 2, 2.0f, 2.0f, 0, 3);
+    EXPECT_NEAR(val, 100.0f, 1.0f);  // Should clamp to (1,1)
+
+    // Test at center with proper interpolation
+    val = simd::bilinear_interpolate(data, 2, 2, 0.5f, 0.5f, 0, 3);
+    // Expected: avg of all 4 pixels channel 0 = (10+40+70+100)/4 = 55
+    EXPECT_NEAR(val, 55.0f, 1.0f);
 }
 
 int main(int argc, char** argv) {
