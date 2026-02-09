@@ -482,9 +482,7 @@ try:
 
             # Decoded tensor cache (v2.7.0)
             self._cache_decoded = cache_decoded
-            self._cache_decoded_mb = (
-                cache_decoded_mb if cache_decoded_mb is not None else 4096
-            )
+            self._cache_decoded_mb = cache_decoded_mb if cache_decoded_mb is not None else 4096
             self._decoded_cache = []
             self._cache_populated = False
             self._cache_index = 0
@@ -591,8 +589,7 @@ try:
                 import torch
             except ImportError:
                 raise ImportError(
-                    "PyTorch is required for next_batch_torch(). "
-                    "Install with: pip install torch"
+                    "PyTorch is required for next_batch_torch(). " "Install with: pip install torch"
                 )
 
             import time
@@ -785,8 +782,7 @@ try:
                         # Make copies to ensure data persists
                         cached_images = images.copy()
                         cached_metadata = {
-                            k: (v.copy() if hasattr(v, "copy") else v)
-                            for k, v in metadata.items()
+                            k: (v.copy() if hasattr(v, "copy") else v) for k, v in metadata.items()
                         }
                         self._decoded_cache.append((cached_images, cached_metadata))
 
@@ -822,9 +818,7 @@ try:
                 return 0.0
             total_bytes = sum(
                 images.nbytes
-                + sum(
-                    v.nbytes if hasattr(v, "nbytes") else 0 for v in metadata.values()
-                )
+                + sum(v.nbytes if hasattr(v, "nbytes") else 0 for v in metadata.values())
                 for images, metadata in self._decoded_cache
             )
             return total_bytes / (1024 * 1024)
@@ -1445,9 +1439,7 @@ try:
             self._prefetch_batches = prefetch_batches
 
             # Calculate size schedule (linear interpolation)
-            self._sizes = np.linspace(
-                initial_size, final_size, warmup_epochs, dtype=int
-            )
+            self._sizes = np.linspace(initial_size, final_size, warmup_epochs, dtype=int)
 
             # Current epoch and size
             self._current_epoch = 0
@@ -1581,19 +1573,21 @@ try:
             convert_imagefolder,
         )
 
-        __all__.extend([
-            "PyTorchCompatibleLoader",
-            "ImageFolderConverter",
-            "TransformAdapter",
-            "LabelExtractor",
-            "FolderLabelExtractor",
-            "FilenamePatternExtractor",
-            "MetadataLabelExtractor",
-            "JSONSidecarExtractor",
-            "CallableLabelExtractor",
-            "create_pytorch_loader",
-            "convert_imagefolder",
-        ])
+        __all__.extend(
+            [
+                "PyTorchCompatibleLoader",
+                "ImageFolderConverter",
+                "TransformAdapter",
+                "LabelExtractor",
+                "FolderLabelExtractor",
+                "FilenamePatternExtractor",
+                "MetadataLabelExtractor",
+                "JSONSidecarExtractor",
+                "CallableLabelExtractor",
+                "create_pytorch_loader",
+                "convert_imagefolder",
+            ]
+        )
     except ImportError:
         # PyTorch not available - skip compatibility layer
         pass

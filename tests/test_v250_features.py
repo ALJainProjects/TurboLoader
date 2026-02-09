@@ -16,6 +16,7 @@ from io import BytesIO
 # Try to import PIL for creating test images
 try:
     from PIL import Image
+
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -27,10 +28,10 @@ def create_test_tar(num_images=20, width=64, height=48):
         pytest.skip("PIL not available for creating test images")
 
     # Create temp file
-    fd, tar_path = tempfile.mkstemp(suffix='.tar')
+    fd, tar_path = tempfile.mkstemp(suffix=".tar")
     os.close(fd)
 
-    with tarfile.open(tar_path, 'w') as tar:
+    with tarfile.open(tar_path, "w") as tar:
         for i in range(num_images):
             # Create a random RGB image
             img_array = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
@@ -38,11 +39,11 @@ def create_test_tar(num_images=20, width=64, height=48):
 
             # Save to buffer
             buf = BytesIO()
-            img.save(buf, format='JPEG')
+            img.save(buf, format="JPEG")
             buf.seek(0)
 
             # Add to tar
-            tarinfo = tarfile.TarInfo(name=f'image_{i:04d}.jpg')
+            tarinfo = tarfile.TarInfo(name=f"image_{i:04d}.jpg")
             tarinfo.size = len(buf.getvalue())
             tar.addfile(tarinfo, buf)
 
@@ -63,17 +64,15 @@ class TestFastDataLoader:
     def test_import(self):
         """Test that FastDataLoader can be imported."""
         import turboloader
-        assert hasattr(turboloader, 'FastDataLoader')
+
+        assert hasattr(turboloader, "FastDataLoader")
 
     def test_creation(self, test_tar):
         """Test that FastDataLoader can be created."""
         import turboloader
 
         loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2,
-            output_format='numpy'
+            test_tar, batch_size=10, num_workers=2, output_format="numpy"
         )
         assert loader is not None
 
@@ -82,10 +81,7 @@ class TestFastDataLoader:
         import turboloader
 
         loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2,
-            output_format='numpy'
+            test_tar, batch_size=10, num_workers=2, output_format="numpy"
         )
 
         # Use the iterator to get first batch
@@ -101,10 +97,7 @@ class TestFastDataLoader:
 
         batch_size = 10
         loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=batch_size,
-            num_workers=2,
-            output_format='numpy'  # HWC format
+            test_tar, batch_size=batch_size, num_workers=2, output_format="numpy"  # HWC format
         )
 
         images, _ = loader.next_batch()
@@ -120,10 +113,7 @@ class TestFastDataLoader:
 
         batch_size = 10
         loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=batch_size,
-            num_workers=2,
-            output_format='numpy_chw'  # CHW format
+            test_tar, batch_size=batch_size, num_workers=2, output_format="numpy_chw"  # CHW format
         )
 
         images, _ = loader.next_batch()
@@ -138,10 +128,7 @@ class TestFastDataLoader:
         import turboloader
 
         loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2,
-            output_format='numpy'
+            test_tar, batch_size=10, num_workers=2, output_format="numpy"
         )
 
         total_images = 0
@@ -164,26 +151,20 @@ class TestFastDataLoader:
         import turboloader
 
         loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2,
-            output_format='numpy'
+            test_tar, batch_size=10, num_workers=2, output_format="numpy"
         )
 
         _, metadata = loader.next_batch()
 
-        assert 'batch_size' in metadata
-        assert 'filenames' in metadata
+        assert "batch_size" in metadata
+        assert "filenames" in metadata
 
     def test_output_format_pytorch(self, test_tar):
         """Test that pytorch output format works."""
         import turboloader
 
         loader = turboloader.FastDataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2,
-            output_format='pytorch'
+            test_tar, batch_size=10, num_workers=2, output_format="pytorch"
         )
 
         images, _ = loader.next_batch()
@@ -199,18 +180,14 @@ class TestLoaderFactory:
     def test_import(self):
         """Test that Loader can be imported."""
         import turboloader
-        assert hasattr(turboloader, 'Loader')
+
+        assert hasattr(turboloader, "Loader")
 
     def test_loader_fast_false(self, test_tar):
         """Test that Loader with fast=False returns DataLoader."""
         import turboloader
 
-        loader = turboloader.Loader(
-            test_tar,
-            batch_size=10,
-            num_workers=2,
-            fast=False
-        )
+        loader = turboloader.Loader(test_tar, batch_size=10, num_workers=2, fast=False)
 
         assert isinstance(loader, turboloader.DataLoader)
 
@@ -218,12 +195,7 @@ class TestLoaderFactory:
         """Test that Loader with fast=True returns FastDataLoader."""
         import turboloader
 
-        loader = turboloader.Loader(
-            test_tar,
-            batch_size=10,
-            num_workers=2,
-            fast=True
-        )
+        loader = turboloader.Loader(test_tar, batch_size=10, num_workers=2, fast=True)
 
         assert isinstance(loader, turboloader.FastDataLoader)
 
@@ -231,11 +203,7 @@ class TestLoaderFactory:
         """Test that Loader defaults to DataLoader (fast=False)."""
         import turboloader
 
-        loader = turboloader.Loader(
-            test_tar,
-            batch_size=10,
-            num_workers=2
-        )
+        loader = turboloader.Loader(test_tar, batch_size=10, num_workers=2)
 
         assert isinstance(loader, turboloader.DataLoader)
 
@@ -248,7 +216,7 @@ class TestNextBatchArray:
         import turboloader
         from turboloader import _DataLoaderBase
 
-        assert hasattr(_DataLoaderBase, 'next_batch_array')
+        assert hasattr(_DataLoaderBase, "next_batch_array")
 
     def test_returns_contiguous_array(self, test_tar):
         """Test that next_batch_array returns contiguous numpy array."""
@@ -260,7 +228,7 @@ class TestNextBatchArray:
         images, metadata = loader.next_batch_array()
 
         assert isinstance(images, np.ndarray)
-        assert images.flags['C_CONTIGUOUS']
+        assert images.flags["C_CONTIGUOUS"]
 
     def test_chw_format(self, test_tar):
         """Test CHW format conversion."""
@@ -284,7 +252,7 @@ class TestNextBatchInto:
         import turboloader
         from turboloader import _DataLoaderBase
 
-        assert hasattr(_DataLoaderBase, 'next_batch_into')
+        assert hasattr(_DataLoaderBase, "next_batch_into")
 
     def test_fills_preallocated_buffer(self, test_tar):
         """Test that next_batch_into fills a pre-allocated buffer."""
@@ -326,6 +294,7 @@ class TestVersion:
     def test_version_is_250(self):
         """Test that version is 2.5.0."""
         import turboloader
+
         assert turboloader.__version__.startswith("2.")
 
 
@@ -336,22 +305,18 @@ class TestBackwardCompatibility:
         """Test that DataLoader iteration still works."""
         import turboloader
 
-        loader = turboloader.DataLoader(
-            test_tar,
-            batch_size=10,
-            num_workers=2
-        )
+        loader = turboloader.DataLoader(test_tar, batch_size=10, num_workers=2)
 
         batch_count = 0
         for batch in loader:
             assert isinstance(batch, list)
             assert len(batch) <= 10
             if len(batch) > 0:
-                assert 'image' in batch[0]
+                assert "image" in batch[0]
             batch_count += 1
 
         assert batch_count > 0
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
