@@ -271,14 +271,19 @@ def get_extensions():
         "src",  # For pipeline headers
     ]
     library_dirs = [jpeg_lib, png_lib, webp_lib, curl_lib, lz4_lib]
+    # Detect compiler for LTO flag: Clang uses -flto=thin, GCC uses -flto
+    import platform as _plat
+
+    lto_flag = "-flto=thin" if _plat.system() == "Darwin" else "-flto"
+
     compile_args = [
         "-std=c++20",
         "-O3",
         "-fvisibility=hidden",
         "-funroll-loops",
-        "-flto=thin",
+        lto_flag,
     ]
-    link_args = ["-flto=thin"]
+    link_args = [lto_flag]
 
     if omp:
         compile_args.extend(omp["compile_flags"])
