@@ -294,15 +294,20 @@ public:
 
     /**
      * @brief Get the hash value for a sample index
+     *
+     * Uses a strong mixing function (splitmix64-based) to ensure
+     * uniform distribution across ranks, avoiding the bias that
+     * simpler hashes produce with modulo assignment.
      */
     size_t hash_index(size_t idx) const {
-        // FNV-1a hash variant
-        uint64_t hash = seed_;
-        hash ^= idx;
-        hash *= 0x100000001b3ULL;
-        hash ^= (idx >> 32);
-        hash *= 0x100000001b3ULL;
-        return hash % world_size_;
+        // splitmix64 mixing function for high-quality uniform distribution
+        uint64_t x = seed_ ^ idx;
+        x ^= x >> 30;
+        x *= 0xbf58476d1ce4e5b9ULL;
+        x ^= x >> 27;
+        x *= 0x94d049bb133111ebULL;
+        x ^= x >> 31;
+        return x % world_size_;
     }
 
 private:
