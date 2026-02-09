@@ -316,6 +316,7 @@ public:
                 input.width, input.height, input.channels,
                 input.width * input.channels * sizeof(float), true
             );
+            output->is_float32 = true;
 
             // Transfer ownership
             tensor->owns_data = false;
@@ -329,6 +330,7 @@ public:
                 input.width, input.height, input.channels,
                 input.width * input.channels * sizeof(float), true
             );
+            output->is_float32 = true;
 
             tensor->owns_data = false;
             return output;

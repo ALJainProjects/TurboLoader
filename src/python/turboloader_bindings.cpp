@@ -240,10 +240,23 @@ public:
             for (size_t i = 0; i < batch_size; ++i) {
                 const auto& sample = samples[i];
 
-                // Skip samples with wrong dimensions
-                if (sample.width != width || sample.height != height ||
-                    sample.channels != channels || sample.image_data.empty()) {
+                // Skip empty samples or channel mismatch
+                if (sample.image_data.empty() || sample.channels != channels) {
+                    std::memset(dst + i * single_image_size, 0, single_image_size);
                     continue;
+                }
+
+                // Resize if dimensions don't match target
+                const uint8_t* src_data = sample.image_data.data();
+                std::vector<uint8_t> resized_buf;
+                if (sample.width != width || sample.height != height) {
+                    resized_buf.resize(static_cast<size_t>(width) * height * channels);
+                    transforms::simd::resize_bilinear_simd(
+                        src_data, resized_buf.data(),
+                        sample.width, sample.height,
+                        width, height, channels
+                    );
+                    src_data = resized_buf.data();
                 }
 
                 if (chw_format) {
@@ -251,9 +264,8 @@ public:
                     size_t num_pixels = static_cast<size_t>(height) * width;
                     uint8_t* img_dst = dst + i * single_image_size;
 
-                    // Use SIMD transpose for 3-5x speedup on ARM NEON
                     transforms::simd::transpose_hwc_to_chw(
-                        sample.image_data.data(),
+                        src_data,
                         img_dst,
                         num_pixels,
                         channels
@@ -261,7 +273,7 @@ public:
                 } else {
                     // Direct copy for HWC format
                     std::memcpy(dst + i * single_image_size,
-                               sample.image_data.data(),
+                               src_data,
                                single_image_size);
                 }
             }
@@ -336,6 +348,175 @@ public:
         }
 
         return count;
+    }
+
+    /**
+     * @brief Get next batch as float32 NumPy array with SIMD conversion (HIGHEST PERFORMANCE)
+     *
+     * Performs uint8→float32 conversion, HWC→CHW transpose, and optional
+     * mean/std normalization entirely in C++ with SIMD and OpenMP.
+     * Avoids the Python per-image loop entirely.
+     *
+     * @param chw_format If true, return (N, C, H, W); else (N, H, W, C)
+     * @param target_height Target height (0 = use first image's height)
+     * @param target_width Target width (0 = use first image's width)
+     * @param normalize_01 Divide by 255 to get [0,1] range
+     * @param mean Optional per-channel mean subtraction (e.g., ImageNet mean)
+     * @param std Optional per-channel std division (e.g., ImageNet std)
+     * @return Tuple of (float32_array, metadata_dict)
+     */
+    std::tuple<py::array_t<float>, py::dict> next_batch_array_float32(
+        bool chw_format = true,
+        int target_height = 0,
+        int target_width = 0,
+        bool normalize_01 = true,
+        std::vector<float> mean = {},
+        std::vector<float> std_vec = {}
+    ) {
+        if (!pipeline_) {
+            throw std::runtime_error("DataLoader not initialized");
+        }
+
+        // Get batch from pipeline (with GIL released)
+        std::vector<UnifiedSample> samples;
+        {
+            py::gil_scoped_release release;
+            auto batch = pipeline_->next_batch();
+            samples = std::move(batch.samples);
+        }
+
+        if (samples.empty()) {
+            return {py::array_t<float>(), py::dict()};
+        }
+
+        // Determine dimensions from first sample or targets
+        int height = target_height > 0 ? target_height : samples[0].height;
+        int width = target_width > 0 ? target_width : samples[0].width;
+        int channels = samples[0].channels;
+        size_t batch_size = samples.size();
+        size_t num_pixels = static_cast<size_t>(height) * width;
+        size_t single_image_floats = num_pixels * channels;
+
+        // Allocate single contiguous float32 array for entire batch
+        py::array_t<float> array;
+        if (chw_format) {
+            array = py::array_t<float>({
+                static_cast<py::ssize_t>(batch_size),
+                static_cast<py::ssize_t>(channels),
+                static_cast<py::ssize_t>(height),
+                static_cast<py::ssize_t>(width)
+            });
+        } else {
+            array = py::array_t<float>({
+                static_cast<py::ssize_t>(batch_size),
+                static_cast<py::ssize_t>(height),
+                static_cast<py::ssize_t>(width),
+                static_cast<py::ssize_t>(channels)
+            });
+        }
+
+        auto buf = array.request();
+        float* dst = static_cast<float*>(buf.ptr);
+
+        bool has_mean_std = !mean.empty() && !std_vec.empty() &&
+                           mean.size() == static_cast<size_t>(channels) &&
+                           std_vec.size() == static_cast<size_t>(channels);
+
+        // Process all samples in parallel (GIL released)
+        {
+            py::gil_scoped_release release;
+
+            #pragma omp parallel for if(batch_size > 4)
+            for (size_t i = 0; i < batch_size; ++i) {
+                const auto& sample = samples[i];
+
+                // Skip empty samples
+                if (sample.image_data.empty() || sample.channels != channels) {
+                    std::memset(dst + i * single_image_floats, 0,
+                               single_image_floats * sizeof(float));
+                    continue;
+                }
+
+                // Resize if dimensions don't match target
+                const uint8_t* src_data = sample.image_data.data();
+                std::vector<uint8_t> resized_buf;
+                if (sample.width != width || sample.height != height) {
+                    resized_buf.resize(static_cast<size_t>(width) * height * channels);
+                    transforms::simd::resize_bilinear_simd(
+                        src_data, resized_buf.data(),
+                        sample.width, sample.height,
+                        width, height, channels
+                    );
+                    src_data = resized_buf.data();
+                }
+
+                float* img_dst = dst + i * single_image_floats;
+
+                if (chw_format) {
+                    // HWC uint8 → CHW float32
+                    for (int c = 0; c < channels; ++c) {
+                        float* channel_dst = img_dst + c * num_pixels;
+
+                        // Extract channel and convert to float in one pass
+                        if (normalize_01) {
+                            const float inv_255 = 1.0f / 255.0f;
+                            for (size_t p = 0; p < num_pixels; ++p) {
+                                channel_dst[p] = src_data[p * channels + c] * inv_255;
+                            }
+                        } else {
+                            for (size_t p = 0; p < num_pixels; ++p) {
+                                channel_dst[p] = static_cast<float>(src_data[p * channels + c]);
+                            }
+                        }
+
+                        if (has_mean_std) {
+                            transforms::simd::normalize_f32(
+                                channel_dst, channel_dst,
+                                mean[c], std_vec[c], num_pixels
+                            );
+                        }
+                    }
+                } else {
+                    // HWC uint8 → HWC float32
+                    size_t total_elements = num_pixels * channels;
+
+                    if (normalize_01) {
+                        transforms::simd::cvt_u8_to_f32_normalized(
+                            src_data, img_dst, total_elements
+                        );
+                    } else {
+                        for (size_t j = 0; j < total_elements; ++j) {
+                            img_dst[j] = static_cast<float>(src_data[j]);
+                        }
+                    }
+
+                    if (has_mean_std) {
+                        for (size_t p = 0; p < num_pixels; ++p) {
+                            for (int c = 0; c < channels; ++c) {
+                                size_t idx = p * channels + c;
+                                img_dst[idx] = (img_dst[idx] - mean[c]) / std_vec[c];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build lightweight metadata dict
+        py::dict metadata;
+        py::list indices, filenames;
+        for (const auto& sample : samples) {
+            indices.append(sample.index);
+            filenames.append(sample.filename);
+        }
+        metadata["indices"] = indices;
+        metadata["filenames"] = filenames;
+        metadata["batch_size"] = batch_size;
+        metadata["height"] = height;
+        metadata["width"] = width;
+        metadata["channels"] = channels;
+
+        return {array, metadata};
     }
 
     /**
@@ -489,6 +670,39 @@ py::array_t<uint8_t> imagedata_to_numpy_zerocopy(std::unique_ptr<ImageData> img)
 }
 
 /**
+ * @brief Auto-detecting version: returns float32 or uint8 numpy array based on is_float32 flag
+ *
+ * When transforms produce float32 data (NormalizeTransform, ToTensorTransform),
+ * the data is stored via reinterpret_cast<uint8_t*>. This function checks the
+ * is_float32 flag and returns the correct dtype numpy array.
+ */
+py::object imagedata_to_numpy_auto(std::unique_ptr<ImageData> img) {
+    if (img->is_float32) {
+        float* data_ptr = reinterpret_cast<float*>(img->data);
+        py::ssize_t h = static_cast<py::ssize_t>(img->height);
+        py::ssize_t w = static_cast<py::ssize_t>(img->width);
+        py::ssize_t c = static_cast<py::ssize_t>(img->channels);
+
+        auto capsule = py::capsule(img.release(), [](void* p) {
+            delete static_cast<ImageData*>(p);
+        });
+
+        py::array_t<float> arr(
+            {h, w, c},
+            {w * c * static_cast<py::ssize_t>(sizeof(float)),
+             c * static_cast<py::ssize_t>(sizeof(float)),
+             static_cast<py::ssize_t>(sizeof(float))},
+            data_ptr,
+            capsule
+        );
+        return std::move(arr);
+    } else {
+        py::array_t<uint8_t> arr = imagedata_to_numpy_zerocopy(std::move(img));
+        return std::move(arr);
+    }
+}
+
+/**
  * @brief Helper to convert NumPy array to ImageData
  */
 std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
@@ -517,7 +731,7 @@ std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
  */
 PYBIND11_MODULE(_turboloader, m) {
     m.doc() = "TurboLoader v2.1.0 - High-performance data loading for ML\n\n"
-              "Drop-in replacement for PyTorch DataLoader with 12x speedup.\n\n"
+              "Drop-in replacement for PyTorch DataLoader, ~2x faster.\n\n"
               "Features:\n"
               "- ARM NEON optimizations (3-5x speedup on Apple Silicon)\n"
               "- Modern augmentations: MixUp, CutMix, Mosaic, RandAugment\n"
@@ -652,6 +866,27 @@ PYBIND11_MODULE(_turboloader, m) {
              "    buffer (np.ndarray): Pre-allocated array of shape (N, H, W, C)\n\n"
              "Returns:\n"
              "    int: Number of samples actually filled (may be < N for last batch)"
+        )
+        .def("next_batch_array_float32", &DataLoader::next_batch_array_float32,
+             py::arg("chw_format") = true,
+             py::arg("target_height") = 0,
+             py::arg("target_width") = 0,
+             py::arg("normalize_01") = true,
+             py::arg("mean") = std::vector<float>{},
+             py::arg("std") = std::vector<float>{},
+             "Get next batch as float32 array with SIMD conversion (HIGHEST PERFORMANCE)\n\n"
+             "Performs uint8->float32 conversion, HWC->CHW transpose, and optional\n"
+             "mean/std normalization entirely in C++ with SIMD and OpenMP.\n"
+             "This is the fastest path for PyTorch training.\n\n"
+             "Args:\n"
+             "    chw_format (bool): If True, return (N, C, H, W); else (N, H, W, C)\n"
+             "    target_height (int): Target height (0 = auto from first image)\n"
+             "    target_width (int): Target width (0 = auto from first image)\n"
+             "    normalize_01 (bool): Divide by 255 to get [0,1] range (default: True)\n"
+             "    mean (list[float]): Per-channel mean subtraction (default: [])\n"
+             "    std (list[float]): Per-channel std division (default: [])\n\n"
+             "Returns:\n"
+             "    tuple: (float32_array, metadata_dict)"
         )
         .def("is_finished", &DataLoader::is_finished,
              "Check if all data has been processed\n\n"
@@ -818,12 +1053,12 @@ PYBIND11_MODULE(_turboloader, m) {
         .def("apply", [](Transform& self, py::array_t<uint8_t> img) {
             auto input = numpy_to_imagedata(img);
             auto output = self.apply(*input);
-            return imagedata_to_numpy_zerocopy(std::move(output));
+            return imagedata_to_numpy_auto(std::move(output));
         }, "Apply transform to image\n\n"
            "Args:\n"
            "    img (np.ndarray): Input image (H, W, C) uint8\n\n"
            "Returns:\n"
-           "    np.ndarray: Transformed image (H, W, C) uint8")
+           "    np.ndarray: Transformed image - uint8 or float32 depending on transform")
         .def("name", &Transform::name,
              "Get transform name\n\n"
              "Returns:\n"
@@ -875,12 +1110,12 @@ PYBIND11_MODULE(_turboloader, m) {
              "Example:\n"
              "    >>> transform = turboloader.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])")
         .def(py::init<const std::vector<float>&, const std::vector<float>&, bool>(),
-             py::arg("mean"), py::arg("std"), py::arg("to_float") = false,
+             py::arg("mean"), py::arg("std"), py::arg("to_float") = true,
              "Create Normalize transform\n\n"
              "Args:\n"
              "    mean (list[float]): Mean values for each channel\n"
              "    std (list[float]): Standard deviation for each channel\n"
-             "    to_float (bool): Convert to float32 (default: False)");
+             "    to_float (bool): Convert to float32 (default: True)");
 
     py::class_<ImageNetNormalize, NormalizeTransform>(m, "ImageNetNormalize",
              "ImageNet normalization preset\n\n"
@@ -888,10 +1123,10 @@ PYBIND11_MODULE(_turboloader, m) {
              "Convenient shorthand for ImageNet training/validation.\n\n"
              "Example:\n"
              "    >>> transform = turboloader.ImageNetNormalize(to_float=True)")
-        .def(py::init<bool>(), py::arg("to_float") = false,
+        .def(py::init<bool>(), py::arg("to_float") = true,
              "Create ImageNet normalization transform\n\n"
              "Args:\n"
-             "    to_float (bool): Convert to float32 (default: False)");
+             "    to_float (bool): Convert to float32 (default: True)");
 
     // Flips
     py::class_<RandomHorizontalFlipTransform, Transform>(m, "RandomHorizontalFlip",
@@ -1189,13 +1424,13 @@ PYBIND11_MODULE(_turboloader, m) {
             }
         }
 
-        py::array_t<uint8_t> apply(py::array_t<uint8_t> img) {
-            py::array_t<uint8_t> current = img;
+        py::object apply(py::array_t<uint8_t> img) {
+            py::object current = py::reinterpret_borrow<py::object>(img);
 
             // Apply each transform sequentially
             for (const auto& transform_obj : transforms_) {
                 // Call the transform's apply method
-                current = transform_obj.attr("apply")(current).cast<py::array_t<uint8_t>>();
+                current = transform_obj.attr("apply")(current);
             }
 
             return current;
@@ -1221,7 +1456,7 @@ PYBIND11_MODULE(_turboloader, m) {
              "Args:\n"
              "    img (np.ndarray): Input image (H, W, C) uint8\n\n"
              "Returns:\n"
-             "    np.ndarray: Transformed image")
+             "    np.ndarray: Transformed image (uint8 or float32)")
         .def("__len__", &PyTransformPipeline::size,
              "Get number of transforms in pipeline")
         .def("__call__", &PyTransformPipeline::apply,

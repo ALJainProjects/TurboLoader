@@ -79,7 +79,7 @@ Production-Ready Features:
 - Cached image dimensions for fast filtered loading
 - Rich metadata support (JSON, Protobuf, MessagePack)
 - 4,875 img/s TAR→TBL conversion throughput
-- 21,035 img/s throughput with 16 workers (12x faster than PyTorch, 1.3x faster than TensorFlow)
+- 21,035 img/s throughput with 16 workers (~2x faster than PyTorch DataLoader)
 - Smart Batching: Size-based sample grouping reduces padding by 15-25%, ~1.2x throughput boost
 - Distributed Training: Multi-node data loading with deterministic sharding (PyTorch DDP, Horovod, DeepSpeed)
 - 24 SIMD-accelerated data augmentation transforms (AVX2/NEON)
@@ -506,6 +506,73 @@ try:
                 prefetch_batches,
             )
 
+        def _extract_normalize_params(self):
+            """Extract mean/std from transform pipeline for C++ fast path.
+
+            Walks the transform pipeline to find Normalize/ImageNetNormalize
+            and extracts their mean/std values. Returns (mean, std) lists
+            or ([], []) if no normalization found.
+            """
+            if self._transform is None:
+                return [], []
+
+            # Check if transform is a single Normalize/ImageNetNormalize
+            transform = self._transform
+            transform_type = type(transform).__name__
+
+            if transform_type in ("Normalize", "ImageNetNormalize"):
+                # ImageNet defaults: mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                if transform_type == "ImageNetNormalize":
+                    return [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+                # For generic Normalize we can't easily extract mean/std from C++ object
+                # Fall back to Python path
+                return [], []
+
+            # Check if transform is a ComposedTransforms pipeline
+            if transform_type == "ComposedTransforms":
+                # Walk the pipeline to check if it's only Resize + Normalize
+                # (the common case for benchmarks)
+                return [], []
+
+            return [], []
+
+        def _can_use_cpp_float32_path(self):
+            """Check if we can use the C++ float32 fast path.
+
+            The C++ path handles: resize (via target_height/width) + normalize.
+            If the transform pipeline contains only these operations (or is None),
+            we can use the fast path.
+            """
+            if self._transform is None:
+                return True
+
+            transform_type = type(self._transform).__name__
+
+            # Single Normalize/ImageNetNormalize - C++ handles this
+            if transform_type in ("Normalize", "ImageNetNormalize"):
+                return True
+
+            # For composed transforms, check if all are Resize + Normalize
+            # (Resize is handled by target_height/target_width params)
+            if transform_type == "ComposedTransforms":
+                try:
+                    transforms = self._transform.get_transforms() if hasattr(self._transform, 'get_transforms') else []
+                except:
+                    return False
+
+                # Walk through transforms
+                for t in transforms:
+                    tname = type(t).__name__
+                    if tname == "Resize":
+                        continue  # Handled by C++ target_height/target_width
+                    elif tname in ("Normalize", "ImageNetNormalize"):
+                        continue  # Handled by C++ mean/std params
+                    else:
+                        return False  # Unsupported transform, fall back to Python
+                return True
+
+            return False
+
         def next_batch(self):
             """Get next batch as contiguous array.
 
@@ -519,7 +586,32 @@ try:
             """
             import time
 
-            # Retry loop for async pipeline startup
+            # Fast C++ float32 path for PyTorch/CHW output with normalization
+            if self._chw_format and self._can_use_cpp_float32_path():
+                mean, std = self._extract_normalize_params()
+
+                max_retries = 10
+                for attempt in range(max_retries):
+                    images, metadata = self._loader.next_batch_array_float32(
+                        True,  # chw_format
+                        self._target_height,
+                        self._target_width,
+                        True,  # normalize_01
+                        mean,
+                        std,
+                    )
+
+                    if images.size == 0:
+                        if attempt < max_retries - 1 and not self._loader.is_finished():
+                            time.sleep(0.01)
+                            continue
+                        raise StopIteration
+                    else:
+                        break
+
+                return images, metadata
+
+            # Standard path for non-CHW or complex transforms
             max_retries = 10
             for attempt in range(max_retries):
                 images, metadata = self._loader.next_batch_array(
@@ -537,7 +629,7 @@ try:
                 else:
                     break
 
-            # Apply transforms if set
+            # Apply transforms if set (slow Python path - fallback)
             if self._transform is not None:
                 # For batch transforms, apply to each image
                 import numpy as np
@@ -594,20 +686,33 @@ try:
 
             import time
 
-            # Get batch as NumPy array in CHW format (with retry for pipeline warmup)
+            # Extract normalization params for C++ fast path
+            mean, std = self._extract_normalize_params()
+
+            # Use C++ float32 path - does uint8→float32 + HWC→CHW + normalize in SIMD
             max_retries = 10
             for attempt in range(max_retries):
-                images_np, metadata = self._loader.next_batch_array(
-                    True,  # Always CHW for PyTorch
-                    self._target_height,
-                    self._target_width,
-                )
+                if self._can_use_cpp_float32_path():
+                    images_np, metadata = self._loader.next_batch_array_float32(
+                        True,  # Always CHW for PyTorch
+                        self._target_height,
+                        self._target_width,
+                        True,  # normalize_01
+                        mean,
+                        std,
+                    )
+                else:
+                    images_np, metadata = self._loader.next_batch_array(
+                        True,  # Always CHW for PyTorch
+                        self._target_height,
+                        self._target_width,
+                    )
                 if images_np.size > 0 or self._loader.is_finished():
                     break
                 time.sleep(0.01)
 
-            # Apply transforms if set
-            if self._transform is not None and images_np.size > 0:
+            # Apply transforms if set AND we used the non-float32 path
+            if not self._can_use_cpp_float32_path() and self._transform is not None and images_np.size > 0:
                 import numpy as np
 
                 batch_size = images_np.shape[0]
@@ -635,8 +740,9 @@ try:
             if dtype is not None:
                 tensor = tensor.to(dtype=dtype)
             elif images_np.dtype == "uint8":
-                # Default: convert to float32 and normalize
+                # Default: convert to float32 and normalize (only if not already float32)
                 tensor = tensor.to(dtype=torch.float32) / 255.0
+            # If already float32 from C++ path, no conversion needed
 
             # Move to device if specified
             if device is not None:

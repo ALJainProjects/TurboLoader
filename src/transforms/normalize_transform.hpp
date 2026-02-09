@@ -29,7 +29,7 @@ public:
      */
     NormalizeTransform(const std::vector<float>& mean,
                       const std::vector<float>& std,
-                      bool to_float = false)
+                      bool to_float = true)
         : mean_(mean), std_(std), to_float_(to_float) {
 
         if (mean_.size() != std_.size()) {
@@ -76,6 +76,7 @@ private:
             input.width, input.height, input.channels,
             input.width * input.channels * sizeof(float), true
         );
+        output->is_float32 = true;
 
         // Process per channel
         for (int c = 0; c < input.channels; ++c) {
@@ -152,7 +153,7 @@ private:
  */
 class ImageNetNormalize : public NormalizeTransform {
 public:
-    ImageNetNormalize(bool to_float = false)
+    ImageNetNormalize(bool to_float = true)
         : NormalizeTransform(
             {0.485f, 0.456f, 0.406f},  // ImageNet mean
             {0.229f, 0.224f, 0.225f},  // ImageNet std
