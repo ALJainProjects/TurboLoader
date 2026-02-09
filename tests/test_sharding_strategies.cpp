@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 #include "../src/distributed/sharding_strategies.hpp"
+#include "../src/distributed/distributed_dataloader.hpp"
 #include <algorithm>
 #include <numeric>
 #include <set>
