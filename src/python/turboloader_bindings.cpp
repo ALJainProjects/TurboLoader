@@ -246,17 +246,20 @@ public:
                     continue;
                 }
 
-                // Resize if dimensions don't match target
+                // Resize if dimensions don't match target (thread-local buffer)
                 const uint8_t* src_data = sample.image_data.data();
-                std::vector<uint8_t> resized_buf;
+                thread_local std::vector<uint8_t> tl_resized_buf_u8;
                 if (sample.width != width || sample.height != height) {
-                    resized_buf.resize(static_cast<size_t>(width) * height * channels);
+                    const size_t resize_sz = static_cast<size_t>(width) * height * channels;
+                    if (tl_resized_buf_u8.size() < resize_sz) {
+                        tl_resized_buf_u8.resize(resize_sz);
+                    }
                     transforms::simd::resize_bilinear_simd(
-                        src_data, resized_buf.data(),
+                        src_data, tl_resized_buf_u8.data(),
                         sample.width, sample.height,
                         width, height, channels
                     );
-                    src_data = resized_buf.data();
+                    src_data = tl_resized_buf_u8.data();
                 }
 
                 if (chw_format) {
@@ -422,6 +425,16 @@ public:
                            mean.size() == static_cast<size_t>(channels) &&
                            std_vec.size() == static_cast<size_t>(channels);
 
+        // Pre-compute inv_std for fused SIMD path
+        float inv_std_vals[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        if (has_mean_std) {
+            for (int c = 0; c < channels && c < 4; ++c) {
+                inv_std_vals[c] = (std_vec[c] != 0.0f) ? (1.0f / std_vec[c]) : 1.0f;
+            }
+        }
+
+        const size_t resize_buf_size = static_cast<size_t>(width) * height * channels;
+
         // Process all samples in parallel (GIL released)
         {
             py::gil_scoped_release release;
@@ -437,27 +450,38 @@ public:
                     continue;
                 }
 
-                // Resize if dimensions don't match target
+                // Resize if dimensions don't match target (thread-local buffer)
                 const uint8_t* src_data = sample.image_data.data();
-                std::vector<uint8_t> resized_buf;
+                thread_local std::vector<uint8_t> tl_resized_buf;
                 if (sample.width != width || sample.height != height) {
-                    resized_buf.resize(static_cast<size_t>(width) * height * channels);
+                    if (tl_resized_buf.size() < resize_buf_size) {
+                        tl_resized_buf.resize(resize_buf_size);
+                    }
                     transforms::simd::resize_bilinear_simd(
-                        src_data, resized_buf.data(),
+                        src_data, tl_resized_buf.data(),
                         sample.width, sample.height,
                         width, height, channels
                     );
-                    src_data = resized_buf.data();
+                    src_data = tl_resized_buf.data();
                 }
 
                 float* img_dst = dst + i * single_image_floats;
 
-                if (chw_format) {
-                    // HWC uint8 → CHW float32
+                if (chw_format && channels == 3) {
+                    // Fast fused SIMD path: HWC uint8 → CHW float32 + normalize
+                    transforms::simd::deinterleave_hwc_to_chw_f32(
+                        src_data,
+                        img_dst,                        // R plane
+                        img_dst + num_pixels,           // G plane
+                        img_dst + 2 * num_pixels,       // B plane
+                        num_pixels, normalize_01,
+                        has_mean_std ? mean.data() : nullptr,
+                        has_mean_std ? inv_std_vals : nullptr
+                    );
+                } else if (chw_format) {
+                    // Generic CHW path for non-RGB (1 or 4 channels)
                     for (int c = 0; c < channels; ++c) {
                         float* channel_dst = img_dst + c * num_pixels;
-
-                        // Extract channel and convert to float in one pass
                         if (normalize_01) {
                             const float inv_255 = 1.0f / 255.0f;
                             for (size_t p = 0; p < num_pixels; ++p) {
@@ -468,7 +492,6 @@ public:
                                 channel_dst[p] = static_cast<float>(src_data[p * channels + c]);
                             }
                         }
-
                         if (has_mean_std) {
                             transforms::simd::normalize_f32(
                                 channel_dst, channel_dst,
@@ -548,6 +571,15 @@ public:
     void stop() {
         if (pipeline_) {
             pipeline_->stop();
+        }
+    }
+
+    /**
+     * @brief Reset pipeline for next epoch without full teardown
+     */
+    void reset() {
+        if (pipeline_) {
+            pipeline_->reset();
         }
     }
 
@@ -914,6 +946,8 @@ PYBIND11_MODULE(_turboloader, m) {
              "    ...         train(batch)")
         .def("stop", &DataLoader::stop,
              "Stop the pipeline and clean up resources")
+        .def("reset", &DataLoader::reset,
+             "Reset pipeline for next epoch without full teardown")
         .def("__enter__", &DataLoader::enter,
              "Context manager entry")
         .def("__exit__", &DataLoader::exit,

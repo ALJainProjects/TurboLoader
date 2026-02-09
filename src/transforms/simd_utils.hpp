@@ -1893,6 +1893,216 @@ inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
 
 #endif
 
+// ============================================================================
+// FUSED HWC uint8 → CHW float32 DEINTERLEAVE + CONVERT + NORMALIZE
+// ============================================================================
+
+/**
+ * @brief Fused HWC uint8 → CHW float32 with optional [0,1] normalize and mean/std
+ *
+ * Combines deinterleave, u8→f32 conversion, and normalization in a single pass,
+ * avoiding the cache-hostile stride-3 access pattern of separate loops.
+ * NEON: uses vld3q_u8 for native 3-channel deinterleave.
+ *
+ * @param src       Source HWC uint8 data (R,G,B,R,G,B,...)
+ * @param dst_r     Destination for R channel (num_pixels floats)
+ * @param dst_g     Destination for G channel (num_pixels floats)
+ * @param dst_b     Destination for B channel (num_pixels floats)
+ * @param num_pixels Total number of pixels (H*W)
+ * @param normalize_01 If true, scale to [0,1] by dividing by 255
+ * @param mean      Per-channel mean (3 floats) or nullptr
+ * @param inv_std   Per-channel 1/std (3 floats) or nullptr
+ */
+#if defined(TURBOLOADER_SIMD_NEON)
+
+inline void deinterleave_hwc_to_chw_f32(
+    const uint8_t* src, float* dst_r, float* dst_g, float* dst_b,
+    size_t num_pixels, bool normalize_01,
+    const float* mean, const float* inv_std)
+{
+    const float32x4_t scale = normalize_01 ? vdupq_n_f32(1.0f / 255.0f) : vdupq_n_f32(1.0f);
+
+    // Load mean/inv_std if provided
+    float32x4_t mean_r = vdupq_n_f32(0.0f), mean_g = vdupq_n_f32(0.0f), mean_b = vdupq_n_f32(0.0f);
+    float32x4_t inv_std_r = vdupq_n_f32(1.0f), inv_std_g = vdupq_n_f32(1.0f), inv_std_b = vdupq_n_f32(1.0f);
+    bool apply_norm = (mean != nullptr && inv_std != nullptr);
+    if (apply_norm) {
+        mean_r = vdupq_n_f32(mean[0]);
+        mean_g = vdupq_n_f32(mean[1]);
+        mean_b = vdupq_n_f32(mean[2]);
+        inv_std_r = vdupq_n_f32(inv_std[0]);
+        inv_std_g = vdupq_n_f32(inv_std[1]);
+        inv_std_b = vdupq_n_f32(inv_std[2]);
+    }
+
+    size_t i = 0;
+
+    // Process 16 pixels per iteration: vld3q_u8 loads 48 bytes, deinterleaves into 3x16
+    for (; i + 16 <= num_pixels; i += 16) {
+        uint8x16x3_t rgb = vld3q_u8(src + i * 3);
+
+        // Process low 8 pixels of R channel
+        uint16x8_t r_lo16 = vmovl_u8(vget_low_u8(rgb.val[0]));
+        uint16x8_t r_hi16 = vmovl_u8(vget_high_u8(rgb.val[0]));
+        float32x4_t r0 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(r_lo16))), scale);
+        float32x4_t r1 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(r_lo16))), scale);
+        float32x4_t r2 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(r_hi16))), scale);
+        float32x4_t r3 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(r_hi16))), scale);
+
+        // G channel
+        uint16x8_t g_lo16 = vmovl_u8(vget_low_u8(rgb.val[1]));
+        uint16x8_t g_hi16 = vmovl_u8(vget_high_u8(rgb.val[1]));
+        float32x4_t g0 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(g_lo16))), scale);
+        float32x4_t g1 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(g_lo16))), scale);
+        float32x4_t g2 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(g_hi16))), scale);
+        float32x4_t g3 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(g_hi16))), scale);
+
+        // B channel
+        uint16x8_t b_lo16 = vmovl_u8(vget_low_u8(rgb.val[2]));
+        uint16x8_t b_hi16 = vmovl_u8(vget_high_u8(rgb.val[2]));
+        float32x4_t b0 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(b_lo16))), scale);
+        float32x4_t b1 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(b_lo16))), scale);
+        float32x4_t b2 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(b_hi16))), scale);
+        float32x4_t b3 = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(b_hi16))), scale);
+
+        // Apply mean/std normalization: (val - mean) * inv_std
+        if (apply_norm) {
+            r0 = vmulq_f32(vsubq_f32(r0, mean_r), inv_std_r);
+            r1 = vmulq_f32(vsubq_f32(r1, mean_r), inv_std_r);
+            r2 = vmulq_f32(vsubq_f32(r2, mean_r), inv_std_r);
+            r3 = vmulq_f32(vsubq_f32(r3, mean_r), inv_std_r);
+            g0 = vmulq_f32(vsubq_f32(g0, mean_g), inv_std_g);
+            g1 = vmulq_f32(vsubq_f32(g1, mean_g), inv_std_g);
+            g2 = vmulq_f32(vsubq_f32(g2, mean_g), inv_std_g);
+            g3 = vmulq_f32(vsubq_f32(g3, mean_g), inv_std_g);
+            b0 = vmulq_f32(vsubq_f32(b0, mean_b), inv_std_b);
+            b1 = vmulq_f32(vsubq_f32(b1, mean_b), inv_std_b);
+            b2 = vmulq_f32(vsubq_f32(b2, mean_b), inv_std_b);
+            b3 = vmulq_f32(vsubq_f32(b3, mean_b), inv_std_b);
+        }
+
+        // Store contiguous channel planes
+        vst1q_f32(dst_r + i,      r0);
+        vst1q_f32(dst_r + i + 4,  r1);
+        vst1q_f32(dst_r + i + 8,  r2);
+        vst1q_f32(dst_r + i + 12, r3);
+
+        vst1q_f32(dst_g + i,      g0);
+        vst1q_f32(dst_g + i + 4,  g1);
+        vst1q_f32(dst_g + i + 8,  g2);
+        vst1q_f32(dst_g + i + 12, g3);
+
+        vst1q_f32(dst_b + i,      b0);
+        vst1q_f32(dst_b + i + 4,  b1);
+        vst1q_f32(dst_b + i + 8,  b2);
+        vst1q_f32(dst_b + i + 12, b3);
+    }
+
+    // Scalar tail
+    const float s = normalize_01 ? (1.0f / 255.0f) : 1.0f;
+    for (; i < num_pixels; ++i) {
+        float r = src[i * 3 + 0] * s;
+        float g = src[i * 3 + 1] * s;
+        float b = src[i * 3 + 2] * s;
+        if (apply_norm) {
+            r = (r - mean[0]) * inv_std[0];
+            g = (g - mean[1]) * inv_std[1];
+            b = (b - mean[2]) * inv_std[2];
+        }
+        dst_r[i] = r;
+        dst_g[i] = g;
+        dst_b[i] = b;
+    }
+}
+
+#elif defined(TURBOLOADER_SIMD_AVX2) || defined(TURBOLOADER_SIMD_AVX512)
+
+inline void deinterleave_hwc_to_chw_f32(
+    const uint8_t* src, float* dst_r, float* dst_g, float* dst_b,
+    size_t num_pixels, bool normalize_01,
+    const float* mean, const float* inv_std)
+{
+    const __m256 scale = normalize_01 ? _mm256_set1_ps(1.0f / 255.0f) : _mm256_set1_ps(1.0f);
+    bool apply_norm = (mean != nullptr && inv_std != nullptr);
+    __m256 mean_r, mean_g, mean_b, inv_std_r, inv_std_g, inv_std_b;
+    if (apply_norm) {
+        mean_r = _mm256_set1_ps(mean[0]); mean_g = _mm256_set1_ps(mean[1]); mean_b = _mm256_set1_ps(mean[2]);
+        inv_std_r = _mm256_set1_ps(inv_std[0]); inv_std_g = _mm256_set1_ps(inv_std[1]); inv_std_b = _mm256_set1_ps(inv_std[2]);
+    }
+
+    size_t i = 0;
+
+    // Process 8 pixels per iteration (24 bytes in, 96 bytes out)
+    for (; i + 8 <= num_pixels; i += 8) {
+        const uint8_t* p = src + i * 3;
+
+        // Gather 8 R, G, B values (no native deinterleave in AVX2)
+        alignas(32) float r_buf[8], g_buf[8], b_buf[8];
+        for (int j = 0; j < 8; ++j) {
+            r_buf[j] = p[j * 3 + 0];
+            g_buf[j] = p[j * 3 + 1];
+            b_buf[j] = p[j * 3 + 2];
+        }
+
+        __m256 r = _mm256_mul_ps(_mm256_load_ps(r_buf), scale);
+        __m256 g = _mm256_mul_ps(_mm256_load_ps(g_buf), scale);
+        __m256 b = _mm256_mul_ps(_mm256_load_ps(b_buf), scale);
+
+        if (apply_norm) {
+            r = _mm256_mul_ps(_mm256_sub_ps(r, mean_r), inv_std_r);
+            g = _mm256_mul_ps(_mm256_sub_ps(g, mean_g), inv_std_g);
+            b = _mm256_mul_ps(_mm256_sub_ps(b, mean_b), inv_std_b);
+        }
+
+        _mm256_storeu_ps(dst_r + i, r);
+        _mm256_storeu_ps(dst_g + i, g);
+        _mm256_storeu_ps(dst_b + i, b);
+    }
+
+    // Scalar tail
+    const float s = normalize_01 ? (1.0f / 255.0f) : 1.0f;
+    for (; i < num_pixels; ++i) {
+        float r = src[i * 3 + 0] * s;
+        float g = src[i * 3 + 1] * s;
+        float b = src[i * 3 + 2] * s;
+        if (apply_norm) {
+            r = (r - mean[0]) * inv_std[0];
+            g = (g - mean[1]) * inv_std[1];
+            b = (b - mean[2]) * inv_std[2];
+        }
+        dst_r[i] = r;
+        dst_g[i] = g;
+        dst_b[i] = b;
+    }
+}
+
+#else // Scalar fallback
+
+inline void deinterleave_hwc_to_chw_f32(
+    const uint8_t* src, float* dst_r, float* dst_g, float* dst_b,
+    size_t num_pixels, bool normalize_01,
+    const float* mean, const float* inv_std)
+{
+    const float s = normalize_01 ? (1.0f / 255.0f) : 1.0f;
+    bool apply_norm = (mean != nullptr && inv_std != nullptr);
+
+    for (size_t i = 0; i < num_pixels; ++i) {
+        float r = src[i * 3 + 0] * s;
+        float g = src[i * 3 + 1] * s;
+        float b = src[i * 3 + 2] * s;
+        if (apply_norm) {
+            r = (r - mean[0]) * inv_std[0];
+            g = (g - mean[1]) * inv_std[1];
+            b = (b - mean[2]) * inv_std[2];
+        }
+        dst_r[i] = r;
+        dst_g[i] = g;
+        dst_b[i] = b;
+    }
+}
+
+#endif
+
 } // namespace simd
 } // namespace transforms
 } // namespace turboloader

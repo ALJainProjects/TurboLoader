@@ -15,9 +15,9 @@ endif()
 option(TURBOLOADER_PORTABLE "Build portable binaries (no -march=native)" OFF)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(TURBOLOADER_PORTABLE)
-        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -msse4.2 -DNDEBUG")
+        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -msse4.2 -funroll-loops -flto=thin -DNDEBUG")
     else()
-        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
+        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -funroll-loops -flto=thin -DNDEBUG")
     endif()
     set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -Wall -Wextra -Wpedantic")
 endif()
@@ -35,6 +35,14 @@ find_package(Threads REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(PNG REQUIRED)
 find_package(CURL REQUIRED)
+
+# OpenMP for parallel loops
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    message(STATUS "Found OpenMP: ${OpenMP_CXX_VERSION}")
+else()
+    message(STATUS "OpenMP not found - parallel loops will be single-threaded")
+endif()
 
 # Find LZ4 for TBL v2 compression
 find_library(LZ4_LIBRARY NAMES lz4)
@@ -165,6 +173,11 @@ if(TURBOLOADER_SOURCES)
     set(LINK_SCOPE PUBLIC)
 else()
     set(LINK_SCOPE INTERFACE)
+endif()
+
+# Link OpenMP if available
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(turboloader ${LINK_SCOPE} OpenMP::OpenMP_CXX)
 endif()
 
 # WebP support

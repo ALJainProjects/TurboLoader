@@ -744,6 +744,44 @@ public:
         fallback_queue_.reset();
     }
 
+    /**
+     * @brief Reset pipeline for next epoch without full teardown
+     *
+     * Stops workers and resets counters, then restarts — reusing existing
+     * buffer pool, memory maps, decoders, and cache. Much faster than
+     * destroying and recreating the entire pipeline.
+     */
+    void reset() {
+        // Stop all workers
+        for (auto& worker : tar_workers_) {
+            worker->stop();
+        }
+        tar_workers_.clear();
+
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+        workers_.clear();
+        fallback_queue_.reset();
+
+        // Reset counters
+        batches_produced_.store(0, std::memory_order_relaxed);
+        samples_processed_.store(0, std::memory_order_relaxed);
+        samples_skipped_.store(0, std::memory_order_relaxed);
+        running_ = false;
+
+        // Clear pending smart batches
+        {
+            std::lock_guard<std::mutex> lock(pending_batches_mutex_);
+            pending_smart_batches_.clear();
+        }
+
+        // Restart the pipeline
+        start();
+    }
+
     UnifiedBatch next_batch() {
         UnifiedBatch batch(config_.batch_size);
         batch.batch_id = batches_produced_++;

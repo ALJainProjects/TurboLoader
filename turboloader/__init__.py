@@ -102,6 +102,13 @@ Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 
 __version__ = "2.24.0"
 
+# Prevent duplicate libomp crash when co-existing with PyTorch
+# (PyTorch bundles its own libomp; TurboLoader links against system libomp)
+import os as _os
+
+if "KMP_DUPLICATE_LIB_OK" not in _os.environ:
+    _os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 # Import C++ extension module
 try:
     from _turboloader import (
@@ -556,7 +563,11 @@ try:
             # (Resize is handled by target_height/target_width params)
             if transform_type == "ComposedTransforms":
                 try:
-                    transforms = self._transform.get_transforms() if hasattr(self._transform, 'get_transforms') else []
+                    transforms = (
+                        self._transform.get_transforms()
+                        if hasattr(self._transform, "get_transforms")
+                        else []
+                    )
                 except:
                     return False
 
@@ -712,7 +723,11 @@ try:
                 time.sleep(0.01)
 
             # Apply transforms if set AND we used the non-float32 path
-            if not self._can_use_cpp_float32_path() and self._transform is not None and images_np.size > 0:
+            if (
+                not self._can_use_cpp_float32_path()
+                and self._transform is not None
+                and images_np.size > 0
+            ):
                 import numpy as np
 
                 batch_size = images_np.shape[0]
@@ -853,26 +868,8 @@ try:
                 return
 
             # Normal path (or first epoch with caching)
-            # Reset the pipeline for a new epoch
-            self._loader.stop()
-            self._loader = _DataLoaderBase(
-                self._data_path,
-                self._batch_size,
-                self._num_workers,
-                False,  # shuffle
-                False,  # enable_distributed
-                0,  # world_rank
-                1,  # world_size
-                False,  # drop_last
-                42,  # distributed_seed
-                False,  # enable_cache (we handle caching at Python level)
-                0,  # cache_l1_mb
-                0,  # cache_l2_gb
-                "/tmp/turboloader_cache",
-                False,  # auto_smart_batching
-                False,  # enable_smart_batching
-                4,  # prefetch_batches
-            )
+            # Reset the pipeline for a new epoch (reuses buffers, decoders, memory maps)
+            self._loader.reset()
 
             # If caching enabled but not populated, clear any partial cache
             if self._cache_decoded and not self._cache_populated:

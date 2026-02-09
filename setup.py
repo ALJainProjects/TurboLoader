@@ -163,6 +163,43 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
     return None, None
 
 
+def find_openmp():
+    """Find OpenMP installation for the current platform"""
+    import platform
+    system = platform.system().lower()
+
+    if system == "darwin":
+        # macOS: OpenMP requires Homebrew libomp
+        try:
+            omp_prefix = (
+                subprocess.check_output(
+                    ["brew", "--prefix", "libomp"], stderr=subprocess.DEVNULL
+                )
+                .decode()
+                .strip()
+            )
+            omp_include = os.path.join(omp_prefix, "include")
+            omp_lib = os.path.join(omp_prefix, "lib")
+            if os.path.exists(omp_include) and os.path.exists(omp_lib):
+                return {
+                    "include": omp_include,
+                    "lib": omp_lib,
+                    "compile_flags": ["-Xpreprocessor", "-fopenmp"],
+                    "link_flags": [f"-L{omp_lib}", "-lomp"],
+                }
+        except Exception:
+            pass
+        return None
+    else:
+        # Linux: OpenMP is built into GCC/Clang
+        return {
+            "include": None,
+            "lib": None,
+            "compile_flags": ["-fopenmp"],
+            "link_flags": ["-fopenmp"],
+        }
+
+
 def get_extensions():
     """Build extension modules - only called when actually building wheels"""
     print("Detecting dependencies...")
@@ -217,28 +254,48 @@ def get_extensions():
         )
     print(f"  lz4: {lz4_include}")
 
+    # OpenMP detection
+    omp = find_openmp()
+    if omp:
+        print(f"  OpenMP: found")
+    else:
+        print(f"  OpenMP: not found (parallel loops will be disabled)")
+
+    include_dirs = [
+        get_pybind_include(),
+        jpeg_include,
+        png_include,
+        webp_include,
+        curl_include,
+        lz4_include,
+        "src",  # For pipeline headers
+    ]
+    library_dirs = [jpeg_lib, png_lib, webp_lib, curl_lib, lz4_lib]
+    compile_args = [
+        "-std=c++20",
+        "-O3",
+        "-fvisibility=hidden",
+        "-funroll-loops",
+        "-flto=thin",
+    ]
+    link_args = ["-flto=thin"]
+
+    if omp:
+        compile_args.extend(omp["compile_flags"])
+        link_args.extend(omp["link_flags"])
+        if omp["include"]:
+            include_dirs.append(omp["include"])
+        if omp["lib"]:
+            library_dirs.append(omp["lib"])
+
     return [
         Extension(
             "_turboloader",
             sources=[
                 "src/python/turboloader_bindings.cpp",
             ],
-            include_dirs=[
-                get_pybind_include(),
-                jpeg_include,
-                png_include,
-                webp_include,
-                curl_include,
-                lz4_include,
-                "src",  # For pipeline headers
-            ],
-            library_dirs=[
-                jpeg_lib,
-                png_lib,
-                webp_lib,
-                curl_lib,
-                lz4_lib,
-            ],
+            include_dirs=include_dirs,
+            library_dirs=library_dirs,
             libraries=[
                 "jpeg",
                 "png",
@@ -247,12 +304,8 @@ def get_extensions():
                 "lz4",
             ],
             language="c++",
-            extra_compile_args=[
-                "-std=c++17",
-                "-O3",
-                "-fvisibility=hidden",
-            ],
-            extra_link_args=[],
+            extra_compile_args=compile_args,
+            extra_link_args=link_args,
         ),
     ]
 
@@ -285,7 +338,7 @@ class LazyExtensionList(list):
 
 
 class BuildExt(build_ext):
-    """Custom build extension to set C++17 flag and platform-specific optimizations"""
+    """Custom build extension to set C++20 flag and platform-specific optimizations"""
 
     def build_extensions(self):
         import platform
@@ -354,7 +407,7 @@ class BuildExt(build_ext):
                     opts.append("-mmacosx-version-min=10.15")
                     link_opts.append("-mmacosx-version-min=10.15")
                     if "arm64" in arch:
-                        opts.append("-mcpu=apple-m1")
+                        opts.append("-mcpu=native")
                     # Add rpath for Homebrew libraries on macOS
                     for lib_dir in ext.library_dirs:
                         if lib_dir and os.path.exists(lib_dir):
@@ -368,7 +421,7 @@ class BuildExt(build_ext):
                         else:
                             opts.append("-march=native")
             elif ct == "msvc":
-                opts.append("/std:c++17")
+                opts.append("/std:c++20")
 
             ext.extra_compile_args = opts
             ext.extra_link_args = link_opts
