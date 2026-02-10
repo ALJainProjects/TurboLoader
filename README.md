@@ -250,43 +250,44 @@ writer.finalize()
 
 ## Benchmarks
 
-TurboLoader's performance compared to PyTorch DataLoader, measured on real workloads:
+Head-to-head comparison with **optimized** PyTorch DataLoader (`persistent_workers=True`, `prefetch_factor=4`). Both loaders tested under identical conditions.
 
-### vs PyTorch DataLoader
+### vs PyTorch DataLoader (BS=32, NW=4)
 
 | Configuration | TurboLoader | PyTorch | Speedup |
 |---|---|---|---|
-| Raw decode (uint8 HWC, batch=32) | 12,361 img/s | 359 img/s | **34x** |
-| CHW + Normalize + ImageNet mean/std (float32) | 5,184 img/s | 456 img/s | **11.4x** |
+| uint8 CHW (resize only) | 8,027 img/s | 2,457 img/s | **3.3x** |
+| float32 CHW (0-1 normalize) | 8,456 img/s | 2,040 img/s | **4.1x** |
+| float32 CHW + ImageNet mean/std | 8,029 img/s | 2,039 img/s | **3.9x** |
 
-### TurboLoader Throughput by Mode
+### Decoded Tensor Caching (`cache_decoded=True`)
 
-| Output Mode | Throughput |
+| Configuration | Epoch 2 Throughput |
 |---|---|
-| uint8 HWC (raw decode) | 12,361 img/s |
-| uint8 CHW (SIMD transpose) | 10,681 img/s |
-| float32 HWC (raw) | 5,158 img/s |
-| float32 HWC (normalize 0-1) | 5,506 img/s |
-| float32 CHW (raw) | 5,324 img/s |
-| float32 CHW (normalize 0-1) | 5,317 img/s |
-| float32 CHW (normalize + ImageNet mean/std) | 5,184 img/s |
+| uint8 HWC (from cache) | 57,692,695 img/s |
+| float32 CHW (from cache) | 42,933,573 img/s |
+| float32 CHW + ImageNet (from cache) | 39,853,643 img/s |
 
-### Scaling
+### Worker Scaling (BS=32, float32 CHW + ImageNet)
 
-| Workers (batch=32, uint8 HWC) | Throughput |
-|---|---|
-| 2 workers | 11,110 img/s |
-| 4 workers | 25,269 img/s |
-| 8 workers | 8,880 img/s |
+| Workers | TurboLoader | PyTorch | Speedup |
+|---|---|---|---|
+| 1 worker | 1,585 img/s | 625 img/s | **2.5x** |
+| 2 workers | 3,383 img/s | 1,184 img/s | **2.9x** |
+| 4 workers | 7,744 img/s | 2,016 img/s | **3.8x** |
+| 8 workers | 13,327 img/s | 3,047 img/s | **4.4x** |
 
-| Batch Size (4 workers, uint8 HWC) | Throughput |
-|---|---|
-| batch_size=8 | 4,988 img/s |
-| batch_size=16 | 13,760 img/s |
-| batch_size=32 | 16,622 img/s |
-| batch_size=64 | 32,660 img/s |
+### Batch Size Scaling (NW=4, float32 CHW + ImageNet)
 
-**Test conditions:** Apple M4 Pro, batch_size=32, num_workers=4, 5000 JPEG images (640x480).
+| Batch Size | TurboLoader | PyTorch | Speedup |
+|---|---|---|---|
+| 8 | 7,997 img/s | 2,342 img/s | **3.4x** |
+| 16 | 8,280 img/s | 2,261 img/s | **3.7x** |
+| 32 | 7,418 img/s | 1,946 img/s | **3.8x** |
+| 64 | 7,896 img/s | 1,765 img/s | **4.5x** |
+| 128 | 7,841 img/s | 1,521 img/s | **5.2x** |
+
+**Test conditions:** Apple M4 Pro, 5000 JPEG images (640x480), best of 3 trials, 100 batches per trial. PyTorch uses `persistent_workers=True`, `prefetch_factor=4`.
 
 ### Key Optimizations
 
@@ -372,4 +373,4 @@ If you use TurboLoader in your research:
 
 ---
 
-TurboLoader - Production-ready ML data loading. Up to 11x faster than PyTorch DataLoader.
+TurboLoader - Production-ready ML data loading. 2.5-5.2x faster than optimized PyTorch DataLoader.
