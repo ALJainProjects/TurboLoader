@@ -128,9 +128,9 @@ public:
         // Force RGB output
         cinfo_.out_color_space = JCS_RGB;
 
-        // Enable SIMD optimizations (libjpeg-turbo)
-        // This is automatically enabled in libjpeg-turbo build
-        // SSE2/AVX2/NEON acceleration happens transparently
+        // Use fast integer IDCT (Arai/Agui/Nakajima) — 10-20% faster than
+        // JDCT_ISLOW with negligible quality loss for ML training data
+        cinfo_.dct_method = JDCT_IFAST;
 
         // Start decompression
         jpeg_start_decompress(&cinfo_);
@@ -150,11 +150,16 @@ public:
         size_t total_size = height * row_stride;
         output.resize(total_size);
 
-        // Decode scanlines (SIMD-accelerated in libjpeg-turbo)
+        // Decode scanlines in batches of 16 (better SIMD utilization in libjpeg-turbo)
         uint8_t* output_ptr = output.data();
         while (cinfo_.output_scanline < cinfo_.output_height) {
-            uint8_t* row_pointer = output_ptr + (cinfo_.output_scanline * row_stride);
-            jpeg_read_scanlines(&cinfo_, &row_pointer, 1);
+            unsigned int remaining = cinfo_.output_height - cinfo_.output_scanline;
+            unsigned int rows_to_read = std::min(remaining, 16u);
+            JSAMPROW row_pointers[16];
+            for (unsigned int r = 0; r < rows_to_read; ++r) {
+                row_pointers[r] = output_ptr + (cinfo_.output_scanline + r) * row_stride;
+            }
+            jpeg_read_scanlines(&cinfo_, row_pointers, rows_to_read);
         }
 
         // Finish decompression
@@ -278,6 +283,9 @@ public:
         // Force RGB output
         cinfo_.out_color_space = JCS_RGB;
 
+        // Use fast integer IDCT — sufficient quality for ML training
+        cinfo_.dct_method = JDCT_IFAST;
+
         // Start decompression with scaling
         jpeg_start_decompress(&cinfo_);
 
@@ -296,11 +304,16 @@ public:
         size_t total_size = actual_height * row_stride;
         output.resize(total_size);
 
-        // Decode scanlines (SIMD-accelerated in libjpeg-turbo)
+        // Decode scanlines in batches of 16 (better SIMD utilization in libjpeg-turbo)
         uint8_t* output_ptr = output.data();
         while (cinfo_.output_scanline < cinfo_.output_height) {
-            uint8_t* row_pointer = output_ptr + (cinfo_.output_scanline * row_stride);
-            jpeg_read_scanlines(&cinfo_, &row_pointer, 1);
+            unsigned int remaining = cinfo_.output_height - cinfo_.output_scanline;
+            unsigned int rows_to_read = std::min(remaining, 16u);
+            JSAMPROW row_pointers[16];
+            for (unsigned int r = 0; r < rows_to_read; ++r) {
+                row_pointers[r] = output_ptr + (cinfo_.output_scanline + r) * row_stride;
+            }
+            jpeg_read_scanlines(&cinfo_, row_pointers, rows_to_read);
         }
 
         // Finish decompression

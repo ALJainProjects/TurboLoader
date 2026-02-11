@@ -108,13 +108,22 @@ public:
         const std::string& cache_dir = "/tmp/turboloader_cache",
         bool auto_smart_batching = true,
         bool enable_smart_batching = false,
-        size_t prefetch_batches = 4
+        size_t prefetch_batches = 4,
+        int target_height = 0,
+        int target_width = 0
     ) {
         config_.data_path = data_path;
         config_.batch_size = batch_size;
         config_.num_workers = num_workers;
         config_.shuffle = shuffle;
         config_.queue_size = 256;  // Good default for high throughput
+
+        // DCT scaled decode: pass target dims to pipeline workers
+        if (target_height > 0 && target_width > 0) {
+            config_.resize_images = true;
+            config_.target_height = target_height;
+            config_.target_width = target_width;
+        }
 
         // Distributed Training
         config_.enable_distributed = enable_distributed;
@@ -803,7 +812,7 @@ PYBIND11_MODULE(_turboloader, m) {
 
     // DataLoader class (PyTorch-compatible)
     py::class_<DataLoader>(m, "DataLoader")
-        .def(py::init<const std::string&, size_t, size_t, bool, bool, int, int, bool, int, bool, size_t, size_t, const std::string&, bool, bool, size_t>(),
+        .def(py::init<const std::string&, size_t, size_t, bool, bool, int, int, bool, int, bool, size_t, size_t, const std::string&, bool, bool, size_t, int, int>(),
              py::arg("data_path"),
              py::arg("batch_size") = 32,
              py::arg("num_workers") = 4,
@@ -820,6 +829,8 @@ PYBIND11_MODULE(_turboloader, m) {
              py::arg("auto_smart_batching") = true,
              py::arg("enable_smart_batching") = false,
              py::arg("prefetch_batches") = 4,
+             py::arg("target_height") = 0,
+             py::arg("target_width") = 0,
              "Create TurboLoader DataLoader (PyTorch-compatible)\n\n"
              "Args:\n"
              "    data_path (str): Path to data (TAR, video, CSV, Parquet)\n"

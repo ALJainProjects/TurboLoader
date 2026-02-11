@@ -100,7 +100,7 @@ Production-Ready Features:
 Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
 """
 
-__version__ = "2.24.0"
+__version__ = "2.25.0"
 
 # Prevent duplicate libomp crash when co-existing with PyTorch
 # (PyTorch bundles its own libomp; TurboLoader links against system libomp)
@@ -511,6 +511,8 @@ try:
                 auto_smart_batching,
                 enable_smart_batching,
                 prefetch_batches,
+                target_height,
+                target_width,
             )
 
         def _extract_normalize_params(self):

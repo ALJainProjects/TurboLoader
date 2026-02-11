@@ -496,9 +496,15 @@ private:
 #endif
                 {
                     // CPU SIMD-accelerated JPEG decoding (fallback)
+                    // Use DCT scaled decode when target dimensions are set —
+                    // skips high-frequency IDCT coefficients for 2-4x faster decode
                     Sample sample(entry.index, jpeg_data);
                     try {
-                        decoder_->decode_sample(sample);
+                        if (config_.resize_images && config_.target_width > 0 && config_.target_height > 0) {
+                            decoder_->decode_sample_scaled(sample, config_.target_width, config_.target_height);
+                        } else {
+                            decoder_->decode_sample(sample);
+                        }
                     } catch (const std::exception& e) {
                         // CPU decode failed - respect skip_corrupted config
                         if (config_.log_errors) {
