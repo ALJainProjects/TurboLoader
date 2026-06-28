@@ -311,16 +311,45 @@ def get_extensions():
         print("  OpenMP: disabled by default (avoids libomp/PyTorch crash); "
               "set TURBOLOADER_ENABLE_OPENMP=1 to enable")
 
+    # On macOS, do NOT add a system SDK include root (e.g. the SDK's usr/include where
+    # libcurl lives) as an explicit -I: it shadows libc++'s own headers and breaks
+    # <cmath> ("tried including <math.h> but didn't find libc++'s <math.h>") when the
+    # active Xcode SDK differs from the one found. System headers come via -isysroot.
+    # (On Linux the yum/apt deps genuinely live in /usr/include, so keep them there.)
+    _macos = sys.platform == "darwin"
+
+    def _keep_include(inc):
+        if not inc:
+            return False
+        if _macos and (".sdk/usr/include" in inc.lower() or inc.rstrip("/") == "/usr/include"):
+            return False
+        return True
+
     include_dirs = [
-        get_pybind_include(),
-        jpeg_include,
-        png_include,
-        webp_include,
-        curl_include,
-        lz4_include,
-        "src",  # For pipeline headers
+        inc
+        for inc in (
+            get_pybind_include(),
+            jpeg_include,
+            png_include,
+            webp_include,
+            curl_include,
+            lz4_include,
+        )
+        if _keep_include(inc)
     ]
-    library_dirs = [jpeg_lib, png_lib, webp_lib, curl_lib, lz4_lib]
+    include_dirs.append("src")  # For pipeline headers
+    # Likewise drop a system SDK lib root on macOS (curl): -L against a mismatched
+    # SDK's usr/lib can pick the wrong libcurl stub. System libs come via -isysroot.
+    def _keep_lib(lib):
+        if not lib:
+            return False
+        if _macos and (".sdk/usr/lib" in lib.lower() or lib.rstrip("/") == "/usr/lib"):
+            return False
+        return True
+
+    library_dirs = [
+        lib for lib in (jpeg_lib, png_lib, webp_lib, curl_lib, lz4_lib) if _keep_lib(lib)
+    ]
     # Detect compiler for LTO flag: Clang uses -flto=thin, GCC uses -flto
     import platform as _plat
 
