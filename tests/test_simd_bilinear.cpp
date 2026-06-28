@@ -49,22 +49,27 @@ protected:
         return data;
     }
 
-    // Reference scalar bilinear resize implementation
+    // Reference scalar bilinear resize implementation. Uses half-pixel centers
+    // (align_corners=False) to match resize_bilinear_simd's convention.
     void reference_bilinear_resize(const uint8_t* src, uint8_t* dst,
                                     int src_width, int src_height,
                                     int dst_width, int dst_height,
                                     int channels = 3) {
-        const float x_ratio = static_cast<float>(src_width - 1) / std::max(1, dst_width - 1);
-        const float y_ratio = static_cast<float>(src_height - 1) / std::max(1, dst_height - 1);
+        const float x_ratio = static_cast<float>(src_width) / std::max(1, dst_width);
+        const float y_ratio = static_cast<float>(src_height) / std::max(1, dst_height);
+        auto src_coord = [](int i, float scale) {
+            float s = (static_cast<float>(i) + 0.5f) * scale - 0.5f;
+            return s < 0.0f ? 0.0f : s;
+        };
 
         for (int y = 0; y < dst_height; ++y) {
-            float src_y = y * y_ratio;
+            float src_y = src_coord(y, y_ratio);
             int y0 = static_cast<int>(src_y);
             int y1 = std::min(y0 + 1, src_height - 1);
             float dy = src_y - y0;
 
             for (int x = 0; x < dst_width; ++x) {
-                float src_x = x * x_ratio;
+                float src_x = src_coord(x, x_ratio);
                 int x0 = static_cast<int>(src_x);
                 int x1 = std::min(x0 + 1, src_width - 1);
                 float dx = src_x - x0;

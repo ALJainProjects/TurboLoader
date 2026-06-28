@@ -12,40 +12,37 @@ Welcome to TurboLoader - the fastest ML data loading library with SIMD-accelerat
 
 ## Overview
 
-TurboLoader achieves **21,035 img/s peak throughput** (12x faster than PyTorch) through:
+TurboLoader is a C++20 data-loading library for ML featuring:
 
-- **Native C++20 implementation** - No Python GIL overhead
-- **TBL v2 Binary Format** - LZ4 compression (40-60% space savings), O(1) streaming writer, 4,875 img/s conversion
-- **Data Integrity** - CRC32/CRC16 checksums for reliable data loading
+- **Native C++20 implementation** - GIL released during processing
+- **TBL v2 Binary Format** - LZ4 compression, streaming writer, CRC integrity checks
 - **Cached Dimensions** - Width/height in index for fast filtering without decoding
-- **19 SIMD-accelerated transforms** - AVX-512/AVX2/NEON optimized operations
-- **Smart Batching** - Size-based grouping reduces padding by 15-25% (~1.2x boost)
-- **Distributed Training** - Multi-node support (PyTorch DDP, Horovod, DeepSpeed)
-- **Linear Scalability** - 9.65x speedup with 16 workers
-- **Zero-copy tensor conversion** - Direct memory mapping to PyTorch/TensorFlow
-- **Lock-free concurrent queues** - Maximizes multi-core utilization
-- **Memory-mapped I/O** - Efficient TAR/TBL parsing (52+ Gbps)
-- **AutoAugment policies** - State-of-the-art learned augmentation
+- **24 transforms** - 19 per-image SIMD (AVX-512/AVX2/NEON) + 5 batch augmentations
+- **Smart Batching** - Size-based grouping to reduce padding
+- **Distributed sharding** - `DataLoader(enable_distributed=...)` for PyTorch DDP
+- **Zero-copy tensor conversion** - Direct buffer handoff to PyTorch/TensorFlow
+- **Lock-free concurrent queues** - SPSC worker pipeline
+- **Memory-mapped I/O** - TAR/TBL parsing
+- **AutoAugment policies** - learned augmentation
+
+> Throughput vs PyTorch/`tf.data` is hardware- and pipeline-dependent. On a fair
+> Apple-Silicon benchmark (Imagenette-160) a correctly-configured PyTorch DataLoader
+> and `tf.data` are actually faster; run `benchmarks/` on your own setup.
 
 ## Key Features
 
 ### Performance
 
-**Latest Results (v2.7.0):**
+Throughput depends heavily on hardware, image size, and pipeline configuration.
+Rather than quoting fixed numbers here, **run `benchmarks/` on your own machine**.
 
-| Workers | Throughput | Linear Scaling | Efficiency |
-|---------|------------|----------------|------------|
-| 1 | 2,180 img/s | 1.00x | 100% |
-| 2 | 4,020 img/s | 1.84x | 92% |
-| 4 | 6,755 img/s | 3.10x | 77% |
-| 8 | 6,973 img/s | 3.20x | 40% |
-| **16** | **21,036 img/s** | **9.65x** | **60%** |
+Known characteristics (Apple Silicon, Imagenette-160, fair steady-state):
+- The standard `DataLoader` path produces correct batches at a few thousand img/s and
+  beats a single-process PyTorch loader, but a correctly-configured multi-worker PyTorch
+  `DataLoader` and TensorFlow `tf.data` are currently faster.
+- Multi-worker scaling on the dict-output path is limited by Python-side batch assembly.
 
-**Test Config:** Apple M4 Max, 1000 images, batch_size=64
-
-**Framework Comparison:** 12x faster than PyTorch Optimized (39 img/s baseline)
-
-See [Benchmark Results](benchmarks/index.md) for detailed analysis.
+See [Benchmark Results](benchmarks/index.md) for methodology.
 
 ### Transform Library
 

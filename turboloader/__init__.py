@@ -78,33 +78,41 @@ Production-Ready Features:
 - Data integrity validation (CRC32/CRC16 checksums)
 - Cached image dimensions for fast filtered loading
 - Rich metadata support (JSON, Protobuf, MessagePack)
-- 4,875 img/s TAR→TBL conversion throughput
-- 21,035 img/s throughput with 16 workers (~2x faster than PyTorch DataLoader)
-- Smart Batching: Size-based sample grouping reduces padding by 15-25%, ~1.2x throughput boost
-- Distributed Training: Multi-node data loading with deterministic sharding (PyTorch DDP, Horovod, DeepSpeed)
-- 24 SIMD-accelerated data augmentation transforms (AVX2/NEON)
+- Faster than PyTorch DataLoader for the JPEG decode + transform path (run
+  benchmarks/ on your hardware; speedup depends on machine and pipeline)
+- Smart Batching: size-based sample grouping to reduce padding
+- Distributed sharding via DataLoader(enable_distributed=...) for PyTorch DDP
+- 24 transforms (19 per-image SIMD + 5 batch augmentations; AVX2/AVX-512/NEON)
 - Advanced transforms: RandomPerspective, RandomPosterize, RandomSolarize, AutoAugment, Lanczos interpolation
 - AutoAugment learned policies: ImageNet, CIFAR10, SVHN
-- Interactive benchmark web app with real-time visualizations
-- WebDataset format support for multi-modal datasets
-- Remote TAR support (HTTP, S3, GCS, Azure)
-- GPU-accelerated JPEG decoding (nvJPEG)
-- PyTorch/TensorFlow/JAX framework integration
-- Lock-free SPSC queues for maximum concurrency
-- 52+ Gbps local file throughput
-- Multi-format pipeline (images, video, tabular data)
+- PyTorch/TensorFlow/JAX framework integration helpers
+- Lock-free SPSC queues for the worker pipeline
+- Multi-format pipeline (images, plus tabular/text decoders)
 - SIMD-optimized JPEG decoder (SSE2/AVX2/NEON via libjpeg-turbo)
-- Comprehensive test suite (90%+ pass rate)
-- Zero compiler warnings
 
-Developed and tested on Apple M4 Max (48GB RAM) with C++20 and Python 3.8+
+Note: nvJPEG GPU decode, io_uring, HDF5/Zarr/TFRecord/Azure readers exist as
+source but are NOT compiled into the published wheel. Check turboloader.features()
+for what is actually available in your install.
+
+Developed on Apple Silicon with C++20; requires Python 3.10+.
 """
 
-__version__ = "2.25.0"
+try:
+    # Written at build time by setuptools_scm from the git tag.
+    from turboloader._version import __version__
+except Exception:  # pragma: no cover - source checkout without a build
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        __version__ = _pkg_version("turboloader")
+    except Exception:
+        __version__ = "0.0.0+unknown"
 
 # Prevent duplicate libomp crash when co-existing with PyTorch
 # (PyTorch bundles its own libomp; TurboLoader links against system libomp)
 import os as _os
+
+import numpy as np
 
 if "KMP_DUPLICATE_LIB_OK" not in _os.environ:
     _os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -223,6 +231,237 @@ try:
         "TensorFormat",
     ]
 
+    def _resize_target_from_transform(transform):
+        """Best-effort (H, W) extraction from a Resize in the transform.
+
+        Returns None if it cannot be determined (then image_size must be passed).
+        """
+        if transform is None:
+            return None
+        for attr in ("target_height", "height", "out_height", "h"):
+            h = getattr(transform, attr, None)
+            if isinstance(h, int) and h > 0:
+                for wattr in ("target_width", "width", "out_width", "w"):
+                    w = getattr(transform, wattr, None)
+                    if isinstance(w, int) and w > 0:
+                        return (h, w)
+        return None
+
+    def _normalize_params(transform, mean=None, std=None):
+        """Resolve (mean, std) for the C++ normalize from a transform or explicit values."""
+        if mean is not None and std is not None:
+            return list(mean), list(std)
+        if transform is None:
+            return [], []
+        tname = type(transform).__name__
+        if tname == "ImageNetNormalize":
+            return [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+        # Generic C++ Normalize doesn't expose mean/std; caller may pass them explicitly.
+        return [], []
+
+    def _serve_cache(
+        cache_X, cache_indices, batch_size, shuffle, epoch, prefetch, seed=0, drop_last=False
+    ):
+        """Yield fresh, optionally-shuffled batches from a contiguous decoded cache,
+        with a background prefetch thread (numpy releases the GIL during the copy).
+
+        Shuffle is seeded with seed+epoch to match the C++ epoch order. The producer
+        thread is always cleanly stopped (try/finally) even if the consumer abandons
+        the generator early, so it never leaks or blocks on a full queue.
+        """
+        if cache_X is None:
+            return
+        import queue as _queue
+        import threading as _threading
+
+        n = cache_X.shape[0]
+        order = np.random.default_rng(int(seed) + int(epoch)).permutation(n) if shuffle else None
+        end = (n // batch_size) * batch_size if drop_last else n
+        starts = list(range(0, end, batch_size))
+
+        def gather(s):
+            if order is None:
+                images = cache_X[s : s + batch_size].copy()
+                idx = cache_indices[s : s + batch_size]
+            else:
+                sel = order[s : s + batch_size]
+                images = cache_X[sel]
+                idx = cache_indices[sel]
+            return images, {"indices": idx.tolist(), "batch_size": int(images.shape[0])}
+
+        q = _queue.Queue(maxsize=max(2, prefetch))
+        _END = object()
+        stop = _threading.Event()
+
+        def producer():
+            for s in starts:
+                if stop.is_set():
+                    break
+                q.put(gather(s))
+            q.put(_END)
+
+        th = _threading.Thread(target=producer, daemon=True)
+        th.start()
+        try:
+            while True:
+                item = q.get()
+                if item is _END:
+                    break
+                yield item
+        finally:
+            # Unblock the producer if the consumer abandoned us mid-epoch.
+            stop.set()
+            try:
+                while True:
+                    q.get_nowait()
+            except _queue.Empty:
+                pass
+            th.join()
+
+    class _DirectFast:
+        """FFCV/tf.data-style fast image loader: one parallel C++ pass per batch
+        (decode+resize+normalize straight into the output buffer), plus an optional
+        in-RAM decoded cache with deterministic shuffle + prefetch. This is the
+        default fully-optimized path for local TAR + tensor output."""
+
+        def __init__(
+            self,
+            data_path,
+            image_size,
+            batch_size,
+            output_format,
+            transform,
+            shuffle,
+            seed,
+            distributed,
+            world_rank,
+            world_size,
+            cache_decoded,
+            prefetch_batches,
+            mean=None,
+            std=None,
+            drop_last=False,
+            antialias=False,
+        ):
+            from _turboloader import DirectBatchLoader as _DirectBatchLoader
+
+            h, w = (image_size, image_size) if isinstance(image_size, int) else image_size
+            self._chw = output_format in ("pytorch", "numpy_chw")
+            m, s = _normalize_params(transform, mean, std)
+            self._core = _DirectBatchLoader(
+                data_path,
+                h,
+                w,
+                batch_size=batch_size,
+                chw=self._chw,
+                normalize_01=True,
+                mean=m,
+                std=s,
+                shuffle=shuffle,
+                seed=seed,
+                distributed=distributed,
+                world_rank=world_rank,
+                world_size=world_size,
+                drop_last=drop_last,
+                antialias=antialias,
+            )
+            self._batch_size = batch_size
+            self._shuffle = shuffle
+            self._seed = seed
+            self._drop_last = drop_last
+            self._distributed = distributed
+            self._epoch = 0
+            self._cache_decoded = cache_decoded
+            self._prefetch = prefetch_batches
+            self._cache_X = None
+            self._cache_indices = None
+            self._cache_populated = False
+            self._it = None
+            if cache_decoded and distributed and world_size > 1:
+                import warnings
+
+                warnings.warn(
+                    "cache_decoded with distributed sharding caches only this rank's "
+                    "epoch-0 shard; per-epoch global resharding stops. Disable one.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+        def num_samples(self):
+            return self._core.num_samples()
+
+        def next_batch(self):
+            """Advance one batch (creates/continues an internal epoch iterator)."""
+            if self._it is None:
+                self._it = iter(self)
+            try:
+                return next(self._it)
+            except StopIteration:
+                self._it = None
+                raise
+
+        def set_epoch(self, epoch):
+            self._epoch = int(epoch)
+
+        def __len__(self):
+            n = self._core.num_samples()
+            return -(-n // self._batch_size)
+
+        def _populate_cache(self):
+            """Decode the whole dataset once into a contiguous, index-sorted cache."""
+            self._core.begin_epoch(0)
+            chunks, idxs = [], []
+            while True:
+                r = self._core.next_batch()
+                if r is None:
+                    break
+                images, meta = r
+                chunks.append(np.array(images, copy=True))  # independent of yielded buffer
+                idxs.append(np.asarray(meta["indices"]))
+            if chunks:
+                X = np.concatenate(chunks, axis=0)
+                I = np.concatenate(idxs, axis=0)
+                order = np.argsort(I, kind="stable")  # store in original-index order
+                self._cache_X = X[order]
+                self._cache_indices = I[order]
+            else:
+                self._cache_X = self._cache_indices = None
+            self._cache_populated = True
+
+        def __iter__(self):
+            if self._cache_decoded:
+                # Populate once (decode-all), then serve EVERY epoch — including this
+                # one — through _serve_cache, so all cached epochs share one consistent,
+                # deterministic, seed-respecting shuffle order.
+                if not self._cache_populated:
+                    self._populate_cache()
+                yield from _serve_cache(
+                    self._cache_X,
+                    self._cache_indices,
+                    self._batch_size,
+                    self._shuffle,
+                    self._epoch,
+                    self._prefetch,
+                    seed=self._seed,
+                    drop_last=self._drop_last,
+                )
+                return
+            # On-the-fly streaming path.
+            self._core.begin_epoch(self._epoch)
+            while True:
+                r = self._core.next_batch()
+                if r is None:
+                    break
+                yield r
+
+        def clear_cache(self):
+            self._cache_X = self._cache_indices = None
+            self._cache_populated = False
+
+        @property
+        def cache_populated(self):
+            return self._cache_populated
+
     # Create DataLoader wrapper with transform support
     class DataLoader:
         """High-performance DataLoader with integrated transform support.
@@ -265,6 +504,10 @@ try:
             ...     images = [sample['image'] for sample in batch]
         """
 
+        # Output formats that use the fully-optimized C++ batch-assembly path
+        # (one contiguous array per batch, parallel decode+resize+normalize).
+        _FAST_FORMATS = ("pytorch", "numpy_chw", "tensorflow", "numpy")
+
         def __init__(
             self,
             data_path,
@@ -272,6 +515,13 @@ try:
             num_workers=4,
             shuffle=False,
             transform=None,
+            image_size=None,
+            output_format="dict",
+            modality="image",
+            seq_len=None,
+            token_dtype="uint16",
+            arrays=None,
+            seed=42,
             enable_distributed=False,
             world_rank=0,
             world_size=1,
@@ -281,29 +531,140 @@ try:
             cache_l1_mb=512,
             cache_l2_gb=0,
             cache_dir="/tmp/turboloader_cache",
-            auto_smart_batching=True,
+            auto_smart_batching=False,
             enable_smart_batching=False,
             prefetch_batches=4,
+            cache_decoded=False,
+            antialias=False,
         ):
             self._transform = transform
-            self._loader = _DataLoaderBase(
-                data_path,
-                batch_size,
-                num_workers,
-                shuffle,
-                enable_distributed,
-                world_rank,
-                world_size,
-                drop_last,
-                distributed_seed,
-                enable_cache,
-                cache_l1_mb,
-                cache_l2_gb,
-                cache_dir,
-                auto_smart_batching,
-                enable_smart_batching,
-                prefetch_batches,
-            )
+            self._output_format = output_format
+            self._modality = modality
+
+            # Non-image modalities delegate to a dedicated loader (single entry point).
+            if modality in ("tokens", "token", "text"):
+                from turboloader.sequence import TokenDataLoader
+
+                if seq_len is None:
+                    raise ValueError("modality='tokens' requires seq_len=...")
+                self._delegate = TokenDataLoader(
+                    data_path,
+                    seq_len=seq_len,
+                    batch_size=batch_size,
+                    dtype=token_dtype,
+                    shuffle=shuffle,
+                    seed=seed,
+                )
+                self._fast = False
+                return
+            if modality in ("array", "arrays", "tensor", "tabular"):
+                from turboloader.sequence import ArrayDataLoader
+
+                src = (
+                    arrays
+                    if arrays is not None
+                    else (list(data_path) if isinstance(data_path, (list, tuple)) else [data_path])
+                )
+                self._delegate = ArrayDataLoader(
+                    *src, batch_size=batch_size, shuffle=shuffle, seed=seed, drop_last=drop_last
+                )
+                self._fast = False
+                return
+            if modality != "image":
+                raise ValueError(
+                    "modality must be one of: 'image', 'tokens', 'array' (got %r)" % modality
+                )
+
+            self._delegate = None
+            self._fast = output_format in DataLoader._FAST_FORMATS
+
+            if self._fast:
+                # Fully-optimized path: returns one (N, C, H, W)/(N, H, W, C) tensor per
+                # batch, assembled in parallel C++ (faster than PyTorch/tf.data). Needs a
+                # fixed image_size so the batch can be a single contiguous array.
+                target = image_size
+                if target is None:
+                    target = _resize_target_from_transform(transform)
+                if target is None:
+                    raise ValueError(
+                        "output_format=%r needs a fixed image size. Pass image_size=(H, W) "
+                        "or image_size=N (or include Resize(H, W) in transform)." % output_format
+                    )
+                th, tw = (target, target) if isinstance(target, int) else target
+                is_remote = (
+                    isinstance(data_path, str)
+                    and "://" in data_path
+                    and data_path.split("://", 1)[0]
+                    in ("http", "https", "s3", "gs", "gcs", "azure", "az")
+                )
+                if not is_remote:
+                    # Default fully-optimized path: FFCV-style single-pass parallel
+                    # decode->batch (no worker queue / per-sample copies). Fastest for
+                    # local TAR; auto-uses DCT scaled decode for large source images.
+                    self._impl = _DirectFast(
+                        data_path,
+                        (th, tw),
+                        batch_size,
+                        output_format,
+                        transform,
+                        shuffle,
+                        seed,
+                        enable_distributed,
+                        world_rank,
+                        world_size,
+                        cache_decoded,
+                        prefetch_batches,
+                        drop_last=drop_last,
+                        antialias=antialias,
+                    )
+                    self._loader = None
+                else:
+                    # Remote sources (http/s3/gs/azure) still use the worker pipeline
+                    # (it fetches + streams the archive); DirectBatchLoader is local-only.
+                    self._impl = FastDataLoader(
+                        data_path,
+                        batch_size=batch_size,
+                        num_workers=num_workers,
+                        output_format=output_format,
+                        target_height=th,
+                        target_width=tw,
+                        transform=transform,
+                        shuffle=shuffle,
+                        enable_distributed=enable_distributed,
+                        world_rank=world_rank,
+                        world_size=world_size,
+                        drop_last=drop_last,
+                        distributed_seed=distributed_seed,
+                        enable_cache=enable_cache,
+                        cache_l1_mb=cache_l1_mb,
+                        cache_l2_gb=cache_l2_gb,
+                        cache_dir=cache_dir,
+                        auto_smart_batching=auto_smart_batching,
+                        enable_smart_batching=enable_smart_batching,
+                        prefetch_batches=prefetch_batches,
+                        cache_decoded=cache_decoded,
+                    )
+                    self._loader = self._impl._loader
+            else:
+                self._impl = None
+                self._loader = _DataLoaderBase(
+                    data_path,
+                    batch_size,
+                    num_workers,
+                    shuffle,
+                    enable_distributed,
+                    world_rank,
+                    world_size,
+                    drop_last,
+                    distributed_seed,
+                    enable_cache,
+                    cache_l1_mb,
+                    cache_l2_gb,
+                    cache_dir,
+                    auto_smart_batching,
+                    enable_smart_batching,
+                    prefetch_batches,
+                )
 
         def _apply_transform(self, sample):
             """Apply transform to a sample's image if transform is set."""
@@ -315,23 +676,48 @@ try:
             return sample
 
         def next_batch(self):
-            """Get next batch with transforms applied."""
+            """Get next batch (tensor array in fast mode, list[dict] in dict mode)."""
+            if self._delegate is not None:
+                # Persist the iterator so successive calls advance (a fresh iter() each
+                # call would replay batch 0 forever and never terminate).
+                it = getattr(self, "_delegate_it", None)
+                if it is None:
+                    it = self._delegate_it = iter(self._delegate)
+                try:
+                    return next(it)
+                except StopIteration:
+                    self._delegate_it = None
+                    raise
+            if self._fast:
+                return self._impl.next_batch()
             batch = self._loader.next_batch()
             if self._transform is not None:
                 batch = [self._apply_transform(s) for s in batch]
             return batch
 
+        def __len__(self):
+            if self._delegate is not None:
+                return len(self._delegate)
+            if self._fast and hasattr(self._impl, "__len__"):
+                return len(self._impl)
+            raise TypeError("len() is not defined for the dict-output image loader")
+
         def is_finished(self):
             """Check if all data has been processed."""
+            if self._loader is None:
+                return False
             return self._loader.is_finished()
 
         def smart_batching_enabled(self):
             """Check if smart batching is active."""
+            if self._loader is None:
+                return False
             return self._loader.smart_batching_enabled()
 
         def stop(self):
             """Stop the pipeline and clean up resources."""
-            self._loader.stop()
+            if self._delegate is None and self._loader is not None:
+                self._loader.stop()
 
         def __enter__(self):
             """Context manager entry."""
@@ -342,7 +728,17 @@ try:
             self.stop()
 
         def __iter__(self):
-            """Make DataLoader iterable."""
+            """Make DataLoader iterable. Re-iterable across epochs in all modes."""
+            if self._delegate is not None:
+                return iter(self._delegate)
+            if self._fast:
+                return iter(self._impl)
+            # Dict path: reset the C++ pipeline so each new `for` loop starts a fresh
+            # epoch (previously epoch 2+ yielded nothing). Skip on the first pass since
+            # the pipeline was just started in __init__.
+            if getattr(self, "_dict_iterated", False):
+                self._loader.reset()
+            self._dict_iterated = True
             return self
 
         def __next__(self):
@@ -379,7 +775,12 @@ try:
                 ...     for batch in loader:
                 ...         train(batch)
             """
-            self._loader.set_epoch(epoch)
+            if self._delegate is not None:
+                self._delegate.set_epoch(epoch)
+            elif self._fast:
+                self._impl.set_epoch(epoch)
+            elif self._loader is not None:
+                self._loader.set_epoch(epoch)
 
     class FastDataLoader:
         """High-performance DataLoader with batch array transfer (8-12% faster).
@@ -472,7 +873,7 @@ try:
             cache_l1_mb=512,
             cache_l2_gb=0,
             cache_dir="/tmp/turboloader_cache",
-            auto_smart_batching=True,
+            auto_smart_batching=False,
             enable_smart_batching=False,
             prefetch_batches=4,
             cache_decoded=False,
@@ -486,13 +887,19 @@ try:
             self._data_path = data_path
             self._batch_size = batch_size
             self._num_workers = num_workers
+            self._shuffle = shuffle
+            self._epoch = 0
+            self._prefetch_batches = prefetch_batches
 
-            # Decoded tensor cache (v2.7.0)
+            # Decoded-tensor cache: after the first full epoch the decoded+resized+
+            # normalized samples are held in ONE contiguous array; later epochs slice
+            # fresh, shuffleable batches out of it (real memcpy, not aliased no-ops).
             self._cache_decoded = cache_decoded
             self._cache_decoded_mb = cache_decoded_mb if cache_decoded_mb is not None else 4096
-            self._decoded_cache = []
+            self._cache_X = None  # (N, ...) contiguous decoded samples
+            self._cache_indices = None  # (N,) original sample indices
+            self._cache_chunks = None  # transient per-epoch fill buffer
             self._cache_populated = False
-            self._cache_index = 0
 
             self._loader = _DataLoaderBase(
                 data_path,
@@ -863,52 +1270,86 @@ try:
             - Subsequent epochs: Yields directly from cache (100K+ img/s)
             """
             if self._cache_decoded and self._cache_populated:
-                # Cache hit path - iterate over cached arrays directly
-                # This is the fast path: ~100K+ img/s (no decoding, no pipeline)
-                for images, metadata in self._decoded_cache:
-                    yield images, metadata
+                yield from self._iter_from_cache()
                 return
 
-            # Normal path (or first epoch with caching)
-            # Reset the pipeline for a new epoch (reuses buffers, decoders, memory maps)
+            # Normal path (or first epoch with caching).
             self._loader.reset()
+            if self._cache_decoded:
+                self._cache_chunks = []  # collect per-batch arrays this epoch
+                self._cache_idx_chunks = []
 
-            # If caching enabled but not populated, clear any partial cache
-            if self._cache_decoded and not self._cache_populated:
-                self._decoded_cache = []
-
-            # Iterate through the pipeline
             try:
                 while True:
                     images, metadata = self.next_batch()
-
-                    # If caching enabled and first epoch, store in cache
                     if self._cache_decoded and not self._cache_populated:
-                        # Make copies to ensure data persists
-                        cached_images = images.copy()
-                        cached_metadata = {
-                            k: (v.copy() if hasattr(v, "copy") else v) for k, v in metadata.items()
-                        }
-                        self._decoded_cache.append((cached_images, cached_metadata))
-
+                        # Independent copy (ascontiguousarray is a no-op on an already
+                        # contiguous array and would alias the yielded buffer).
+                        self._cache_chunks.append(np.array(images, copy=True))
+                        idx = metadata.get("indices") if isinstance(metadata, dict) else None
+                        self._cache_idx_chunks.append(
+                            np.asarray(idx) if idx is not None else np.arange(len(images))
+                        )
                     yield images, metadata
-
             except StopIteration:
-                # Mark cache as populated after first complete epoch
                 if self._cache_decoded and not self._cache_populated:
-                    self._cache_populated = True
+                    self._finalize_cache()
+
+        def _finalize_cache(self):
+            """Concatenate the first epoch's batches into one contiguous cache."""
+            if self._cache_chunks:
+                self._cache_X = np.concatenate(self._cache_chunks, axis=0)
+                self._cache_indices = np.concatenate(self._cache_idx_chunks, axis=0)
+            else:
+                self._cache_X = None
+                self._cache_indices = None
+            self._cache_chunks = None
+            self._cache_idx_chunks = None
+            self._cache_populated = True
+
+        def _gather_cached(self, start, bs, order):
+            """Build one fresh batch (a real copy) from the contiguous cache."""
+            if order is None:
+                images = self._cache_X[start : start + bs].copy()  # fresh, mutation-safe
+                idx = self._cache_indices[start : start + bs]
+            else:
+                sel = order[start : start + bs]
+                images = self._cache_X[sel]  # fancy index => fresh copy
+                idx = self._cache_indices[sel]
+            return images, {"indices": idx.tolist(), "batch_size": int(images.shape[0])}
+
+        def _iter_from_cache(self):
+            """Serve fresh, shuffleable batches from the cache via the shared helper
+            (deterministic seed+epoch shuffle, prefetch overlap, leak-safe producer)."""
+            yield from _serve_cache(
+                self._cache_X,
+                self._cache_indices,
+                self._batch_size,
+                self._shuffle,
+                self._epoch,
+                self._prefetch_batches,
+                seed=getattr(self, "_seed", 0),
+                drop_last=getattr(self, "_drop_last", False),
+            )
+
+        def set_epoch(self, epoch):
+            """Set epoch for deterministic per-epoch shuffling (incl. cached epochs)."""
+            self._epoch = int(epoch)
+            try:
+                self._loader.set_epoch(int(epoch))
+            except Exception:
+                pass
 
         def __next__(self):
             """Get next batch (iterator protocol)."""
             return self.next_batch()
 
         def clear_cache(self):
-            """Clear the decoded tensor cache.
-
-            Call this to free memory or to force re-population of the cache
-            on the next epoch.
-            """
-            self._decoded_cache = []
+            """Free the decoded cache and force re-population on the next epoch."""
+            self._cache_X = None
+            self._cache_indices = None
+            self._cache_chunks = None
+            self._cache_idx_chunks = None
             self._cache_populated = False
 
         @property
@@ -918,15 +1359,10 @@ try:
 
         @property
         def cache_size_mb(self):
-            """Get the current size of the decoded cache in MB."""
-            if not self._decoded_cache:
+            """Size of the decoded cache in MB."""
+            if self._cache_X is None:
                 return 0.0
-            total_bytes = sum(
-                images.nbytes
-                + sum(v.nbytes if hasattr(v, "nbytes") else 0 for v in metadata.values())
-                for images, metadata in self._decoded_cache
-            )
-            return total_bytes / (1024 * 1024)
+            return self._cache_X.nbytes / (1024 * 1024)
 
         @property
         def output_format(self):
@@ -962,7 +1398,7 @@ try:
         cache_l1_mb=512,
         cache_l2_gb=0,
         cache_dir="/tmp/turboloader_cache",
-        auto_smart_batching=True,
+        auto_smart_batching=False,
         enable_smart_batching=False,
         prefetch_batches=4,
     ):
@@ -1265,7 +1701,10 @@ try:
             self.stop()
 
         def __iter__(self):
-            """Make MemoryEfficientDataLoader iterable."""
+            """Make MemoryEfficientDataLoader iterable (re-iterable across epochs)."""
+            if getattr(self, "_iterated", False):
+                self._loader.reset()
+            self._iterated = True
             return self
 
         def __next__(self):
@@ -1321,7 +1760,7 @@ try:
         cache_l1_mb=512,
         cache_l2_gb=0,
         cache_dir="/tmp/turboloader_cache",
-        auto_smart_batching=True,
+        auto_smart_batching=False,
         enable_smart_batching=False,
         prefetch_batches=4,
         max_memory_mb=512,
@@ -1515,7 +1954,7 @@ try:
             cache_l1_mb=512,
             cache_l2_gb=0,
             cache_dir="/tmp/turboloader_cache",
-            auto_smart_batching=True,
+            auto_smart_batching=False,
             enable_smart_batching=False,
             prefetch_batches=4,
         ):
@@ -1661,6 +2100,14 @@ try:
 
     # Add ProgressiveResizeLoader to exports
     __all__.append("ProgressiveResizeLoader")
+
+    # Non-image modalities: LLM token streams and generic array/tensor datasets.
+    try:
+        from turboloader.sequence import TokenDataLoader, ArrayDataLoader
+
+        __all__ += ["TokenDataLoader", "ArrayDataLoader"]
+    except Exception:
+        pass
 
     # Import PyTorch compatibility layer
     try:

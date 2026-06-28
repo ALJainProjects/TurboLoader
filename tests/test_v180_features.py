@@ -20,13 +20,19 @@ import pytest
 class TestVersion:
     """Test version information"""
 
+    @staticmethod
+    def _major(version):
+        # Version is derived from the git tag by setuptools_scm and may carry a
+        # PEP 440 dev/local suffix in a non-tagged checkout (e.g. "2.26.1.dev3+g...").
+        # Parse just the leading release segment.
+        release = version.split("+")[0].split(".dev")[0]
+        return int(release.split(".")[0])
+
     def test_version_is_190(self):
         """Verify version is >= 2.0.0 (v1.8.0 features require 2.x)"""
         import turboloader
 
-        version = turboloader.__version__
-        major, minor, patch = map(int, version.split("."))
-        assert major >= 2, f"Expected version >= 2.0.0, got {version}"
+        assert self._major(turboloader.__version__) >= 2, turboloader.__version__
 
     def test_version_function(self):
         """Test version() function returns correct version"""
@@ -34,8 +40,7 @@ class TestVersion:
             import turboloader
 
             version = turboloader.version()
-            major, minor, patch = map(int, version.split("."))
-            assert major >= 2, f"Expected version >= 2.0.0, got {version}"
+            assert self._major(version) >= 2, version
         except (ImportError, AttributeError):
             pytest.skip("C++ module not built")
 

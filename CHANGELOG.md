@@ -5,6 +5,49 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.26.0] - 2026-06-28
+
+Audit-remediation, performance, correctness, and multi-modality release.
+
+### Fixed (correctness / crashes)
+- **`ToTensor(PYTORCH_CHW)` heap-buffer overflow** — a NEON SIMD over-read
+  (`vld1_u8` reading 8 bytes inside a 4-wide loop) corrupted the heap and caused
+  non-deterministic segfaults; the CHW output was also returned as HWC. Both fixed.
+- **Crash when imported alongside PyTorch on macOS** — TurboLoader linked a second
+  OpenMP runtime. OpenMP is now **opt-in** (`TURBOLOADER_ENABLE_OPENMP=1`); a custom
+  thread pool replaces it by default.
+- **Distributed sharding was a no-op** — every rank read the whole dataset. Now each
+  rank gets an equal, disjoint shard (DDP-safe).
+- **`features()` reported false capabilities** (s3/hdf5/zarr/... = True when not
+  compiled) and a stale version. Flags now reflect the actual build; version is
+  single-sourced.
+- **Truncated/corrupt JPEG poisoned the decoder**, zero-filling all later samples on a
+  worker — the decoder is now reset on error.
+- DataLoaders are now **re-iterable** across epochs (epoch 2+ previously yielded nothing).
+
+### Added (performance)
+- **FFCV/`tf.data`-style direct-batch loader** (default for local TAR + tensor output):
+  one parallel pass decodes → resizes → normalizes straight into the batch buffer.
+  Faster than fully-optimized `tf.data` and PyTorch DataLoader on this benchmark.
+- **Automatic libjpeg-turbo DCT scaled decode** for large source images.
+- **Real decoded cache** (`cache_decoded=True`): correct, deterministic, shuffleable,
+  prefetched (replaces the previous no-op/aliasing implementation).
+
+### Added (correctness / quality)
+- **Half-pixel resize** (`align_corners=False`) matching PIL/OpenCV/PyTorch/TF.
+- **Optional antialiased resize** (`antialias=True`) — triangle filter for downscale.
+
+### Added (modalities)
+- **`TokenDataLoader`** — memory-mapped LLM token streams → next-token batches.
+- **`ArrayDataLoader`** — generic `(N, …)` arrays/memmaps (embeddings, tabular, labels).
+- Unified entry point: `DataLoader(modality="tokens"|"array"|"image")`.
+
+### Changed (packaging / release)
+- **Version is now derived from the git tag** via setuptools_scm — no manual edits.
+- **Automated PyPI publishing** on `v*` tags via Trusted Publishing (see RELEASING.md).
+- Multi-platform wheels: Linux x86_64/aarch64 + macOS arm64/x86_64, CPython 3.10–3.13.
+- License migrated to SPDX form; removed duplicated metadata between setup.py/pyproject.
+
 ## [2.23.0] - 2025-12-18
 
 ### Phase 8: Advanced Features (Competitor Parity)

@@ -230,7 +230,6 @@ class TestNextBatchArray:
         assert isinstance(images, np.ndarray)
         assert images.flags["C_CONTIGUOUS"]
 
-    @pytest.mark.xfail(reason="CHW format output shape not yet correct")
     def test_chw_format(self, test_tar):
         """Test CHW format conversion."""
         import turboloader

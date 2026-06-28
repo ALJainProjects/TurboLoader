@@ -340,20 +340,33 @@ public:
           cache_(cache),
           samples_skipped_(samples_skipped) {
 
-        // Per-worker TAR reader
+        // Per-worker TAR reader.
+        //
+        // Distributed sharding: split the dataset into (world_size * num_workers)
+        // contiguous partitions and give each (rank, worker) a unique, disjoint
+        // chunk. Previously the per-worker reader partitioned the FULL dataset by
+        // (worker_id, num_workers) on every rank, so every rank read all samples
+        // (the world_rank/world_size shard was computed but never applied).
+        size_t partition_id = worker_id;
+        size_t num_partitions = config.num_workers;
+        if (config.enable_distributed && config.world_size > 1) {
+            partition_id = static_cast<size_t>(config.world_rank) * config.num_workers + worker_id;
+            num_partitions = static_cast<size_t>(config.world_size) * config.num_workers;
+        }
+
         // Check if using remote TAR data (already fetched)
         if (remote_tar_data) {
             tar_reader_ = std::make_unique<TarReader>(
                 remote_tar_data,
-                worker_id,
-                config.num_workers
+                partition_id,
+                num_partitions
             );
         } else {
             // Local file path
             tar_reader_ = std::make_unique<TarReader>(
                 config.data_path,
-                worker_id,
-                config.num_workers
+                partition_id,
+                num_partitions
             );
         }
 
@@ -891,11 +904,12 @@ public:
                     std::this_thread::yield();
                 }
             } else {
-                // Standard mode: Round-robin across worker queues (lock-free)
-                size_t consecutive_failures = 0;
-                size_t max_failures = tar_workers_.size() * 2;  // Give up after 2 full rounds
-
-                while (batch.size() < config_.batch_size && consecutive_failures < max_failures) {
+                // Standard mode: Round-robin across worker queues (lock-free).
+                // Block until the batch is full OR the dataset is exhausted, so
+                // batch_size is always honored except for the final partial batch.
+                // (Previously this gave up after a couple of empty rounds and
+                // returned short batches while workers were still decoding.)
+                while (batch.size() < config_.batch_size) {
                     bool got_sample = false;
 
                     for (auto& worker : tar_workers_) {
@@ -905,13 +919,11 @@ public:
                         if (worker->get_queue()->try_pop(sample)) {
                             batch.add(std::move(sample));
                             got_sample = true;
-                            consecutive_failures = 0;
                         }
                     }
 
                     if (!got_sample) {
-                        consecutive_failures++;
-                        if (is_finished()) break;
+                        if (is_finished()) break;  // no more samples anywhere
                         std::this_thread::yield();
                     }
                 }

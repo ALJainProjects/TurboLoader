@@ -10,6 +10,28 @@ import sys
 import os
 import subprocess
 
+# The package version is derived from the git tag by setuptools_scm (see pyproject
+# [tool.setuptools_scm]); setup() does NOT set it. We only need the resolved string
+# here to pass to the C++ extension as -DTURBOLOADER_VERSION so the native module's
+# version()/features() always match the package (this skew once shipped as 2.5.0 vs
+# 2.25.0). Resolve from scm (git checkout) or the generated _version.py (sdist).
+def _resolve_version():
+    try:
+        from setuptools_scm import get_version
+        return get_version(root=".", relative_to=__file__)
+    except Exception:
+        pass
+    try:
+        ns = {}
+        with open(os.path.join("turboloader", "_version.py")) as fh:
+            exec(fh.read(), ns)
+        return ns.get("__version__") or ns.get("version") or "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+
+VERSION = _resolve_version()
+
 
 class get_pybind_include(object):
     """Helper class to determine the pybind11 include path"""
@@ -254,12 +276,21 @@ def get_extensions():
         )
     print(f"  lz4: {lz4_include}")
 
-    # OpenMP detection
-    omp = find_openmp()
-    if omp:
-        print(f"  OpenMP: found")
+    # OpenMP is OFF by default. Linking a second OpenMP runtime (Homebrew libomp)
+    # into the same process as PyTorch (which bundles its own libomp) causes an
+    # import-order-dependent hard crash on macOS. Since TurboLoader is meant to be
+    # used alongside PyTorch, correctness wins over the marginal OpenMP speedup.
+    # Power users on non-PyTorch setups can opt in with TURBOLOADER_ENABLE_OPENMP=1.
+    # Without -fopenmp the `#pragma omp` directives simply compile to serial code.
+    enable_omp = os.environ.get("TURBOLOADER_ENABLE_OPENMP", "0") == "1"
+    omp = find_openmp() if enable_omp else None
+    if enable_omp and omp:
+        print("  OpenMP: ENABLED via TURBOLOADER_ENABLE_OPENMP=1")
+    elif enable_omp:
+        print("  OpenMP: requested but not found; building without it")
     else:
-        print(f"  OpenMP: not found (parallel loops will be disabled)")
+        print("  OpenMP: disabled by default (avoids libomp/PyTorch crash); "
+              "set TURBOLOADER_ENABLE_OPENMP=1 to enable")
 
     include_dirs = [
         get_pybind_include(),
@@ -283,6 +314,9 @@ def get_extensions():
         "-funroll-loops",
         lto_flag,
     ]
+    if not enable_omp:
+        # `#pragma omp` lines are harmless no-ops without -fopenmp; silence the warning.
+        compile_args.append("-Wno-unknown-pragmas")
     link_args = [lto_flag]
 
     if omp:
@@ -311,6 +345,7 @@ def get_extensions():
             language="c++",
             extra_compile_args=compile_args,
             extra_link_args=link_args,
+            define_macros=[("TURBOLOADER_VERSION", '"{}"'.format(VERSION))],
         ),
     ]
 
@@ -483,33 +518,16 @@ else:
 
 setup(
     name="turboloader",
-    version="2.25.0",
+    # version omitted: provided dynamically by setuptools_scm (pyproject dynamic).
     author="TurboLoader Contributors",
     description="High-performance data loading for ML with pipe operator, HDF5/TFRecord/Zarr, GPU transforms, Azure support",
     long_description=open("README.md").read() if os.path.exists("README.md") else "",
     long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     cmdclass={"build_ext": BuildExt},
-    install_requires=[
-        "pybind11>=2.10.0",
-        "numpy>=1.20.0",
-    ],
-    extras_require={
-        "torch": ["torch>=1.10.0"],
-        "dev": ["pytest", "black", "mypy"],
-    },
-    python_requires=">=3.10",
-    classifiers=[
-        "Development Status :: 5 - Production/Stable",
-        "Intended Audience :: Developers",
-        "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: MIT License",
-        "Programming Language :: C++",
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "Programming Language :: Python :: 3.12",
-        "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    ],
+    # Project metadata (name, version, dependencies, classifiers, license, python
+    # requirement) is defined once in pyproject.toml [project] — keeping it here too
+    # made setuptools warn that it was "overwritten". setup.py only carries the C++
+    # extension build here.
     zip_safe=False,
 )

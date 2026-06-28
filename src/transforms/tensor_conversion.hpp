@@ -317,6 +317,7 @@ public:
                 input.width * input.channels * sizeof(float), true
             );
             output->is_float32 = true;
+            output->is_chw = true;  // data is laid out (C, H, W)
 
             // Transfer ownership
             tensor->owns_data = false;

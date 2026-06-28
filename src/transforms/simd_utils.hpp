@@ -89,6 +89,20 @@ inline void aligned_free(void* ptr) {
 #endif
 }
 
+namespace detail {
+// Bilinear resize coordinate convention: half-pixel centers (align_corners=False),
+// matching PIL / OpenCV / PyTorch / TensorFlow. Source coord for output index i is
+// max(0, (i + 0.5) * src/dst - 0.5). (A previous version used align_corners=True,
+// i * (src-1)/(dst-1), which differs from every major library by ~1/255.)
+inline float resize_scale(int src_dim, int dst_dim) {
+    return static_cast<float>(src_dim) / static_cast<float>(dst_dim > 0 ? dst_dim : 1);
+}
+inline float resize_src_coord(int dst_idx, float scale) {
+    float s = (static_cast<float>(dst_idx) + 0.5f) * scale - 0.5f;
+    return s < 0.0f ? 0.0f : s;
+}
+}  // namespace detail
+
 // ============================================================================
 // VECTORIZED OPERATIONS - AVX-512
 // ============================================================================
@@ -419,8 +433,11 @@ inline void cvt_u8_to_f32_normalized(const uint8_t* src, float* dst, size_t coun
     size_t i = 0;
     // Process 4 floats at a time
     for (; i + 4 <= count; i += 4) {
-        // Load 4 uint8 values
-        uint8x8_t u8_vals = vld1_u8(src + i);
+        // Load exactly 4 uint8 values. vld1_u8 reads 8 bytes, which over-reads the
+        // source buffer by 4 bytes on the final iteration (audit: heap overflow).
+        uint32_t four;
+        std::memcpy(&four, src + i, 4);
+        uint8x8_t u8_vals = vreinterpret_u8_u32(vdup_n_u32(four));
 
         // Zero-extend to 16-bit
         uint16x4_t u16_vals = vget_low_u16(vmovl_u8(u8_vals));
@@ -491,7 +508,10 @@ inline void mul_u8_scalar(const uint8_t* src, uint8_t* dst, float scalar, size_t
 
     size_t i = 0;
     for (; i + 4 <= count; i += 4) {
-        uint8x8_t u8_vals = vld1_u8(src + i);
+        // Load exactly 4 bytes (vld1_u8 reads 8 -> over-reads by 4 on final iter).
+        uint32_t four;
+        std::memcpy(&four, src + i, 4);
+        uint8x8_t u8_vals = vreinterpret_u8_u32(vdup_n_u32(four));
         uint16x4_t u16_vals = vget_low_u16(vmovl_u8(u8_vals));
         uint32x4_t u32_vals = vmovl_u16(u16_vals);
         float32x4_t f32_vals = vcvtq_f32_u32(u32_vals);
@@ -525,7 +545,10 @@ inline void add_u8_scalar(const uint8_t* src, uint8_t* dst, float scalar, size_t
 
     size_t i = 0;
     for (; i + 4 <= count; i += 4) {
-        uint8x8_t u8_vals = vld1_u8(src + i);
+        // Load exactly 4 bytes (vld1_u8 reads 8 -> over-reads by 4 on final iter).
+        uint32_t four;
+        std::memcpy(&four, src + i, 4);
+        uint8x8_t u8_vals = vreinterpret_u8_u32(vdup_n_u32(four));
         uint16x4_t u16_vals = vget_low_u16(vmovl_u8(u8_vals));
         uint32x4_t u32_vals = vmovl_u16(u16_vals);
         float32x4_t f32_vals = vcvtq_f32_u32(u32_vals);
@@ -814,11 +837,11 @@ inline void rgb_to_grayscale_neon(const uint8_t* rgb, uint8_t* gray, size_t num_
 inline void resize_bilinear_rgb_neon(const uint8_t* src, uint8_t* dst,
                                      int src_width, int src_height,
                                      int dst_width, int dst_height) {
-    const float x_ratio = static_cast<float>(src_width - 1) / (dst_width - 1);
-    const float y_ratio = static_cast<float>(src_height - 1) / (dst_height - 1);
+    const float x_ratio = detail::resize_scale(src_width, dst_width);
+    const float y_ratio = detail::resize_scale(src_height, dst_height);
 
     for (int y = 0; y < dst_height; ++y) {
-        float src_y = y * y_ratio;
+        float src_y = detail::resize_src_coord(y, y_ratio);
         int y0 = static_cast<int>(src_y);
         int y1 = std::min(y0 + 1, src_height - 1);
         float dy = src_y - y0;
@@ -829,7 +852,7 @@ inline void resize_bilinear_rgb_neon(const uint8_t* src, uint8_t* dst,
         for (; x + 4 <= dst_width; x += 4) {
             float src_x[4];
             for (int i = 0; i < 4; ++i) {
-                src_x[i] = (x + i) * x_ratio;
+                src_x[i] = detail::resize_src_coord(x + i, x_ratio);
             }
 
             for (int c = 0; c < 3; ++c) {
@@ -866,7 +889,7 @@ inline void resize_bilinear_rgb_neon(const uint8_t* src, uint8_t* dst,
 
         // Scalar tail
         for (; x < dst_width; ++x) {
-            float src_x_f = x * x_ratio;
+            float src_x_f = detail::resize_src_coord(x, x_ratio);
             int x0 = static_cast<int>(src_x_f);
             int x1 = std::min(x0 + 1, src_width - 1);
             float dx = src_x_f - x0;
@@ -1634,18 +1657,24 @@ inline void transpose_chw_to_hwc(const uint8_t* src, uint8_t* dst,
  * @param dst_width Destination image width
  * @param dst_height Destination image height
  * @param channels Number of channels (typically 3 for RGB)
+ *
+ * Coordinate convention: half-pixel centers (align_corners=False), matching
+ * PIL / OpenCV / PyTorch / TensorFlow. Source coordinate for output index i is
+ * max(0, (i + 0.5) * src/dst - 0.5). (A previous version used align_corners=True,
+ * (i * (src-1)/(dst-1)), which differs from every major library by ~1/255.)
  */
+
 #if defined(TURBOLOADER_SIMD_NEON)
 
 inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
                                   int src_width, int src_height,
                                   int dst_width, int dst_height,
                                   int channels = 3) {
-    const float x_ratio = static_cast<float>(src_width - 1) / std::max(1, dst_width - 1);
-    const float y_ratio = static_cast<float>(src_height - 1) / std::max(1, dst_height - 1);
+    const float x_ratio = detail::resize_scale(src_width, dst_width);
+    const float y_ratio = detail::resize_scale(src_height, dst_height);
 
     for (int y = 0; y < dst_height; ++y) {
-        float src_y = y * y_ratio;
+        float src_y = detail::resize_src_coord(y, y_ratio);
         int y0 = static_cast<int>(src_y);
         int y1 = std::min(y0 + 1, src_height - 1);
         float dy = src_y - y0;
@@ -1662,7 +1691,7 @@ inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
             float dx[4];
 
             for (int i = 0; i < 4; ++i) {
-                src_x[i] = (x + i) * x_ratio;
+                src_x[i] = detail::resize_src_coord(x + i, x_ratio);
                 x0[i] = static_cast<int>(src_x[i]);
                 x1[i] = std::min(x0[i] + 1, src_width - 1);
                 dx[i] = src_x[i] - x0[i];
@@ -1721,7 +1750,7 @@ inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
 
         // Scalar tail for remaining pixels
         for (; x < dst_width; ++x) {
-            float src_x_f = x * x_ratio;
+            float src_x_f = detail::resize_src_coord(x, x_ratio);
             int x0_s = static_cast<int>(src_x_f);
             int x1_s = std::min(x0_s + 1, src_width - 1);
             float dx_s = src_x_f - x0_s;
@@ -1750,11 +1779,11 @@ inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
                                   int src_width, int src_height,
                                   int dst_width, int dst_height,
                                   int channels = 3) {
-    const float x_ratio = static_cast<float>(src_width - 1) / std::max(1, dst_width - 1);
-    const float y_ratio = static_cast<float>(src_height - 1) / std::max(1, dst_height - 1);
+    const float x_ratio = detail::resize_scale(src_width, dst_width);
+    const float y_ratio = detail::resize_scale(src_height, dst_height);
 
     for (int y = 0; y < dst_height; ++y) {
-        float src_y = y * y_ratio;
+        float src_y = detail::resize_src_coord(y, y_ratio);
         int y0 = static_cast<int>(src_y);
         int y1 = std::min(y0 + 1, src_height - 1);
         float dy = src_y - y0;
@@ -1771,7 +1800,7 @@ inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
             float dx[8];
 
             for (int i = 0; i < 8; ++i) {
-                src_x[i] = (x + i) * x_ratio;
+                src_x[i] = detail::resize_src_coord(x + i, x_ratio);
                 x0_arr[i] = static_cast<int>(src_x[i]);
                 x1_arr[i] = std::min(x0_arr[i] + 1, src_width - 1);
                 dx[i] = src_x[i] - x0_arr[i];
@@ -1830,7 +1859,7 @@ inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
 
         // Scalar tail
         for (; x < dst_width; ++x) {
-            float src_x_f = x * x_ratio;
+            float src_x_f = detail::resize_src_coord(x, x_ratio);
             int x0_s = static_cast<int>(src_x_f);
             int x1_s = std::min(x0_s + 1, src_width - 1);
             float dx_s = src_x_f - x0_s;
@@ -1859,17 +1888,17 @@ inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
                                   int src_width, int src_height,
                                   int dst_width, int dst_height,
                                   int channels = 3) {
-    const float x_ratio = static_cast<float>(src_width - 1) / std::max(1, dst_width - 1);
-    const float y_ratio = static_cast<float>(src_height - 1) / std::max(1, dst_height - 1);
+    const float x_ratio = detail::resize_scale(src_width, dst_width);
+    const float y_ratio = detail::resize_scale(src_height, dst_height);
 
     for (int y = 0; y < dst_height; ++y) {
-        float src_y = y * y_ratio;
+        float src_y = detail::resize_src_coord(y, y_ratio);
         int y0 = static_cast<int>(src_y);
         int y1 = std::min(y0 + 1, src_height - 1);
         float dy = src_y - y0;
 
         for (int x = 0; x < dst_width; ++x) {
-            float src_x = x * x_ratio;
+            float src_x = detail::resize_src_coord(x, x_ratio);
             int x0 = static_cast<int>(src_x);
             int x1 = std::min(x0 + 1, src_width - 1);
             float dx = src_x - x0;
@@ -1892,6 +1921,87 @@ inline void resize_bilinear_simd(const uint8_t* src, uint8_t* dst,
 }
 
 #endif
+
+// Antialiased (area-correct) bilinear resize: a separable triangle filter whose
+// support widens on downscale, matching PIL / torchvision(antialias=True) / TF. Slower
+// than plain bilinear (more taps) but removes aliasing when shrinking large images.
+// Implemented in scalar float for correctness; it is an opt-in quality path.
+inline void resize_triangle_antialias(const uint8_t* src, uint8_t* dst,
+                                      int src_width, int src_height,
+                                      int dst_width, int dst_height,
+                                      int channels = 3) {
+    // Precompute per-output taps + weights for one axis (PIL "bilinear" filter).
+    auto build = [](int src_dim, int dst_dim,
+                    std::vector<int>& left, std::vector<int>& count,
+                    std::vector<float>& weights, int& max_taps) {
+        const float scale = detail::resize_scale(src_dim, dst_dim);
+        const float support = scale > 1.0f ? scale : 1.0f;  // triangle radius
+        left.resize(dst_dim);
+        count.resize(dst_dim);
+        max_taps = static_cast<int>(std::ceil(support * 2.0f)) + 2;
+        weights.assign(static_cast<size_t>(dst_dim) * max_taps, 0.0f);
+        for (int i = 0; i < dst_dim; ++i) {
+            // PIL/torchvision antialias filter center (box center in source coords).
+            float center = (static_cast<float>(i) + 0.5f) * scale;
+            int lo = static_cast<int>(std::floor(center - support));
+            int hi = static_cast<int>(std::ceil(center + support));
+            if (lo < 0) lo = 0;
+            if (hi > src_dim) hi = src_dim;
+            float wsum = 0.0f;
+            int n = 0;
+            for (int j = lo; j < hi && n < max_taps; ++j, ++n) {
+                float t = (static_cast<float>(j) + 0.5f - center) / support;
+                float w = 1.0f - std::fabs(t);
+                if (w < 0.0f) w = 0.0f;
+                weights[static_cast<size_t>(i) * max_taps + n] = w;
+                wsum += w;
+            }
+            if (wsum > 0.0f) {
+                for (int k = 0; k < n; ++k) weights[static_cast<size_t>(i) * max_taps + k] /= wsum;
+            }
+            left[i] = lo;
+            count[i] = n;
+        }
+    };
+
+    std::vector<int> xl, xc, yl, yc;
+    std::vector<float> xw, yw;
+    int xt = 0, yt = 0;
+    build(src_width, dst_width, xl, xc, xw, xt);
+    build(src_height, dst_height, yl, yc, yw, yt);
+
+    // Horizontal pass: (src_height x dst_width) float intermediate.
+    std::vector<float> tmp(static_cast<size_t>(src_height) * dst_width * channels);
+    for (int y = 0; y < src_height; ++y) {
+        const uint8_t* srow = src + static_cast<size_t>(y) * src_width * channels;
+        float* trow = tmp.data() + static_cast<size_t>(y) * dst_width * channels;
+        for (int x = 0; x < dst_width; ++x) {
+            const float* w = xw.data() + static_cast<size_t>(x) * xt;
+            int lo = xl[x], n = xc[x];
+            for (int c = 0; c < channels; ++c) {
+                float acc = 0.0f;
+                for (int k = 0; k < n; ++k) acc += w[k] * srow[(lo + k) * channels + c];
+                trow[x * channels + c] = acc;
+            }
+        }
+    }
+
+    // Vertical pass: (dst_height x dst_width) uint8 output.
+    for (int y = 0; y < dst_height; ++y) {
+        const float* w = yw.data() + static_cast<size_t>(y) * yt;
+        int lo = yl[y], n = yc[y];
+        uint8_t* drow = dst + static_cast<size_t>(y) * dst_width * channels;
+        for (int x = 0; x < dst_width; ++x) {
+            for (int c = 0; c < channels; ++c) {
+                float acc = 0.0f;
+                for (int k = 0; k < n; ++k)
+                    acc += w[k] * tmp[(static_cast<size_t>(lo + k) * dst_width + x) * channels + c];
+                drow[x * channels + c] =
+                    static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, acc + 0.5f)));
+            }
+        }
+    }
+}
 
 // ============================================================================
 // FUSED HWC uint8 → CHW float32 DEINTERLEAVE + CONVERT + NORMALIZE

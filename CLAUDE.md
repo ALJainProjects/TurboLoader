@@ -1,6 +1,6 @@
 # TurboLoader
 
-High-performance ML data loading library. C++20 core with Python bindings via pybind11. Targets 12x faster throughput than PyTorch DataLoader.
+High-performance ML data loading library. C++20 core with Python bindings via pybind11. SIMD-accelerated transforms, libjpeg-turbo decode, TBL v2 format. (Throughput vs PyTorch/tf.data is hardware-dependent — see benchmarks/; do not assert fixed multipliers in docs.)
 
 ## Build Commands
 

@@ -109,8 +109,11 @@ public:
             throw std::runtime_error("Empty JPEG data");
         }
 
-        // Set up error handling
+        // Set up error handling. On error, reset the decompressor so this (reused,
+        // thread_local) decoder stays usable — otherwise one truncated image leaves
+        // cinfo_ in a bad state and every subsequent decode on this thread fails.
         if (setjmp(jerr_.setjmp_buffer)) {
+            jpeg_abort_decompress(&cinfo_);
             throw std::runtime_error("JPEG decode error");
         }
 
@@ -233,8 +236,11 @@ public:
             throw std::runtime_error("Empty JPEG data");
         }
 
-        // Set up error handling
+        // Set up error handling. On error, reset the decompressor so this (reused,
+        // thread_local) decoder stays usable — otherwise one truncated image leaves
+        // cinfo_ in a bad state and every subsequent decode on this thread fails.
         if (setjmp(jerr_.setjmp_buffer)) {
+            jpeg_abort_decompress(&cinfo_);
             throw std::runtime_error("JPEG decode error");
         }
 
