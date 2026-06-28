@@ -122,8 +122,8 @@ try:
     from _turboloader import (
         # Core DataLoader (internal - we wrap this)
         DataLoader as _DataLoaderBase,
-        version,
-        features,
+        version as _c_version,
+        features as _c_features,
         # TBL v2 Format
         TblReaderV2,
         TblWriterV2,
@@ -172,6 +172,20 @@ try:
         PaddingMode,
         TensorFormat,
     )
+
+    def version():
+        """TurboLoader version — single-sourced from the package metadata
+        (setuptools_scm / the git tag), so it can never drift from ``__version__``
+        or the C++ build-time macro."""
+        return __version__
+
+    def features():
+        """Build/capability flags from the native module, with ``version`` overridden
+        to the canonical package version (the C++ ``-DTURBOLOADER_VERSION`` macro is a
+        compile-time fallback and is not authoritative)."""
+        f = dict(_c_features())
+        f["version"] = __version__
+        return f
 
     __all__ = [
         "DataLoader",
