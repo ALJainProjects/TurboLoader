@@ -32,6 +32,15 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install jpeg-turbo libpng webp lz4
 
+      # Homebrew bottles are built for the runner's current macOS, so the bundled
+      # dylibs carry that minimum version. delocate rejects the wheel unless
+      # MACOSX_DEPLOYMENT_TARGET >= that. Derive the target from the runner's OS major
+      # (auto-adjusts when GitHub bumps the runner image) instead of a fixed value.
+      - name: macOS deployment target
+        if: runner.os == 'macOS'
+        id: macos
+        run: echo "target=$(sw_vers -productVersion | cut -d. -f1).0" >> "$GITHUB_OUTPUT"
+
       # Resolve the version on the host and pass it into the build containers via
       # SETUPTOOLS_SCM_PRETEND_VERSION, so setuptools_scm never has to introspect git
       # inside manylinux (which is brittle). Derive it WITHOUT pip/setuptools_scm:
@@ -59,7 +68,7 @@ jobs:
           # Build a single-arch macOS wheel (NOT universal2) so each slice links
           # against same-arch Homebrew libraries.
           CIBW_ENVIRONMENT_MACOS: >
-            MACOSX_DEPLOYMENT_TARGET=11.0
+            MACOSX_DEPLOYMENT_TARGET=${{ steps.macos.outputs.target }}
             ARCHFLAGS="-arch ${{ matrix.archs }}"
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.scm.outputs.version }}
 

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "wheel", "pybind11>=2.10.0", "setuptools_scm>=8"]
+requires = ["setuptools>=64", "wheel", "pybind11>=2.10.0", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,7 +10,10 @@ dynamic = ["version"]
 description = "High-performance ML data loading: C++20 core with SIMD-accelerated transforms, pipe-operator composition, TBL v2 format, and a PyTorch-compatible DataLoader."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+# Classic table form (not the PEP 639 SPDX string): the SPDX form makes setuptools>=77
+# import packaging.licenses, which isn't available under cibuildwheel's pinned build
+# constraints and breaks every wheel. The deprecation warning this emits is harmless.
+license = { text = "MIT" }
 authors = [
     {name = "Arnav Jain"}
 ]
