@@ -42,3 +42,7 @@ benchmark_results/
 
 # setuptools_scm generated
 turboloader/_version.py
+
+# coverage
+.coverage
+htmlcov/

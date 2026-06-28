@@ -321,7 +321,9 @@ def get_extensions():
     def _keep_include(inc):
         if not inc:
             return False
-        if _macos and (".sdk/usr/include" in inc.lower() or inc.rstrip("/") == "/usr/include"):
+        # get_pybind_include() returns a lazy object, not a str — stringify before testing.
+        s = str(inc)
+        if _macos and (".sdk/usr/include" in s.lower() or s.rstrip("/") == "/usr/include"):
             return False
         return True
 
@@ -343,7 +345,8 @@ def get_extensions():
     def _keep_lib(lib):
         if not lib:
             return False
-        if _macos and (".sdk/usr/lib" in lib.lower() or lib.rstrip("/") == "/usr/lib"):
+        s = str(lib)
+        if _macos and (".sdk/usr/lib" in s.lower() or s.rstrip("/") == "/usr/lib"):
             return False
         return True
 
