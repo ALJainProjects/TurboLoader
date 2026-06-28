@@ -160,8 +160,10 @@ def test_iteration_yields_image_label_tuples(dataset):
 
 
 def test_labels_follow_folder_class(dataset):
-    # shuffle=False keeps sorted (ant, bee, cat) order: one class per batch.
-    loader = _make_loader(dataset, batch_size=4, shuffle=False)
+    # num_workers=1 keeps the sorted (ant, bee, cat) TAR order deterministic — with
+    # multiple workers the per-worker shards interleave, so batch order is not stable
+    # (covered order-independently by test_iteration_covers_every_sample_once).
+    loader = _make_loader(dataset, batch_size=4, shuffle=False, num_workers=1)
     seen = [labels.tolist() for _images, labels in loader]
     assert seen == [[0, 0, 0, 0], [1, 1, 1, 1], [2, 2, 2, 2]]
 
