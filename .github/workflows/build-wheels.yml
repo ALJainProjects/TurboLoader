@@ -17,6 +17,11 @@ jobs:
     # (continue-on-error) so a runner toolchain hiccup never blocks the release — the
     # sdist always covers macOS too.
     continue-on-error: ${{ matrix.optional == true }}
+    # Cap run time so a wedged build can't block the publish (which waits on every wheel
+    # leg). This covers execution, NOT runner-queue time — which is why we don't build on
+    # the scarce macos-13 (Intel) runners: they can sit queued 70+ min and stall the
+    # release. Intel-Mac users install the sdist (which builds fine on their machine).
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -24,7 +29,6 @@ jobs:
           - { name: linux-x86_64,   os: ubuntu-latest,    archs: x86_64 }
           - { name: linux-aarch64,  os: ubuntu-24.04-arm, archs: aarch64 }
           - { name: macos-arm64,    os: macos-14,         archs: arm64,  optional: true }
-          - { name: macos-x86_64,   os: macos-13,         archs: x86_64, optional: true }
 
     steps:
       - uses: actions/checkout@v4
