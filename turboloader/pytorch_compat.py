@@ -148,7 +148,9 @@ class FolderLabelExtractor(LabelExtractor):
         return len(self._class_to_idx)
 
     def get_class_names(self) -> List[str]:
-        return [self._idx_to_class[i] for i in range(len(self._idx_to_class))]
+        # Order by index value. Using range(len(...)) breaks for a prebuilt mapping
+        # whose indices are non-contiguous (e.g. {'a': 2, 'b': 5} -> KeyError(0)).
+        return [self._idx_to_class[i] for i in sorted(self._idx_to_class)]
 
     @property
     def class_to_idx(self) -> Dict[str, int]:
@@ -201,9 +203,12 @@ class MetadataLabelExtractor(LabelExtractor):
 
 
 class JSONSidecarExtractor(LabelExtractor):
-    """Extract labels from JSON sidecar files.
+    """Extract labels from per-sample JSON metadata.
 
-    For each image, looks for a corresponding .json file with label info.
+    Reads the label from ``metadata["json_data"][label_key]`` (the JSON sidecar that
+    the TAR pipeline surfaces as sample metadata); returns 0 when absent. It does NOT
+    read .json files from disk — in the TAR pipeline a sample's ``filename`` is an
+    archive member, not a filesystem path, so the JSON must be carried in metadata.
     """
 
     def __init__(self, label_key: str = "label", cache: bool = True):
@@ -216,8 +221,6 @@ class JSONSidecarExtractor(LabelExtractor):
         if self._cache and filename in self._label_cache:
             return self._label_cache[filename]
 
-        # Try to find JSON in metadata
-        json_key = filename.rsplit(".", 1)[0] + ".json"
         if "json_data" in metadata:
             data = metadata["json_data"]
             label = data.get(self._label_key, 0)
@@ -424,6 +427,11 @@ class PyTorchCompatibleLoader:
                         break
                     continue
 
+                # Honor drop_last (PyTorch semantics): drop a ragged final batch.
+                # The underlying worker pipeline does not enforce this itself.
+                if self._drop_last and 0 < images.shape[0] < self._batch_size:
+                    continue
+
                 # Extract labels
                 filenames = metadata.get("filenames", [])
                 labels = []
@@ -437,7 +445,14 @@ class PyTorchCompatibleLoader:
 
                 labels_tensor = torch.tensor(labels, dtype=torch.long)
 
-                if self._pin_memory and labels_tensor.device.type == "cpu":
+                # Only pin when CUDA is actually available (as torch's own DataLoader
+                # does). pin_memory() pins to the default accelerator, which raises on
+                # an MPS/Apple-Silicon machine where the tensor is on CPU.
+                if (
+                    self._pin_memory
+                    and labels_tensor.device.type == "cpu"
+                    and torch.cuda.is_available()
+                ):
                     labels_tensor = labels_tensor.pin_memory()
 
                 if self._device:

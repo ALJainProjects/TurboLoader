@@ -213,11 +213,6 @@ class TestCacheDecoded:
 class TestCacheDecodedIntegration:
     """Integration tests for cache_decoded with other features."""
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="cache_decoded is non-deterministic across epochs with multiple "
-        "workers: cached epoch-2 batches do not match epoch-1 (worker ordering).",
-    )
     def test_cache_with_chw_format(self, test_tar):
         """Test cache_decoded with CHW output format (pytorch)."""
         loader = turboloader.FastDataLoader(

@@ -602,7 +602,7 @@ try:
                 if target is None:
                     raise ValueError(
                         "output_format=%r needs a fixed image size. Pass image_size=(H, W) "
-                        "or image_size=N (or include Resize(H, W) in transform)." % output_format
+                        "or image_size=N." % output_format
                     )
                 th, tw = (target, target) if isinstance(target, int) else target
                 is_remote = (
