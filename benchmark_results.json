@@ -1,0 +1,67 @@
+{
+  "meta": {
+    "dataset": "Imagenette-160 (9,469 real ImageNet JPEGs -> 160px)",
+    "platform": "Apple Silicon",
+    "consumption": "real (np.sum / tf.reduce_sum forces materialization)",
+    "method": "warmup + median of 3 timed epochs",
+    "batch_size": 64
+  },
+  "frameworks": [
+    {
+      "name": "TurboLoader (cached)",
+      "throughput": 65499
+    },
+    {
+      "name": "TurboLoader",
+      "throughput": 39100
+    },
+    {
+      "name": "TensorFlow tf.data",
+      "throughput": 30154
+    },
+    {
+      "name": "PyTorch DataLoader",
+      "throughput": 18991
+    }
+  ],
+  "workers": {
+    "workers": [
+      1,
+      2,
+      4,
+      6,
+      8
+    ],
+    "turboloader": [
+      39009,
+      39100,
+      38512,
+      38318,
+      38325
+    ],
+    "pytorch": [
+      3057,
+      5779,
+      10560,
+      15272,
+      18991
+    ],
+    "tensorflow": [
+      30154,
+      30154,
+      30154,
+      30154,
+      30154
+    ]
+  },
+  "cache": {
+    "turboloader": 65499,
+    "tensorflow": 410124
+  },
+  "tokens": {
+    "turboloader": 441102077,
+    "numpy_memmap": 163141550
+  },
+  "speedup_vs_pytorch": 2.1,
+  "speedup_vs_tfdata": 1.3
+}

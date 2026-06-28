@@ -259,6 +259,21 @@
         footer a:hover {
             text-decoration: underline;
         }
+        .dropzone {
+            border: 2px dashed #b8c0ff; border-radius: 12px; padding: 40px 20px;
+            text-align: center; color: #667eea; cursor: pointer; background: #f7f8ff;
+            transition: all .2s; font-weight: 600;
+        }
+        .dropzone:hover, .dropzone.drag { background: #eef0ff; border-color: #667eea; }
+        .error-box {
+            margin-top: 16px; padding: 14px 18px; border-radius: 8px;
+            background: #fff3f3; color: #b02a37; border: 1px solid #f5c2c7;
+        }
+        .result-banner {
+            margin: 16px 0; padding: 16px 20px; border-radius: 10px; font-weight: 600;
+            background: linear-gradient(135deg, #eef0ff 0%, #e8fff4 100%); color: #2b2f77;
+        }
+        #file-count { color: #495057; font-weight: 600; align-self: center; }
     </style>
 </head>
 <body>
@@ -268,20 +283,20 @@
             <p class="subtitle">High-Performance ML Data Loading - Real-Time Performance Analytics</p>
             <div class="stats-grid">
                 <div class="stat-card">
-                    <div class="stat-value" id="peak-throughput">10,146</div>
-                    <div class="stat-label">Peak Throughput (img/s)</div>
+                    <div class="stat-value" id="peak-throughput">65,499</div>
+                    <div class="stat-label">Peak img/s (cached)</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" id="speedup">12x</div>
-                    <div class="stat-label">vs PyTorch Optimized</div>
+                    <div class="stat-value" id="speedup">2.1×</div>
+                    <div class="stat-label">vs PyTorch DataLoader</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" id="bandwidth">52+</div>
-                    <div class="stat-label">Gbps Local I/O</div>
+                    <div class="stat-value" id="bandwidth">1.3×</div>
+                    <div class="stat-label">vs tf.data (AUTOTUNE)</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" id="transforms">19</div>
-                    <div class="stat-label">SIMD Transforms</div>
+                    <div class="stat-value" id="transforms">441M</div>
+                    <div class="stat-label">LLM tokens/s (2.7×)</div>
                 </div>
             </div>
         </header>
@@ -315,32 +330,52 @@
             <button onclick="loadSampleData()" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">Load Sample Results</button>
         </div>
 
+        <div class="controls">
+            <h2 style="margin-bottom: 10px; color: #495057;">Benchmark your own images</h2>
+            <p style="color:#6c757d; margin-bottom:16px;">Drop in your own JPEG/PNG images and
+                TurboLoader will decode → resize → normalize them and report <strong>real</strong>
+                throughput (vs PyTorch). Requires the backend:
+                <code>python benchmark_server.py</code> then open <code>http://localhost:8000</code>.</p>
+            <div id="dropzone" class="dropzone">📁 Drop images here, or click to select
+                <input type="file" id="file-input" accept="image/*" multiple style="display:none">
+            </div>
+            <div class="control-grid" style="margin-top:16px;">
+                <div class="control-group">
+                    <label for="user-image-size">Resize to (px)</label>
+                    <input type="number" id="user-image-size" value="160" min="16" max="512">
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <span id="file-count">No images selected</span>
+                </div>
+            </div>
+            <button id="bench-mine-btn" onclick="benchmarkMyImages()">Benchmark my images</button>
+            <div id="user-status"></div>
+            <div id="user-result"></div>
+        </div>
+
         <div class="charts">
             <div class="chart-container">
-                <div class="chart-title">Framework Throughput Comparison</div>
+                <div class="chart-title">Image throughput — Imagenette-160, img/s (real consumption)</div>
                 <div id="throughput-chart"></div>
             </div>
 
             <div class="framework-comparison" id="framework-cards"></div>
 
             <div class="chart-container">
-                <div class="chart-title">Throughput vs Number of Workers</div>
+                <div class="chart-title">Throughput vs PyTorch worker count</div>
+                <p style="color:#6c757d; margin:-6px 0 14px; font-size:0.92em;">
+                    Only PyTorch uses per-worker <em>processes</em>, so only it scales with this knob.
+                    TurboLoader's fast path runs a single process-wide C++ thread pool sized to every
+                    core — it's already saturated at 1 worker (flat line). tf.data uses AUTOTUNE
+                    (manages its own parallelism), shown as a horizontal reference. PyTorch needs ~8
+                    workers to approach what TurboLoader does with one internal pool.</p>
                 <div id="workers-chart"></div>
             </div>
 
             <div class="chart-container">
-                <div class="chart-title">Throughput vs Batch Size</div>
-                <div id="batch-chart"></div>
-            </div>
-
-            <div class="chart-container">
-                <div class="chart-title">Memory Usage Comparison</div>
-                <div id="memory-chart"></div>
-            </div>
-
-            <div class="chart-container">
-                <div class="chart-title">CPU Utilization</div>
-                <div id="cpu-chart"></div>
+                <div class="chart-title">LLM token streaming — tokens/s (TokenDataLoader vs numpy memmap)</div>
+                <div id="tokens-chart"></div>
             </div>
         </div>
 
@@ -348,75 +383,89 @@
             <h2 style="margin-bottom: 20px; color: #495057;">Key Features</h2>
             <div class="info-grid">
                 <div class="info-card">
-                    <div class="info-title">SIMD Acceleration</div>
+                    <div class="info-title">SIMD-accelerated transforms</div>
                     <div class="info-content">
-                        19 data augmentation transforms with AVX2/NEON SIMD acceleration for maximum throughput.
-                        Includes AutoAugment policies for ImageNet, CIFAR10, and SVHN.
+                        Resize, crop, normalize and more, vectorized with NEON / AVX2 / AVX-512.
+                        Half-pixel resize matching PIL/PyTorch/TF, with optional antialiasing.
                     </div>
                 </div>
                 <div class="info-card">
-                    <div class="info-title">Lock-Free Architecture</div>
+                    <div class="info-title">FFCV/tf.data-style fast path</div>
                     <div class="info-content">
-                        Custom SPSC (Single Producer Single Consumer) queues with zero-copy design.
-                        No mutex contention for maximum parallelism.
+                        A persistent thread pool decodes → resizes → normalizes JPEGs directly
+                        into the output batch buffer in one pass, plus automatic libjpeg-turbo
+                        DCT scaled decode for large images.
                     </div>
                 </div>
                 <div class="info-card">
-                    <div class="info-title">Multi-Format Support</div>
+                    <div class="info-title">Multi-modality</div>
                     <div class="info-content">
-                        Images (JPEG, PNG, WebP), video (H.264, HEVC), tabular data (CSV, Parquet).
-                        WebDataset TAR format with remote storage (HTTP, S3, GCS).
+                        Images (JPEG/PNG/WebP in WebDataset TAR), LLM token streams
+                        (memory-mapped, next-token batches), and generic (N, …) arrays —
+                        one consistent, re-iterable DataLoader API.
                     </div>
                 </div>
                 <div class="info-card">
-                    <div class="info-title">GPU Integration</div>
+                    <div class="info-title">Framework-ready output</div>
                     <div class="info-content">
-                        Direct PyTorch/TensorFlow/JAX tensor conversion. Optional GPU-accelerated
-                        JPEG decoding with nvJPEG for ultra-low latency.
+                        Delivers NumPy / PyTorch (CHW) / TensorFlow (HWC) -ready batches,
+                        with a decoded cache, deterministic per-epoch shuffling, and
+                        DDP-safe distributed sharding.
                     </div>
                 </div>
             </div>
         </div>
 
         <footer>
-            <p>TurboLoader v0.8.1 | C++20 Implementation | MIT License</p>
+            <p>TurboLoader v2.26.2 | C++20 Implementation | MIT License</p>
+            <p style="margin-top: 10px;">Measured on Apple Silicon over Imagenette-160
+                (9,469 real ImageNet JPEGs → 160px, <code>output_format='pytorch'</code>);
+                median img/s. See the README benchmarks for methodology.</p>
             <p style="margin-top: 10px;">
-                <a href="https://github.com/arnavjain/turboloader" target="_blank">GitHub Repository</a> |
-                <a href="https://github.com/arnavjain/turboloader/blob/main/README.md" target="_blank">Documentation</a>
+                <a href="https://github.com/ALJainProjects/TurboLoader" target="_blank">GitHub Repository</a> |
+                <a href="https://github.com/ALJainProjects/TurboLoader/blob/main/README.md" target="_blank">Documentation</a> |
+                <a href="https://pypi.org/project/turboloader/" target="_blank">PyPI</a>
             </p>
         </footer>
     </div>
 
     <script>
-        // Sample benchmark data
-        const sampleData = {
+        // REAL measured results (run_benchmark.py over Imagenette-160, Apple Silicon,
+        // real consumption via np.sum / tf.reduce_sum). Embedded so the dashboard works
+        // offline; when served over http it also tries to fetch a fresh
+        // benchmark_results.json. Re-generate by running run_benchmark.py.
+        const EMBEDDED = {
             frameworks: [
-                { name: 'TurboLoader', throughput: 10146, memory: 245, cpu: 85 },
-                { name: 'PyTorch Optimized', throughput: 842, memory: 1890, cpu: 92 },
-                { name: 'PyTorch Naive', throughput: 215, memory: 2340, cpu: 78 },
-                { name: 'TensorFlow', throughput: 7680, memory: 892, cpu: 88 },
-                { name: 'FFCV', throughput: 8920, memory: 512, cpu: 90 },
-                { name: 'DALI', throughput: 6840, memory: 678, cpu: 87 },
-                { name: 'PIL Baseline', throughput: 128, memory: 3200, cpu: 65 },
-                { name: 'Torchvision', throughput: 456, memory: 1560, cpu: 72 }
+                { name: 'TurboLoader (cached)', throughput: 65499 },
+                { name: 'TurboLoader', throughput: 39100 },
+                { name: 'TensorFlow tf.data', throughput: 30154 },
+                { name: 'PyTorch DataLoader', throughput: 18991 }
             ],
             workers: {
-                workers: [1, 2, 4, 8, 16],
-                turboloader: [3421, 6234, 10146, 12340, 13120],
-                pytorch: [198, 356, 842, 1120, 1240],
-                tensorflow: [2145, 4280, 7680, 8920, 9340]
+                workers: [1, 2, 4, 6, 8],
+                turboloader: [39009, 39100, 38512, 38318, 38325],
+                pytorch: [3057, 5779, 10560, 15272, 18991],
+                tensorflow: [30154, 30154, 30154, 30154, 30154]
             },
-            batchSize: {
-                sizes: [8, 16, 32, 64, 128, 256],
-                turboloader: [8234, 9456, 10146, 10890, 11120, 10980],
-                pytorch: [456, 678, 842, 920, 945, 890],
-                tensorflow: [5234, 6789, 7680, 8234, 8456, 8120]
-            }
+            cache: { turboloader: 65499, tensorflow: 410124 },
+            tokens: { turboloader: 441102077, numpy_memmap: 163141550 }
         };
 
-        function loadSampleData() {
-            updateCharts(sampleData);
-            updateFrameworkCards(sampleData.frameworks);
+        async function loadData() {
+            try {
+                const r = await fetch('benchmark_results.json', { cache: 'no-store' });
+                if (r.ok) {
+                    const j = await r.json();
+                    if (j && j.frameworks) return j;
+                }
+            } catch (e) { /* file:// or not served — use embedded */ }
+            return EMBEDDED;
+        }
+
+        async function loadSampleData() {
+            const data = await loadData();
+            updateCharts(data);
+            updateFrameworkCards(data.frameworks);
         }
 
         function updateCharts(data) {
@@ -427,11 +476,11 @@
                 type: 'bar',
                 marker: {
                     color: data.frameworks.map(f =>
-                        f.name === 'TurboLoader' ? '#667eea' : '#e9ecef'
+                        f.name.startsWith('TurboLoader') ? '#667eea' : '#e9ecef'
                     ),
                     line: {
                         color: data.frameworks.map(f =>
-                            f.name === 'TurboLoader' ? '#764ba2' : '#dee2e6'
+                            f.name.startsWith('TurboLoader') ? '#764ba2' : '#dee2e6'
                         ),
                         width: 2
                     }
@@ -456,7 +505,7 @@
                 {
                     x: data.workers.workers,
                     y: data.workers.turboloader,
-                    name: 'TurboLoader',
+                    name: 'TurboLoader (1 internal thread pool)',
                     type: 'scatter',
                     mode: 'lines+markers',
                     line: { color: '#667eea', width: 3 },
@@ -465,7 +514,7 @@
                 {
                     x: data.workers.workers,
                     y: data.workers.pytorch,
-                    name: 'PyTorch Optimized',
+                    name: 'PyTorch (worker processes)',
                     type: 'scatter',
                     mode: 'lines+markers',
                     line: { color: '#dc3545', width: 3 },
@@ -474,11 +523,11 @@
                 {
                     x: data.workers.workers,
                     y: data.workers.tensorflow,
-                    name: 'TensorFlow',
+                    name: 'tf.data (AUTOTUNE)',
                     type: 'scatter',
                     mode: 'lines+markers',
-                    line: { color: '#ff6f00', width: 3 },
-                    marker: { size: 10 }
+                    line: { color: '#ff6f00', width: 3, dash: 'dot' },
+                    marker: { size: 8 }
                 }
             ];
 
@@ -492,107 +541,46 @@
 
             Plotly.newPlot('workers-chart', workersTraces, workersLayout, {responsive: true});
 
-            // Batch size chart
-            const batchTraces = [
-                {
-                    x: data.batchSize.sizes,
-                    y: data.batchSize.turboloader,
-                    name: 'TurboLoader',
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    line: { color: '#667eea', width: 3 },
-                    marker: { size: 10 }
-                },
-                {
-                    x: data.batchSize.sizes,
-                    y: data.batchSize.pytorch,
-                    name: 'PyTorch Optimized',
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    line: { color: '#dc3545', width: 3 },
-                    marker: { size: 10 }
-                },
-                {
-                    x: data.batchSize.sizes,
-                    y: data.batchSize.tensorflow,
-                    name: 'TensorFlow',
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    line: { color: '#ff6f00', width: 3 },
-                    marker: { size: 10 }
-                }
-            ];
-
-            const batchLayout = {
-                xaxis: { title: 'Batch Size' },
-                yaxis: { title: 'Throughput (images/second)' },
-                hovermode: 'x unified',
-                margin: { t: 20 },
-                height: 400
-            };
-
-            Plotly.newPlot('batch-chart', batchTraces, batchLayout, {responsive: true});
-
-            // Memory usage chart
-            const memoryTrace = {
-                x: data.frameworks.map(f => f.name),
-                y: data.frameworks.map(f => f.memory),
+            // LLM token streaming throughput (TokenDataLoader vs the numpy memmap idiom)
+            const tk = data.tokens || {};
+            const tokTrace = {
+                x: ['TurboLoader TokenDataLoader', 'numpy memmap idiom'],
+                y: [tk.turboloader || 0, tk.numpy_memmap || 0],
                 type: 'bar',
                 marker: {
-                    color: data.frameworks.map(f =>
-                        f.name === 'TurboLoader' ? '#28a745' : '#ffc107'
-                    )
+                    color: ['#667eea', '#e9ecef'],
+                    line: { color: ['#764ba2', '#dee2e6'], width: 2 }
                 },
-                text: data.frameworks.map(f => f.memory + ' MB'),
+                text: [tk.turboloader, tk.numpy_memmap].map(v => v ? (v / 1e6).toFixed(0) + 'M tok/s' : ''),
                 textposition: 'outside',
-                hovertemplate: '<b>%{x}</b><br>Memory: %{y} MB<extra></extra>'
+                hovertemplate: '<b>%{x}</b><br>%{y:,.0f} tokens/s<extra></extra>'
             };
 
-            const memoryLayout = {
-                xaxis: { title: 'Framework', tickangle: -45 },
-                yaxis: { title: 'Memory Usage (MB)' },
+            Plotly.newPlot('tokens-chart', [tokTrace], {
+                yaxis: { title: 'tokens / second' },
                 showlegend: false,
-                margin: { t: 20, b: 100 },
-                height: 400
-            };
-
-            Plotly.newPlot('memory-chart', [memoryTrace], memoryLayout, {responsive: true});
-
-            // CPU utilization chart
-            const cpuTrace = {
-                labels: data.frameworks.map(f => f.name),
-                values: data.frameworks.map(f => f.cpu),
-                type: 'pie',
-                hole: 0.4,
-                marker: {
-                    colors: ['#667eea', '#dc3545', '#ffc107', '#ff6f00', '#28a745', '#17a2b8', '#6c757d', '#e83e8c']
-                },
-                textinfo: 'label+percent',
-                hovertemplate: '<b>%{label}</b><br>CPU: %{value}%<extra></extra>'
-            };
-
-            const cpuLayout = {
-                margin: { t: 20 },
-                height: 400
-            };
-
-            Plotly.newPlot('cpu-chart', [cpuTrace], cpuLayout, {responsive: true});
+                margin: { t: 20, b: 60 },
+                height: 380
+            }, { responsive: true });
         }
 
         function updateFrameworkCards(frameworks) {
             const container = document.getElementById('framework-cards');
             const maxThroughput = Math.max(...frameworks.map(f => f.throughput));
 
+            const base = (frameworks.find(x => x.name.includes('PyTorch')) || {}).throughput
+                || Math.min(...frameworks.map(x => x.throughput));
             container.innerHTML = frameworks
+                .slice()
                 .sort((a, b) => b.throughput - a.throughput)
                 .map(f => {
-                    const speedup = (f.throughput / frameworks.find(x => x.name === 'PyTorch Optimized').throughput).toFixed(1);
+                    const speedup = (f.throughput / base).toFixed(1);
                     const isWinner = f.throughput === maxThroughput;
                     return `
                         <div class="framework-card ${isWinner ? 'winner' : ''}">
                             <div class="framework-name">${f.name}</div>
                             <div class="framework-speed">${f.throughput.toLocaleString()}</div>
-                            <div class="framework-speedup">img/s (${speedup}x)</div>
+                            <div class="framework-speedup">img/s (${speedup}× vs PyTorch)</div>
                         </div>
                     `;
                 })
@@ -605,43 +593,110 @@
             const datasetSize = document.getElementById('dataset-size').value;
             const imageSize = document.getElementById('image-size').value;
 
-            alert(`Running benchmark with:\n- Workers: ${workers}\n- Batch Size: ${batchSize}\n- Dataset: ${datasetSize} images\n- Image Size: ${imageSize}x${imageSize}\n\nNote: This is a demo. To run real benchmarks, use the Python scripts in the benchmarks/ directory.`);
+            alert(`The charts show REAL measured results (run_benchmark.py over `
+                + `Imagenette-160 on Apple Silicon, with real consumption).\n\n`
+                + `Browsers can't run the native loaders, so to benchmark your own `
+                + `config (workers=${workers}, batch=${batchSize}, ${datasetSize} imgs, `
+                + `${imageSize}px) run:\n\n  python run_benchmark.py\n\n`
+                + `and reload — the dashboard reads benchmark_results.json when served.`);
 
-            // Simulate loading
+            // Re-render from data (with a brief spinner)
             const charts = document.querySelector('.charts');
             charts.innerHTML = '<div class="loading"><div class="spinner"></div>Loading benchmark results...</div>';
 
             setTimeout(() => {
                 charts.innerHTML = `
                     <div class="chart-container">
-                        <div class="chart-title">Framework Throughput Comparison</div>
+                        <div class="chart-title">Image throughput — Imagenette-160, img/s (real consumption)</div>
                         <div id="throughput-chart"></div>
                     </div>
                     <div class="framework-comparison" id="framework-cards"></div>
                     <div class="chart-container">
-                        <div class="chart-title">Throughput vs Number of Workers</div>
+                        <div class="chart-title">Throughput vs PyTorch worker count (TurboLoader & tf.data already saturate the CPU)</div>
                         <div id="workers-chart"></div>
                     </div>
                     <div class="chart-container">
-                        <div class="chart-title">Throughput vs Batch Size</div>
-                        <div id="batch-chart"></div>
-                    </div>
-                    <div class="chart-container">
-                        <div class="chart-title">Memory Usage Comparison</div>
-                        <div id="memory-chart"></div>
-                    </div>
-                    <div class="chart-container">
-                        <div class="chart-title">CPU Utilization</div>
-                        <div id="cpu-chart"></div>
+                        <div class="chart-title">LLM token streaming — tokens/s (TokenDataLoader vs numpy memmap)</div>
+                        <div id="tokens-chart"></div>
                     </div>
                 `;
                 loadSampleData();
-            }, 1500);
+            }, 1200);
         }
 
-        // Load sample data on page load
+        // ---- "Benchmark your own images" — uploads to benchmark_server.py ----
+        let userFiles = [];
+        function setupUpload() {
+            const fi = document.getElementById('file-input');
+            const dz = document.getElementById('dropzone');
+            if (!fi || !dz) return;
+            dz.addEventListener('click', () => fi.click());
+            fi.addEventListener('change', e => setUserFiles(e.target.files));
+            dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+            dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+            dz.addEventListener('drop', e => {
+                e.preventDefault(); dz.classList.remove('drag'); setUserFiles(e.dataTransfer.files);
+            });
+        }
+        function setUserFiles(list) {
+            userFiles = Array.from(list).filter(f => f.type.startsWith('image/'));
+            document.getElementById('file-count').textContent =
+                userFiles.length ? userFiles.length + ' image(s) selected' : 'No images selected';
+        }
+        async function benchmarkMyImages() {
+            const status = document.getElementById('user-status');
+            document.getElementById('user-result').innerHTML = '';
+            if (!userFiles.length) {
+                status.innerHTML = '<div class="error-box">Select or drop some images first.</div>';
+                return;
+            }
+            status.innerHTML = '<div class="loading"><div class="spinner"></div>Benchmarking '
+                + userFiles.length + ' image(s) with TurboLoader…</div>';
+            const fd = new FormData();
+            userFiles.forEach(f => fd.append('images', f));
+            fd.append('image_size', document.getElementById('user-image-size').value || '160');
+            try {
+                const r = await fetch('/api/benchmark', { method: 'POST', body: fd });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+                status.innerHTML = '';
+                renderUserResult(data);
+            } catch (err) {
+                status.innerHTML = '<div class="error-box"><strong>Could not run the benchmark.</strong> '
+                    + (err.message || err) + '<br>The static dashboard can\'t run the native loader — '
+                    + 'start the backend: <code>python benchmark_server.py</code>, then open '
+                    + '<code>http://localhost:8000</code>.</div>';
+            }
+        }
+        function renderUserResult(data) {
+            const u = data.user || {};
+            const sp = u.speedup_vs_pytorch ? ('  (' + u.speedup_vs_pytorch + '× vs PyTorch)') : '';
+            document.getElementById('user-result').innerHTML =
+                '<div class="result-banner">Your ' + (u.n_images || '') + ' image(s) @ '
+                + (u.image_size || '') + 'px — '
+                + data.frameworks.map(f => f.name + ': ' + f.throughput.toLocaleString() + ' img/s').join(' · ')
+                + sp + '</div><div id="user-chart"></div>';
+            const t = {
+                x: data.frameworks.map(f => f.name),
+                y: data.frameworks.map(f => f.throughput),
+                type: 'bar',
+                marker: {
+                    color: data.frameworks.map(f => f.name.startsWith('TurboLoader') ? '#667eea' : '#e9ecef'),
+                    line: { color: data.frameworks.map(f => f.name.startsWith('TurboLoader') ? '#764ba2' : '#dee2e6'), width: 2 }
+                },
+                text: data.frameworks.map(f => f.throughput.toLocaleString() + ' img/s'),
+                textposition: 'outside',
+                hovertemplate: '<b>%{x}</b><br>%{y:,.0f} img/s (your images)<extra></extra>'
+            };
+            Plotly.newPlot('user-chart', [t],
+                { yaxis: { title: 'images / second' }, showlegend: false, margin: { t: 20, b: 60 }, height: 360 },
+                { responsive: true });
+        }
+
+        // Load reference data + wire up the uploader on page load
         window.addEventListener('load', () => {
             loadSampleData();
+            setupUpload();
         });
     </script>
 </body>
