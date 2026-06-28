@@ -8,8 +8,13 @@
 
 #pragma once
 
-#if __cplusplus >= 202002L && __has_include(<span>)
-    // C++20: use standard span
+// Use std::span whenever the compiler is in C++20 mode and ships <span>. The test is
+// `> 201703L` (newer than C++17) rather than `>= 202002L` because gcc 10 reports
+// __cplusplus == 201709L for -std=c++20 (only gcc 11+ uses 202002L) yet provides a
+// fully working std::span. Requiring 202002L made gcc 10 fall back to the polyfill,
+// which then collides with a real `#include <span>` in the same translation unit.
+#if __cplusplus > 201703L && __has_include(<span>)
+    // C++20 (incl. gcc's c++2a value): use standard span
     #include <span>
     namespace turboloader {
         using std::span;

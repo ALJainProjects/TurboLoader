@@ -16,11 +16,11 @@
 #include <memory>
 #include <numeric>
 #include <random>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "../core/compat.hpp"        // turboloader::span (portable C++17/20, no raw <span>)
 #include "../core/parallel_for.hpp"
 #include "../decode/jpeg_decoder.hpp"
 #include "../readers/tar_reader.hpp"
@@ -131,7 +131,7 @@ private:
 
         int aw = 0, ah = 0, ch = 0;
         try {
-            std::span<const uint8_t> jpeg = reader_->get_sample(idx);  // const, thread-safe
+            turboloader::span<const uint8_t> jpeg = reader_->get_sample(idx);  // const, thread-safe
             decoder.decode_scaled(jpeg, decoded, W, H, aw, ah, ch);
         } catch (...) {
             std::memset(out, 0, num_pixels * C * sizeof(float));
