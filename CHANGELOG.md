@@ -5,6 +5,33 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.26.2] - 2026-06-28
+
+Portable macOS wheels, an interactive benchmark dashboard, and an honest docs sweep.
+
+### Added
+- **Portable macOS wheels** (arm64 + x86_64): the C dependencies (libjpeg-turbo, libpng,
+  libwebp, lz4) are now built **from source at `MACOSX_DEPLOYMENT_TARGET=11.0`**
+  (`scripts/build_macos_deps.sh`) instead of Homebrew bottles, so the wheels install on
+  macOS 11+ rather than being tied to the build runner's OS. The CI selects the newest
+  Xcode to avoid an older-toolchain libc++/C++20 bug.
+- **Interactive benchmark dashboard** (`benchmark_app.html` + `benchmark_server.py`):
+  shows the real measured results and lets you **upload your own images** to run a live
+  TurboLoader-vs-PyTorch benchmark. `run_benchmark.py` regenerates the data honestly
+  (real consumption, warmup + median of timed epochs).
+
+### Fixed
+- `setup.py`: don't add a system SDK include/lib root (`-I<SDK>/usr/include` for system
+  libcurl) on macOS — it shadowed libc++'s `<math.h>` and broke `<cmath>` under C++20
+  when the active Xcode SDK differed.
+- CI: pinned `black`; fixed two tests that assumed single-worker ordering.
+
+### Changed
+- **Docs**: refreshed all 16 wiki pages to the real measured benchmarks and v2.26.x;
+  removed fabricated numbers and de-hyped capabilities that aren't compiled into the
+  wheel (nvJPEG/GPU decode, H.264/HEVC video). Documented multi-modality and the
+  FFCV-style fast path.
+
 ## [2.26.1] - 2026-06-28
 
 Test-coverage and bug-fix patch (coverage 55% → 76%, +142 tests).
