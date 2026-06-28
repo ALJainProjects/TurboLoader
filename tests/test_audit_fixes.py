@@ -14,7 +14,7 @@ import pytest
 
 tl = pytest.importorskip("turboloader")
 torch = pytest.importorskip("torch")
-import torchvision.transforms as TVT  # noqa: E402
+TVT = pytest.importorskip("torchvision.transforms")  # skip (don't error) if absent
 from PIL import Image  # noqa: E402
 
 
