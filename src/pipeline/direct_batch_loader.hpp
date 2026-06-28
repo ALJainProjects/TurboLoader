@@ -1,0 +1,200 @@
+#pragma once
+
+// Direct-batch image loader (FFCV / tf.data-style).
+//
+// Unlike the producer/consumer pipeline (TarWorker -> SPSC queue -> assembly), this
+// path runs ONE data-parallel pass per batch: each thread reads a sample's JPEG bytes
+// by index, DCT-scaled-decodes, resizes to the exact target, and fused-normalizes
+// DIRECTLY into its slot of the output batch buffer. No queue, no per-sample heap
+// allocation, no single-threaded collection step. This removes the per-sample overhead
+// that otherwise dominates when decode is cheap (large images + scaled decode).
+
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <numeric>
+#include <random>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "../core/parallel_for.hpp"
+#include "../decode/jpeg_decoder.hpp"
+#include "../readers/tar_reader.hpp"
+#include "../transforms/simd_utils.hpp"
+
+namespace turboloader {
+
+class DirectBatchCore {
+public:
+    DirectBatchCore(const std::string& data_path,
+                    std::shared_ptr<std::vector<uint8_t>> remote_data,
+                    size_t batch_size, int target_h, int target_w,
+                    bool chw, bool normalize_01,
+                    const std::vector<float>& mean, const std::vector<float>& std_vec,
+                    bool shuffle, int seed,
+                    bool distributed, int world_rank, int world_size,
+                    bool drop_last = false, bool antialias = false)
+        : batch_size_(batch_size), target_h_(target_h), target_w_(target_w),
+          chw_(chw), normalize_(normalize_01), shuffle_(shuffle), seed_(seed),
+          distributed_(distributed), world_rank_(world_rank), world_size_(world_size),
+          drop_last_(drop_last), antialias_(antialias), epoch_(0), cursor_(0) {
+        if (remote_data) {
+            reader_ = std::make_unique<TarReader>(remote_data, 0, 1);
+        } else {
+            reader_ = std::make_unique<TarReader>(data_path, 0, 1);
+        }
+        total_ = reader_->num_samples();
+        if (mean.size() == 3 && std_vec.size() == 3) {
+            mean_ = mean;
+            inv_std_ = {1.0f / std_vec[0], 1.0f / std_vec[1], 1.0f / std_vec[2]};
+            has_mean_std_ = true;
+        }
+        build_order();
+    }
+
+    // Number of samples actually yielded per epoch (honors drop_last).
+    size_t num_samples() const {
+        size_t n = order_.size();
+        if (drop_last_) return (n / batch_size_) * batch_size_;
+        return n;
+    }
+    size_t batch_size() const { return batch_size_; }
+    int target_h() const { return target_h_; }
+    int target_w() const { return target_w_; }
+    bool chw() const { return chw_; }
+
+    // Start a fresh epoch: (re)build the (optionally shuffled / sharded) order and
+    // reset the batch cursor.
+    void begin_epoch(int epoch) {
+        epoch_ = epoch;
+        build_order();
+        cursor_.store(0, std::memory_order_relaxed);
+    }
+
+    // Atomically claim the next batch's sample indices. Returns the batch size
+    // (0 means the epoch is exhausted). Thread-safe.
+    size_t acquire_batch(std::vector<size_t>& indices) {
+        size_t start = cursor_.fetch_add(batch_size_, std::memory_order_relaxed);
+        const size_t n = order_.size();
+        if (start >= n) return 0;
+        // drop_last: skip the ragged final batch entirely.
+        if (drop_last_ && start + batch_size_ > n) return 0;
+        size_t bs = std::min(batch_size_, n - start);
+        indices.assign(order_.begin() + start, order_.begin() + start + bs);
+        return bs;
+    }
+
+    // Decode+resize+normalize every sample in `indices` directly into `out`
+    // (preallocated: bs * C * H * W floats, CHW or HWC per chw_). Runs data-parallel
+    // on the global thread pool. Caller must NOT hold the GIL.
+    void fill_batch(const std::vector<size_t>& indices, float* out) {
+        const int H = target_h_, W = target_w_, C = 3;
+        const size_t num_pixels = static_cast<size_t>(H) * W;
+        const size_t per = num_pixels * C;
+        parallel_for(indices.size(), [&](size_t i) {
+            process_one(indices[i], out + i * per, H, W, C, num_pixels);
+        });
+    }
+
+private:
+    void build_order() {
+        std::vector<size_t> all(total_);
+        std::iota(all.begin(), all.end(), 0);
+        if (shuffle_) {
+            std::mt19937_64 rng(static_cast<uint64_t>(seed_) + static_cast<uint64_t>(epoch_));
+            std::shuffle(all.begin(), all.end(), rng);
+        }
+        if (distributed_ && world_size_ > 1) {
+            // Same shuffle seed on every rank => identical `all` => disjoint shards.
+            // EQUAL shards on every rank (drop up to world_size-1 trailing samples)
+            // so all ranks yield the same batch count — otherwise DDP collectives
+            // deadlock when one rank runs out early. Matches DistributedSampler(drop_last).
+            size_t per_rank = total_ / static_cast<size_t>(world_size_);
+            size_t s = static_cast<size_t>(world_rank_) * per_rank;
+            size_t e = s + per_rank;
+            order_.assign(all.begin() + s, all.begin() + e);
+        } else {
+            order_ = std::move(all);
+        }
+    }
+
+    void process_one(size_t idx, float* out, int H, int W, int C, size_t num_pixels) {
+        // Per-thread decoder (libjpeg cinfo is not shareable) and scratch buffers,
+        // persisted across batches by the persistent thread pool.
+        thread_local JPEGDecoder decoder;
+        thread_local std::vector<uint8_t> decoded;
+        thread_local std::vector<uint8_t> resized;
+
+        int aw = 0, ah = 0, ch = 0;
+        try {
+            std::span<const uint8_t> jpeg = reader_->get_sample(idx);  // const, thread-safe
+            decoder.decode_scaled(jpeg, decoded, W, H, aw, ah, ch);
+        } catch (...) {
+            std::memset(out, 0, num_pixels * C * sizeof(float));
+            return;
+        }
+        if (ch != C) {
+            // Unexpected channel count (e.g. CMYK/gray) — zero-fill rather than corrupt.
+            std::memset(out, 0, num_pixels * C * sizeof(float));
+            return;
+        }
+
+        const uint8_t* src;
+        if (aw != W || ah != H) {
+            resized.resize(static_cast<size_t>(W) * H * C);
+            if (antialias_) {
+                transforms::simd::resize_triangle_antialias(decoded.data(), resized.data(),
+                                                            aw, ah, W, H, C);
+            } else {
+                transforms::simd::resize_bilinear_simd(decoded.data(), resized.data(),
+                                                       aw, ah, W, H, C);
+            }
+            src = resized.data();
+        } else {
+            src = decoded.data();
+        }
+
+        if (chw_) {
+            transforms::simd::deinterleave_hwc_to_chw_f32(
+                src, out, out + num_pixels, out + 2 * num_pixels,
+                num_pixels, normalize_,
+                has_mean_std_ ? mean_.data() : nullptr,
+                has_mean_std_ ? inv_std_.data() : nullptr);
+        } else {
+            // HWC float32 output
+            const float scale = normalize_ ? (1.0f / 255.0f) : 1.0f;
+            if (has_mean_std_) {
+                for (size_t p = 0; p < num_pixels; ++p) {
+                    for (int c = 0; c < C; ++c) {
+                        out[p * C + c] = (src[p * C + c] * scale - mean_[c]) * inv_std_[c];
+                    }
+                }
+            } else {
+                for (size_t e = 0; e < num_pixels * C; ++e) out[e] = src[e] * scale;
+            }
+        }
+    }
+
+    std::unique_ptr<TarReader> reader_;
+    size_t total_ = 0;
+    size_t batch_size_;
+    int target_h_, target_w_;
+    bool chw_, normalize_;
+    bool has_mean_std_ = false;
+    std::vector<float> mean_, inv_std_;
+    bool shuffle_;
+    int seed_;
+    bool distributed_;
+    int world_rank_, world_size_;
+    bool drop_last_;
+    bool antialias_;
+    int epoch_;
+    std::vector<size_t> order_;
+    std::atomic<size_t> cursor_;
+};
+
+}  // namespace turboloader

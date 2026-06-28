@@ -16,8 +16,8 @@ TurboLoader is a high-performance data loading library for machine learning work
 
 ### Core Features
 
-- **Decoded Tensor Caching (v2.7.0)** - `cache_decoded=True` for 100K+ img/s on subsequent epochs
-- **Multiple Loader Types** - FastDataLoader (8-12% faster), MemoryEfficientDataLoader, standard DataLoader
+- **Decoded Tensor Caching** - `FastDataLoader(..., cache_decoded=True)` keeps decoded arrays in RAM so later epochs skip decoding
+- **Multiple Loader Types** - FastDataLoader, MemoryEfficientDataLoader, standard DataLoader
 - **Distributed Training Support** - Multi-node data loading with deterministic sharding
 - **SIMD-Accelerated Transforms** - 19 vectorized transforms using AVX2/AVX-512/NEON
 - **TBL v2 Binary Format** - Custom format with LZ4 compression for reduced storage
@@ -78,13 +78,19 @@ loader = turboloader.DataLoader(
     num_workers=8
 )
 
-# Iterate over batches
+# Iterate over batches. Each sample is a dict:
+#   {'image': np.ndarray (H, W, C), 'filename': str, 'index': int,
+#    'width': int, 'height': int, 'channels': int}
 for batch in loader:
     for sample in batch:
-        image = sample['image']  # NumPy array (H, W, C)
-        label = sample['label']
+        image = sample['image']      # NumPy array (H, W, C)
+        name = sample['filename']    # source path within the archive
         # Train your model...
 ```
+
+> **Need (image, label) tuples like `torch.utils.data.DataLoader`?** Use
+> `PyTorchCompatibleLoader`, which derives labels from the folder structure
+> (ImageFolder-style). The base `DataLoader` does not attach labels.
 
 ### With Transforms
 
@@ -162,7 +168,8 @@ for batch in loader:
 
 ## Transform Library
 
-TurboLoader includes 19 SIMD-accelerated transforms:
+TurboLoader includes 24 transforms (19 per-image SIMD transforms + 5 batch
+augmentations). The authoritative list is `turboloader.list_transforms()`.
 
 ### Core Transforms
 - **Resize** - Bilinear/Bicubic/Lanczos interpolation
@@ -185,6 +192,9 @@ TurboLoader includes 19 SIMD-accelerated transforms:
 - **RandomPerspective** - Perspective warp
 - **AutoAugment** - Learned policies (ImageNet/CIFAR10/SVHN)
 
+### Batch Augmentations
+- **MixUp**, **CutMix**, **Mosaic**, **RandAugment**, **GridMask**
+
 ### Tensor Conversion
 - **ToTensor** - PyTorch CHW or TensorFlow HWC format
 
@@ -204,23 +214,24 @@ TurboLoader includes a custom binary format optimized for ML workloads:
 ### Convert TAR to TBL
 
 ```python
+import tarfile
 import turboloader
 
-writer = turboloader.TblWriterV2(
-    output_path="/data/imagenet.tbl",
-    compression=True
-)
+writer = turboloader.TblWriterV2("/data/imagenet.tbl", enable_compression=True)
 
-reader = turboloader.TarReader("/data/imagenet.tar")
-for sample in reader:
-    writer.add_sample(
-        data=sample.data,
-        format=sample.format,
-        metadata={"label": sample.label}
-    )
+# The TAR archive is read with Python's stdlib (TurboLoader does not expose a
+# standalone Python TarReader; the DataLoader reads TAR directly for training).
+with tarfile.open("/data/imagenet.tar") as tar:
+    for member in tar.getmembers():
+        if not member.name.lower().endswith((".jpg", ".jpeg")):
+            continue
+        data = tar.extractfile(member).read()
+        writer.add_sample(data=data, format=turboloader.SampleFormat.JPEG)
 
 writer.finalize()
 ```
+
+> For bulk conversion there is also a C++ CLI tool, `tools/tar_to_tbl_v2.cpp`.
 
 ---
 
@@ -250,56 +261,129 @@ writer.finalize()
 
 ## Benchmarks
 
-Head-to-head comparison with **optimized** PyTorch DataLoader (`persistent_workers=True`, `prefetch_factor=4`). Both loaders tested under identical conditions.
+Measured on **Apple Silicon** over **Imagenette-160** (9,469 real ImageNet JPEGs →
+resize 160×160 → ImageNet-normalize → batched CHW float32, batch 64). To control for
+thermal throttling, every loader is built once, warmed up one epoch, then timed over
+**5 interleaved rounds** (each loader runs once per round); the table reports the
+median. Output is verified correct against torchvision (mean abs diff ≈ 0.04, bilinear
+antialiasing only).
 
-### vs PyTorch DataLoader (BS=32, NW=4)
+**Image — on-the-fly decode** (re-decode every epoch; for datasets too large to cache
+or with per-epoch random augmentation):
 
-| Configuration | TurboLoader | PyTorch | Speedup |
-|---|---|---|---|
-| uint8 CHW (resize only) | 8,027 img/s | 2,457 img/s | **3.3x** |
-| float32 CHW (0-1 normalize) | 8,456 img/s | 2,040 img/s | **4.1x** |
-| float32 CHW + ImageNet mean/std | 8,029 img/s | 2,039 img/s | **3.9x** |
+| Loader | img/s (median) | vs tf.data |
+|---|---:|---:|
+| **TurboLoader `DataLoader`** (`output_format='pytorch'`, nw=6) | **~55,000** | **2.0×** |
+| TensorFlow `tf.data` (AUTOTUNE) | ~27,300 | 1.00× |
+| PyTorch `DataLoader` (PIL, 8 persistent workers) | ~20,500 | 0.75× |
 
-### Decoded Tensor Caching (`cache_decoded=True`)
+**Image — cached** (decoded tensors held in RAM; both sides consume identically via
+`np.sum`, i.e. delivered as numpy/torch-ready batches — the PyTorch use case):
 
-| Configuration | Epoch 2 Throughput |
-|---|---|
-| uint8 HWC (from cache) | 57,692,695 img/s |
-| float32 CHW (from cache) | 42,933,573 img/s |
-| float32 CHW + ImageNet (from cache) | 39,853,643 img/s |
+| Loader | img/s (median) | vs tf.data.cache |
+|---|---:|---:|
+| **TurboLoader** (`cache_decoded=True`, prefetch) | **~67,000** | **1.9×** |
+| TensorFlow `tf.data.cache()` (+ `.numpy()` materialize) | ~35,100 | 1.00× |
 
-### Worker Scaling (BS=32, float32 CHW + ImageNet)
+(For *TF-native* consumption that stays in tf tensors, `tf.data.cache()` is faster —
+TurboLoader's cache win is for delivering numpy/torch batches.)
 
-| Workers | TurboLoader | PyTorch | Speedup |
-|---|---|---|---|
-| 1 worker | 1,585 img/s | 625 img/s | **2.5x** |
-| 2 workers | 3,383 img/s | 1,184 img/s | **2.9x** |
-| 4 workers | 7,744 img/s | 2,016 img/s | **3.8x** |
-| 8 workers | 13,327 img/s | 3,047 img/s | **4.4x** |
+**LLM tokens** (real text, 55M-token memory-mapped corpus, `seq_len=1024`, next-token):
 
-### Batch Size Scaling (NW=4, float32 CHW + ImageNet)
+| Loader | sequences/s (median) |
+|---|---:|
+| **TurboLoader `TokenDataLoader`** | **~467,000** |
+| numpy memmap idiom (nanoGPT `get_batch`) | ~251,000 |
 
-| Batch Size | TurboLoader | PyTorch | Speedup |
-|---|---|---|---|
-| 8 | 7,997 img/s | 2,342 img/s | **3.4x** |
-| 16 | 8,280 img/s | 2,261 img/s | **3.7x** |
-| 32 | 7,418 img/s | 1,946 img/s | **3.8x** |
-| 64 | 7,896 img/s | 1,765 img/s | **4.5x** |
-| 128 | 7,841 img/s | 1,521 img/s | **5.2x** |
+**Transforms** (per-image throughput vs torchvision): Resize **2.7×**, ImageNetNormalize
+**3.3×**, HFlip ~1.0×. For CenterCrop, torchvision returns a **lazy strided view** (moves
+zero bytes); compared against TurboLoader's real contiguous crop that looks like 0.45×,
+but when torchvision actually materializes the crop (`.contiguous()`, required before
+batching/most ops) it drops to ~23k img/s and **TurboLoader's contiguous crop is ~6.8×
+faster** (155k vs 23k). Like the cache, this is a lazy-vs-eager comparison; for the
+realistic crop→batch path TurboLoader wins.
 
-**Test conditions:** Apple M4 Pro, 5000 JPEG images (640x480), best of 3 trials, 100 batches per trial. PyTorch uses `persistent_workers=True`, `prefetch_factor=4`.
+> Earlier drafts quoted single-run figures (~42k, "1.4×") and a "cached epoch" in the
+> tens-of-millions img/s. Those were artifacts (thermal noise; a no-op loop over aliased
+> cached arrays) and were replaced with the interleaved, identical-consumption medians
+> above. Numbers are hardware-dependent — run `benchmarks/` yourself.
 
-### Key Optimizations
+The fast path runs decode + resize + normalize + batch assembly in C++ across a thread
+pool with zero Python per-sample work. Use it like this:
 
-- **OpenMP parallelism** for batch assembly (decode, resize, transpose, convert)
-- **Fused SIMD deinterleave**: NEON `vld3q_u8` for HWC→CHW + u8→f32 + normalize in a single pass
-- **Thread-local buffers** to eliminate per-sample heap allocation under OpenMP
-- **Pipeline reset** reuses buffer pools, decoders, and memory maps across epochs
-- **LTO (thin)** for cross-TU inlining of SIMD functions
-- **GIL released** during all C++ processing
+```python
+loader = turboloader.DataLoader(
+    'imagenet.tar', batch_size=64, num_workers=6,
+    output_format='pytorch',          # (N, C, H, W) float32 array per batch
+    image_size=160,                   # exact resize, done in C++
+    transform=turboloader.ImageNetNormalize())
+for epoch in range(epochs):           # re-iterable
+    for images, meta in loader:       # images.shape == (64, 3, 160, 160)
+        train_step(images)
+```
 
-> **Note:** Actual throughput depends on your hardware, image sizes, and pipeline configuration.
-> Run the benchmark on your setup for precise figures.
+Honest caveats:
+- **Run it yourself** (`benchmarks/`) — results depend heavily on hardware, image size,
+  and pipeline; Linux `fork`-based PyTorch workers shift the PyTorch numbers a lot.
+- **Decode backend differs**: TurboLoader uses libjpeg-turbo; the PyTorch baseline uses PIL.
+- The `output_format='dict'` path returns per-sample dicts and stacks in Python
+  (GIL-bound), so it is much slower — use it only when you need per-sample metadata.
+
+For **large source images**, the default path also wins: on 768×768 JPEGs resized to
+160 it runs ~15,000 img/s — faster than even an expertly-tuned `tf.data` pipeline using
+manual `decode_jpeg(ratio=...)` (~14,400) — because it picks the libjpeg-turbo DCT
+scaled-decode factor automatically (you don't have to know to set `ratio`).
+
+### Implementation notes
+- **Direct-batch path** (`src/pipeline/direct_batch_loader.hpp`): the default fast path
+  is FFCV/`tf.data`-style — a persistent thread pool reads JPEG bytes by index and
+  decodes → resizes → normalizes **directly into the output batch buffer** in one
+  parallel pass (no worker queue, no per-sample heap copy, no serial collection).
+  Verified memory-safe and race-free (disjoint slot writes, const mmap reads, atomic
+  cursor, per-thread decoders).
+- **Automatic DCT scaled decode**: large JPEGs are decoded at the nearest libjpeg-turbo
+  scale ≥ target, then finely resized — much faster than full-decode + resize.
+- **Resize convention**: half-pixel centers (`align_corners=False`), matching
+  PIL/OpenCV/PyTorch/TF (agrees with torchvision plain bilinear to ~0.4/255; the only
+  remaining difference vs torchvision's default is its antialiasing low-pass filter).
+- SIMD transforms (AVX2/AVX-512/NEON), libjpeg-turbo decode, lock-free SPSC queues
+  (legacy/dict + remote path), persistent `std::thread` pool (`src/core/parallel_for.hpp`).
+- The GIL is released during C++ processing.
+- **OpenMP is opt-in** (`TURBOLOADER_ENABLE_OPENMP=1`); off by default because linking a
+  second OpenMP runtime crashes alongside PyTorch on macOS — the thread pool replaces it.
+
+---
+
+## Beyond Images: Tokens & Arrays
+
+TurboLoader also ships loaders for non-image modalities with the same ergonomics
+(re-iterable, `shuffle`, `set_epoch`, batched arrays):
+
+```python
+# LLM pretraining: memory-mapped token stream -> (B, seq_len) next-token batches
+loader = turboloader.TokenDataLoader('train.bin', seq_len=1024, batch_size=8,
+                                     dtype='uint16', shuffle=True)
+for x, y in loader:          # x, y: (8, 1024) int64; y is x shifted by one
+    loss = model(x, y)
+
+# Generic arrays/memmaps (embeddings, tabular features, labels, pre-tokenized data)
+loader = turboloader.ArrayDataLoader(features, labels, batch_size=256, shuffle=True)
+for xb, yb in loader:
+    ...
+```
+
+`TokenDataLoader` uses a vectorized fancy-index gather over a `np.memmap` (so multi-GB
+corpora stream without loading into RAM) and benchmarks ~1.9× the standard nanoGPT
+`get_batch` idiom. The image pipeline (decode/transform/TBL) remains C++; these
+modality loaders are NumPy-based and modality-agnostic.
+
+All three modalities are also reachable from the **single `DataLoader` entry point**:
+
+```python
+turboloader.DataLoader('train.bin', modality='tokens', seq_len=1024, batch_size=8)
+turboloader.DataLoader(arrays=[feats, labels], data_path=None, modality='array', batch_size=256)
+turboloader.DataLoader('data.tar', image_size=160, output_format='pytorch')   # modality='image' (default)
+```
 
 ---
 
@@ -351,11 +435,11 @@ TurboLoader is released under the MIT License.
 If you use TurboLoader in your research:
 
 ```bibtex
-@software{turboloader2025,
+@software{turboloader,
   author = {Jain, Arnav},
-  title = {TurboLoader: Production-Ready ML Data Loading},
-  year = {2025},
-  version = {2.7.0},
+  title = {TurboLoader: High-Performance ML Data Loading},
+  year = {2026},
+  version = {2.25.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```
@@ -373,4 +457,4 @@ If you use TurboLoader in your research:
 
 ---
 
-TurboLoader - Production-ready ML data loading. 2.5-5.2x faster than optimized PyTorch DataLoader.
+TurboLoader - High-performance ML data loading with a C++20 core and SIMD transforms.

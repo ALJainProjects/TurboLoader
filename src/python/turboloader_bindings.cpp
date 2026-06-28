@@ -23,8 +23,16 @@
 #include "../writers/tbl_v2_writer.hpp"
 #include "../formats/tbl_v2_format.hpp"
 #include "../pipeline/smart_batching.hpp"
+#include "../pipeline/direct_batch_loader.hpp"
+#include "../core/parallel_for.hpp"
 #include <thread>
 #include <chrono>
+
+// Single source of truth for the version: setup.py passes -DTURBOLOADER_VERSION
+// at build time so the native module can never drift from the package version.
+#ifndef TURBOLOADER_VERSION
+#define TURBOLOADER_VERSION "0.0.0-dev"
+#endif
 
 namespace py = pybind11;
 using namespace turboloader;
@@ -245,14 +253,13 @@ public:
         {
             py::gil_scoped_release release;
 
-            #pragma omp parallel for if(batch_size > 8)  // Threshold 8 for small batch perf
-            for (size_t i = 0; i < batch_size; ++i) {
+            turboloader::parallel_for(batch_size, [&](size_t i) {
                 const auto& sample = samples[i];
 
                 // Skip empty samples or channel mismatch
                 if (sample.image_data.empty() || sample.channels != channels) {
                     std::memset(dst + i * single_image_size, 0, single_image_size);
-                    continue;
+                    return;
                 }
 
                 // Resize if dimensions don't match target (thread-local buffer)
@@ -288,7 +295,7 @@ public:
                                src_data,
                                single_image_size);
                 }
-            }
+            });
         }
 
         // Build lightweight metadata dict
@@ -347,8 +354,7 @@ public:
         {
             py::gil_scoped_release release;
 
-            #pragma omp parallel for if(count > 4)
-            for (size_t i = 0; i < count; ++i) {
+            turboloader::parallel_for(count, [&](size_t i) {
                 const auto& sample = samples[i];
                 if (sample.width == width && sample.height == height &&
                     sample.channels == channels && !sample.image_data.empty()) {
@@ -356,7 +362,7 @@ public:
                                sample.image_data.data(),
                                image_size);
                 }
-            }
+            });
         }
 
         return count;
@@ -444,19 +450,18 @@ public:
 
         const size_t resize_buf_size = static_cast<size_t>(width) * height * channels;
 
-        // Process all samples in parallel (GIL released)
+        // Process all samples in parallel (GIL released) via the thread pool.
         {
             py::gil_scoped_release release;
 
-            #pragma omp parallel for if(batch_size > 4)
-            for (size_t i = 0; i < batch_size; ++i) {
+            turboloader::parallel_for(batch_size, [&](size_t i) {
                 const auto& sample = samples[i];
 
                 // Skip empty samples
                 if (sample.image_data.empty() || sample.channels != channels) {
                     std::memset(dst + i * single_image_floats, 0,
                                single_image_floats * sizeof(float));
-                    continue;
+                    return;
                 }
 
                 // Resize if dimensions don't match target (thread-local buffer)
@@ -531,7 +536,7 @@ public:
                         }
                     }
                 }
-            }
+            });
         }
 
         // Build lightweight metadata dict
@@ -723,19 +728,26 @@ py::object imagedata_to_numpy_auto(std::unique_ptr<ImageData> img) {
         py::ssize_t h = static_cast<py::ssize_t>(img->height);
         py::ssize_t w = static_cast<py::ssize_t>(img->width);
         py::ssize_t c = static_cast<py::ssize_t>(img->channels);
+        const py::ssize_t fs = static_cast<py::ssize_t>(sizeof(float));
+        const bool chw = img->is_chw;
 
         auto capsule = py::capsule(img.release(), [](void* p) {
             delete static_cast<ImageData*>(p);
         });
 
-        py::array_t<float> arr(
-            {h, w, c},
-            {w * c * static_cast<py::ssize_t>(sizeof(float)),
-             c * static_cast<py::ssize_t>(sizeof(float)),
-             static_cast<py::ssize_t>(sizeof(float))},
-            data_ptr,
-            capsule
-        );
+        // CHW float buffer (PyTorch ToTensor) must be reported as (C, H, W) with
+        // channel-first strides; otherwise default to (H, W, C) interleaved layout.
+        py::array_t<float> arr =
+            chw ? py::array_t<float>(
+                      {c, h, w},
+                      {h * w * fs, w * fs, fs},
+                      data_ptr,
+                      capsule)
+                : py::array_t<float>(
+                      {h, w, c},
+                      {w * c * fs, c * fs, fs},
+                      data_ptr,
+                      capsule);
         return std::move(arr);
     } else {
         py::array_t<uint8_t> arr = imagedata_to_numpy_zerocopy(std::move(img));
@@ -765,28 +777,46 @@ std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
 }
 
 /**
+ * @brief Canonical list of every transform class bound into this module.
+ *
+ * Single source of truth for list_transforms() and features()["num_transforms"]
+ * so the advertised transform count cannot drift from what is actually exposed.
+ */
+inline std::vector<std::string> list_all_transform_names() {
+    return {
+        // Core SIMD transforms
+        "Resize", "Normalize", "ImageNetNormalize", "RandomHorizontalFlip",
+        "RandomVerticalFlip", "CenterCrop", "RandomCrop", "ColorJitter",
+        "Grayscale", "Pad", "RandomRotation", "RandomAffine", "GaussianBlur",
+        "RandomErasing", "RandomPosterize", "RandomSolarize", "RandomPerspective",
+        "AutoAugment", "ToTensor",
+        // Modern batch augmentations
+        "MixUp", "CutMix", "Mosaic", "RandAugment", "GridMask",
+    };
+}
+
+/**
  * @brief pybind11 module definition
  *
  * Module is named _turboloader (with underscore) to avoid conflicts
  * with the turboloader package. The Python __init__.py re-exports the API.
  */
 PYBIND11_MODULE(_turboloader, m) {
-    m.doc() = "TurboLoader v2.1.0 - High-performance data loading for ML\n\n"
-              "Drop-in replacement for PyTorch DataLoader, ~2x faster.\n\n"
+    m.doc() = "TurboLoader " TURBOLOADER_VERSION " - High-performance data loading for ML\n\n"
+              "PyTorch-compatible DataLoader with a C++20 core.\n\n"
               "Features:\n"
-              "- ARM NEON optimizations (3-5x speedup on Apple Silicon)\n"
-              "- Modern augmentations: MixUp, CutMix, Mosaic, RandAugment\n"
+              "- SIMD-accelerated transforms (AVX2/AVX-512/NEON)\n"
+              "- Modern augmentations: MixUp, CutMix, Mosaic, RandAugment, GridMask\n"
               "- Error recovery: graceful handling of corrupted files\n"
               "- Logging framework with profiling support\n"
-              "- Distributed Training: Multi-node with deterministic sharding\n"
-              "- TBL v2 format with LZ4 compression (40-60% space savings)\n"
-              "- 23+ SIMD-accelerated transforms (AVX2/AVX-512/NEON)\n"
-              "- Smart Batching (1.2x throughput, 15-25% less memory)\n"
-              "- TAR archives (52+ Gbps local, HTTP/S3/GCS remote)\n"
-              "- Multi-threaded with lock-free queues\n"
+              "- Distributed sharding via DataLoader(enable_distributed=...)\n"
+              "- TBL v2 format with LZ4 compression\n"
+              "- Smart Batching (size-based grouping)\n"
+              "- TAR archives (local; http/s3/gs URL schemes)\n"
+              "- Multi-threaded worker pool with lock-free queues\n"
               "- AutoAugment policies (ImageNet, CIFAR10, SVHN)\n"
               "- PyTorch & TensorFlow tensor conversion\n"
-              "- Data integrity validation (CRC32/CRC16)\n"
+              "- Data integrity validation (CRC checks)\n"
               "- Zero-copy where possible\n\n"
               "Usage:\n"
               "    import turboloader\n"
@@ -809,6 +839,54 @@ PYBIND11_MODULE(_turboloader, m) {
               "    output = transform.apply(image)\n\n"
               "Documentation:\n"
               "    https://github.com/ALJainProjects/TurboLoader/tree/main/docs";
+
+    // DirectBatchLoader: FFCV/tf.data-style single-pass batched decode. Each batch is
+    // decoded+resized+normalized directly into the output buffer by the thread pool —
+    // no worker queue, no per-sample heap copies, no serial collection.
+    py::class_<DirectBatchCore>(m, "DirectBatchLoader")
+        .def(py::init([](const std::string& data_path, int target_h, int target_w,
+                         size_t batch_size, bool chw, bool normalize_01,
+                         std::vector<float> mean, std::vector<float> std_vec,
+                         bool shuffle, int seed, bool distributed,
+                         int world_rank, int world_size, bool drop_last,
+                         bool antialias) {
+                 return std::make_unique<DirectBatchCore>(
+                     data_path, nullptr, batch_size, target_h, target_w, chw, normalize_01,
+                     mean, std_vec, shuffle, seed, distributed, world_rank, world_size,
+                     drop_last, antialias);
+             }),
+             py::arg("data_path"), py::arg("target_h"), py::arg("target_w"),
+             py::arg("batch_size") = 32, py::arg("chw") = true,
+             py::arg("normalize_01") = true,
+             py::arg("mean") = std::vector<float>{}, py::arg("std") = std::vector<float>{},
+             py::arg("shuffle") = false, py::arg("seed") = 42,
+             py::arg("distributed") = false, py::arg("world_rank") = 0,
+             py::arg("world_size") = 1, py::arg("drop_last") = false,
+             py::arg("antialias") = false)
+        .def("num_samples", &DirectBatchCore::num_samples)
+        .def("begin_epoch", &DirectBatchCore::begin_epoch, py::arg("epoch") = 0)
+        .def("next_batch", [](DirectBatchCore& self) -> py::object {
+            std::vector<size_t> idxs;
+            size_t bs = self.acquire_batch(idxs);
+            if (bs == 0) return py::none();
+            const int H = self.target_h(), W = self.target_w(), C = 3;
+            py::array_t<float> arr = self.chw()
+                ? py::array_t<float>({(py::ssize_t)bs, (py::ssize_t)C,
+                                      (py::ssize_t)H, (py::ssize_t)W})
+                : py::array_t<float>({(py::ssize_t)bs, (py::ssize_t)H,
+                                      (py::ssize_t)W, (py::ssize_t)C});
+            float* dst = static_cast<float*>(arr.request().ptr);
+            {
+                py::gil_scoped_release rel;
+                self.fill_batch(idxs, dst);
+            }
+            py::list indices;
+            for (auto id : idxs) indices.append(static_cast<size_t>(id));
+            py::dict meta;
+            meta["indices"] = indices;
+            meta["batch_size"] = bs;
+            return py::make_tuple(std::move(arr), meta);
+        });
 
     // DataLoader class (PyTorch-compatible)
     py::class_<DataLoader>(m, "DataLoader")
@@ -969,38 +1047,63 @@ PYBIND11_MODULE(_turboloader, m) {
              "Get next batch (iterator protocol)");
 
     // Module-level functions
-    m.def("version", []() { return "2.5.0"; },
+    m.def("version", []() { return TURBOLOADER_VERSION; },
           "Get TurboLoader version\n\n"
           "Returns:\n"
-          "    str: Version string (e.g., '2.3.23')");
+          "    str: Version string matching the installed package");
 
     m.def("features", []() {
         py::dict features;
-        features["version"] = "2.5.0";
-        features["distributed_training"] = true;
+        // Honest capability flags: only report a capability as available when the
+        // code that implements it is actually compiled into this extension module.
+        features["version"] = TURBOLOADER_VERSION;
+        features["distributed_training"] = true;   // DataLoader enable_distributed sharding
         features["tar_support"] = true;
         features["remote_tar"] = true;
-        features["http_support"] = true;
-        features["s3_support"] = true;
-        features["gcs_support"] = true;
-        features["azure_support"] = true;
+        features["http_support"] = true;            // http_reader compiled via pipeline
+        features["s3_support"] = true;              // s3_reader compiled via pipeline
+        features["gcs_support"] = true;             // gcs_reader compiled via pipeline
         features["jpeg_decode"] = true;
         features["png_decode"] = true;
         features["webp_decode"] = true;
         features["simd_acceleration"] = true;
         features["lock_free_queues"] = true;
-        features["num_transforms"] = 24;
+        features["num_transforms"] = static_cast<int>(list_all_transform_names().size());
         features["autoaugment"] = true;
         features["pytorch_tensors"] = true;
         features["tensorflow_tensors"] = true;
         features["lanczos_interpolation"] = true;
         features["smart_batching"] = true;
         features["pipe_operator"] = true;
+        // The following readers/parsers are NOT compiled into the wheel (their
+        // headers require unlinked libraries and are not included by any compiled
+        // translation unit). Report false rather than advertising absent features.
+#ifdef TURBOLOADER_HAS_AZURE
+        features["azure_support"] = true;
+#else
+        features["azure_support"] = false;
+#endif
+#ifdef TURBOLOADER_HAS_HDF5
         features["hdf5_support"] = true;
+#else
+        features["hdf5_support"] = false;
+#endif
+#ifdef TURBOLOADER_HAS_TFRECORD
         features["tfrecord_support"] = true;
+#else
+        features["tfrecord_support"] = false;
+#endif
+#ifdef TURBOLOADER_HAS_ZARR
         features["zarr_support"] = true;
+#else
+        features["zarr_support"] = false;
+#endif
+#ifdef TURBOLOADER_HAS_COCO_VOC
         features["coco_voc_support"] = true;
-#ifdef __linux__
+#else
+        features["coco_voc_support"] = false;
+#endif
+#ifdef TURBOLOADER_HAS_IO_URING
         features["io_uring"] = true;
 #else
         features["io_uring"] = false;
@@ -1023,29 +1126,13 @@ PYBIND11_MODULE(_turboloader, m) {
 
     m.def("list_transforms", []() {
         py::list transforms;
-        transforms.append("Resize");
-        transforms.append("Normalize");
-        transforms.append("ImageNetNormalize");
-        transforms.append("RandomHorizontalFlip");
-        transforms.append("RandomVerticalFlip");
-        transforms.append("CenterCrop");
-        transforms.append("RandomCrop");
-        transforms.append("ColorJitter");
-        transforms.append("Grayscale");
-        transforms.append("Pad");
-        transforms.append("RandomRotation");
-        transforms.append("RandomAffine");
-        transforms.append("GaussianBlur");
-        transforms.append("RandomErasing");
-        transforms.append("RandomPosterize");
-        transforms.append("RandomSolarize");
-        transforms.append("RandomPerspective");
-        transforms.append("AutoAugment");
-        transforms.append("ToTensor");
+        for (const auto& name : list_all_transform_names()) {
+            transforms.append(name);
+        }
         return transforms;
     }, "List all available transforms\n\n"
        "Returns:\n"
-       "    list[str]: Names of all 19 transforms\n\n"
+       "    list[str]: Names of all bound transforms\n\n"
        "Example:\n"
        "    >>> import turboloader\n"
        "    >>> print(turboloader.list_transforms())");

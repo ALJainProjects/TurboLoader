@@ -20,10 +20,12 @@ struct ImageData {
     int stride;              // Row stride in bytes
     bool owns_data;          // Whether this struct owns the data
     bool is_float32;         // True if data is actually float32 (reinterpret_cast'd)
+    bool is_chw;             // True if float32 data is laid out channel-first (C,H,W)
 
     ImageData(uint8_t* data_, int w, int h, int c, int stride_ = 0, bool owns = false)
         : data(data_), width(w), height(h), channels(c),
-          stride(stride_ > 0 ? stride_ : w * c), owns_data(owns), is_float32(false) {}
+          stride(stride_ > 0 ? stride_ : w * c), owns_data(owns), is_float32(false),
+          is_chw(false) {}
 
     ~ImageData() {
         if (owns_data && data) {
@@ -39,7 +41,7 @@ struct ImageData {
     ImageData(ImageData&& other) noexcept
         : data(other.data), width(other.width), height(other.height),
           channels(other.channels), stride(other.stride), owns_data(other.owns_data),
-          is_float32(other.is_float32) {
+          is_float32(other.is_float32), is_chw(other.is_chw) {
         other.data = nullptr;
         other.owns_data = false;
     }
@@ -56,6 +58,7 @@ struct ImageData {
             stride = other.stride;
             owns_data = other.owns_data;
             is_float32 = other.is_float32;
+            is_chw = other.is_chw;
             other.data = nullptr;
             other.owns_data = false;
         }
