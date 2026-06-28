@@ -10,20 +10,18 @@ jobs:
   build_wheels:
     name: Wheels ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # macOS legs are best-effort: GitHub's macOS runners have a toolchain bug (Xcode
-    # 15.4 libc++ mis-parses C++20 in <memory>) that doesn't reproduce on a normal
-    # up-to-date Mac. They must not block the release — Linux wheels + the sdist
-    # (which builds fine on a user's own Mac) always ship. macOS wheels publish when
-    # they succeed. arm64 uses macos-15 (newer Xcode) where the build works.
-    continue-on-error: ${{ matrix.optional == true }}
+    # Linux-only wheels (portable manylinux, x86_64 + aarch64). macOS wheels are
+    # intentionally NOT built here: tying their minimum-OS to the runner's Homebrew
+    # bottles makes them non-portable, and GitHub's macOS runners currently fail on an
+    # Xcode libc++/C++20 toolchain bug. macOS users install the sdist, which compiles
+    # correctly against their own toolchain. Portable macOS wheels (deps built from
+    # source at a fixed target) can be added as a separate, deliberate effort.
     strategy:
       fail-fast: false
       matrix:
         include:
           - { name: linux-x86_64,   os: ubuntu-latest,    archs: x86_64 }
           - { name: linux-aarch64,  os: ubuntu-24.04-arm, archs: aarch64 }
-          - { name: macos-arm64,    os: macos-15,         archs: arm64,  optional: true }
-          - { name: macos-x86_64,   os: macos-13,         archs: x86_64, optional: true }
 
     steps:
       - uses: actions/checkout@v4
