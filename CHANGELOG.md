@@ -5,6 +5,28 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.26.1] - 2026-06-28
+
+Test-coverage and bug-fix patch (coverage 55% → 76%, +142 tests).
+
+### Fixed
+- **`pin_memory=True` crashed `PyTorchCompatibleLoader` on Apple Silicon/MPS** — it
+  called `pin_memory()` with no CUDA guard. Now gated on `torch.cuda.is_available()`,
+  matching PyTorch's own DataLoader.
+- **`PyTorchCompatibleLoader(drop_last=True)` did not drop the ragged final batch** —
+  now enforced (PyTorch semantics).
+- **`FolderLabelExtractor.get_class_names()` raised `KeyError`** for a non-contiguous
+  prebuilt `class_to_idx` (it iterated `range(len)`); now ordered by index value.
+- `JSONSidecarExtractor`: removed dead code and corrected the docstring (it reads the
+  label from sample metadata, never from a `.json` file on disk).
+- Removed the misleading "include `Resize(H, W)` in transform" guidance for the fast
+  path — the compiled `Resize` exposes no dimensions, so that path never worked;
+  `image_size=` is required.
+
+### Tests
+- Added ~142 tests across label extractors, the PyTorch-compat loader/converter,
+  `DataLoader` modality + error + runtime paths, and the sequence loaders.
+
 ## [2.26.0] - 2026-06-28
 
 Audit-remediation, performance, correctness, and multi-modality release.
