@@ -16,11 +16,19 @@ import subprocess
 # version()/features() always match the package (this skew once shipped as 2.5.0 vs
 # 2.25.0). Resolve from scm (git checkout) or the generated _version.py (sdist).
 def _resolve_version():
+    # 1. Honor the pretend-version env (set in CI) so the C++ macro matches the wheel
+    #    metadata exactly — the wheel smoke-test asserts version() == __version__.
+    for _k in ("SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TURBOLOADER",
+               "SETUPTOOLS_SCM_PRETEND_VERSION"):
+        if os.environ.get(_k):
+            return os.environ[_k]
+    # 2. setuptools_scm from a git checkout.
     try:
         from setuptools_scm import get_version
         return get_version(root=".", relative_to=__file__)
     except Exception:
         pass
+    # 3. The version file written into an sdist by setuptools_scm.
     try:
         ns = {}
         with open(os.path.join("turboloader", "_version.py")) as fh:
