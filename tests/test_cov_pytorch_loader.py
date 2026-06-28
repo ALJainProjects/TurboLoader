@@ -183,8 +183,9 @@ def test_iteration_covers_every_sample_once(dataset):
 def test_default_folder_extractor_is_deterministic(dataset):
     # With no explicit mapping, FolderLabelExtractor assigns indices in the
     # order classes are first seen; shuffle=False -> ant,bee,cat -> 0,1,2.
+    # num_workers=1 keeps the order deterministic (>1 interleaves worker shards).
     loader = PyTorchCompatibleLoader(
-        dataset["tar"], batch_size=4, shuffle=False, num_workers=2, pin_memory=False
+        dataset["tar"], batch_size=4, shuffle=False, num_workers=1, pin_memory=False
     )
     seen = [labels.tolist() for _images, labels in loader]
     assert seen == [[0, 0, 0, 0], [1, 1, 1, 1], [2, 2, 2, 2]]
@@ -197,7 +198,8 @@ def test_output_size_controls_spatial_dims(dataset):
 
 
 def test_reiterable_across_epochs(dataset):
-    loader = _make_loader(dataset, batch_size=4, shuffle=False)
+    # num_workers=1 so batch order is deterministic across epochs (>1 interleaves).
+    loader = _make_loader(dataset, batch_size=4, shuffle=False, num_workers=1)
     epoch1 = [labels.tolist() for _i, labels in loader]
     epoch2 = [labels.tolist() for _i, labels in loader]
     assert epoch1 == epoch2 == [[0, 0, 0, 0], [1, 1, 1, 1], [2, 2, 2, 2]]
