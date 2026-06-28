@@ -1,10 +1,12 @@
 # TurboLoader Architecture
 
-This document describes the internal architecture of TurboLoader v2.7.0.
+This document describes the internal architecture of TurboLoader v2.26.2.
 
 ## Overview
 
-TurboLoader achieves **21,035 img/s peak throughput** through a carefully designed multi-threaded pipeline architecture with SIMD-accelerated operations. The system features TBL v2 format with LZ4 compression, streaming writer, SIMD-accelerated transforms, and enhanced data integrity features.
+TurboLoader's default fast path is an FFCV / tf.data-style **direct-batch loader**: a single process-wide C++ thread pool makes one parallel pass that decodes, resizes, and normalizes images straight into the output batch buffer (with automatic libjpeg-turbo DCT scaled decode for large images). On Apple Silicon over Imagenette-160 (9,469 real ImageNet JPEGs → 160px, `output_format='pytorch'`, batch 64, real consumption, warmup + median of 3 epochs) it reaches **~39,100 img/s on the fly** and **~65,499 img/s with the decoded cache** (`cache_decoded=True`) — about **1.3x** TensorFlow tf.data (AUTOTUNE) and **2.1x** a PyTorch DataLoader with 8 persistent workers.
+
+Beyond images, TurboLoader is **multi-modal**: images in WebDataset TAR, LLM token streams via `TokenDataLoader`, and generic `(N, ...)` arrays via `ArrayDataLoader`. It also provides SIMD-accelerated transforms (NEON / AVX2 / AVX-512), half-pixel resize matching PIL/PyTorch/TF (optional antialiasing), a decoded cache, DDP-safe equal/disjoint sharding, NumPy / PyTorch-CHW / TensorFlow-HWC output, and the TBL v2 binary format with LZ4 compression.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -39,15 +41,21 @@ TurboLoader achieves **21,035 img/s peak throughput** through a carefully design
     └───────────┼──────────────────┼─────────────────────┘
                 │                  │
          ┌──────▼──────────────────▼──────┐
-         │   Lock-Free Output Queue       │
-         │   (SPSC ring buffer)            │
+         │   Output Batch Buffer           │
+         │   (workers write rows directly) │
          └──────┬─────────────────────────┘
                 │
          ┌──────▼──────────────┐
          │   Python Iterator   │
-         │   (batch assembly)  │
+         │   (yields filled     │
+         │    batch tensor)     │
          └─────────────────────┘
 ```
+
+> **Default fast path:** the worker pool writes decoded / resized / normalized rows
+> straight into the output batch buffer (FFCV / tf.data-style direct-batch loading).
+> The lock-free SPSC queue shown above is the **legacy / remote-streaming** path, not
+> the default (see section 4).
 
 ## Core Components
 
@@ -59,20 +67,20 @@ TurboLoader achieves **21,035 img/s peak throughput** through a carefully design
 - Uses `mmap()` system call to map file into memory
 - Parses TAR headers (512-byte chunks) to locate samples
 - Builds index of file offsets for random access
-- Throughput: **52+ Gbps** on local SSD
+- Throughput is bounded by SSD / page-cache bandwidth (zero-copy, no per-read syscall copy)
 
 **TBL v2 Reader **
 - Memory-mapped access to compressed binary format
-- LZ4 decompression for 40-60% space savings vs TAR
+- LZ4 decompression for space savings vs TAR (amount depends on the data)
 - CRC32 checksum validation for data integrity
 - CRC16 validation for index entries
 - Cached image dimensions (width/height) in 16-bit index
 - Zero-copy reads with on-demand LZ4 decompression (2.5-3.5 GB/s)
 - 24-byte index entries with full metadata
 
-**Performance:**
-- TAR: 52+ Gbps throughput
-- TBL v2: 48+ Gbps (including LZ4 decompression)
+**Performance characteristics:**
+- Both readers are mmap-backed and bounded by SSD / page-cache bandwidth
+- LZ4 decompression for TBL v2 happens on demand (~2.5–3.5 GB/s single-threaded)
 - Random access: O(1) for TBL v2, O(n) for TAR
 - Memory footprint: Minimal (mmap on-demand paging)
 
@@ -95,9 +103,9 @@ TurboLoader achieves **21,035 img/s peak throughput** through a carefully design
 - Eliminates mutex contention
 - Maximizes CPU cache locality
 
-**Performance:**
-- JPEG: Up to **1.5 GB/s** decode bandwidth
-- PNG: Up to **800 MB/s** decode bandwidth
+**Decode notes:**
+- libjpeg-turbo SIMD decode, with automatic DCT scaled decode for large images (decode straight to a smaller size before resize)
+- PNG/WebP decoded via their respective optimized libraries
 
 **Code Location:** `src/decode/image_decoder.hpp`
 
@@ -140,19 +148,22 @@ __m256 interp_y = _mm256_fmadd_ps(pixels_1, fy_vec,
 
 **Code Location:** `src/transforms/`
 
-### 4. Lock-Free Concurrent Queues
+### 4. Lock-Free Concurrent Queues (legacy / remote-streaming path)
 
-**Purpose:** High-throughput sample passing between threads
+**Purpose:** Sample passing between threads on the legacy and remote-streaming code paths
+
+> **Note:** Lock-free SPSC queues are **not** the default fast path. The default
+> direct-batch loader has the worker pool write decoded / transformed rows straight
+> into the output batch buffer (see Overview), so there is no per-sample enqueue or
+> dequeue on the hot path. The SPSC ring buffer is retained for the legacy streaming
+> pipeline and remote/streaming sources, where producer and consumer run at different
+> rates.
 
 **Implementation:**
 - **SPSC (Single-Producer Single-Consumer) ring buffer**
 - Cache-line aligned (`alignas(64)`)
 - Atomic operations for indices
-- No mutex locks in hot path
-
-**Performance:**
-- Enqueue/dequeue: **~10-20 CPU cycles**
-- Compared to mutex queues: **~50x faster**
+- No mutex locks in the hot path
 
 **Memory Layout:**
 ```cpp
@@ -170,9 +181,11 @@ alignas(64) struct SPSCQueue {
 **Purpose:** Parallel processing of samples
 
 **Thread Count:**
-- Default: **8 workers** (optimal for most systems)
-- Configurable: 1-32 workers
-- Rule of thumb: `2 * num_CPU_cores`
+- The default fast path is **one process-wide C++ thread pool** that parallelizes
+  internally across all cores — it is already saturated from a single Python "worker"
+- Configurable pool size; rule of thumb: roughly one thread per CPU core
+- Unlike a PyTorch DataLoader, raising `num_workers` does not spawn extra processes on
+  the fast path, so it does not multiply throughput (see Scalability below)
 
 **Worker Lifecycle:**
 ```
@@ -185,8 +198,9 @@ alignas(64) struct SPSCQueue {
 ```
 
 **Synchronization:**
-- Main thread → Workers: Work queue (lock-free)
-- Workers → Main thread: Result queue (lock-free)
+- Main thread → Workers: work distribution across the pool
+- Workers → output: each worker writes its rows directly into the shared output batch
+  buffer (no result queue on the fast path)
 - No inter-worker communication (embarrassingly parallel)
 
 **Code Location:** `src/pipeline/pipeline.hpp`
@@ -238,11 +252,11 @@ for c in range(C):
    │  ├─ ColorJitter
    │  ├─ Normalize
    │  └─ ToTensor
-   └─ Push to output queue
+   └─ Write row directly into the output batch buffer
                 ↓
 3. Python Iterator
-   ├─ Pop batch_size samples from output queue
-   ├─ Assemble into Python list
+   ├─ Wait for the batch buffer to fill
+   ├─ Wrap it as a NumPy / PyTorch / TensorFlow tensor (zero-copy)
    └─ Return to user
 ```
 
@@ -269,39 +283,43 @@ Example (8 workers): **~600 MB**
 
 ### Throughput Breakdown
 
-| Component | Throughput | Bottleneck |
-|-----------|------------|------------|
-| TAR Reader | 52+ Gbps | SSD bandwidth |
-| JPEG Decode | 1.5 GB/s | CPU decode |
-| SIMD Resize | 3.2x PyTorch | Memory bandwidth |
-| Normalize | 5.0 GB/s | SIMD FMA units |
-| Queue ops | 50M/s | Cache latency |
+Per-stage bottlenecks on the direct-batch fast path:
+
+| Stage | Bottleneck |
+|-------|------------|
+| mmap TAR / TBL reader | SSD / page-cache bandwidth |
+| JPEG decode (libjpeg-turbo) | CPU decode |
+| SIMD resize / normalize | Memory bandwidth / SIMD FMA units |
+| Direct-batch write | Memory bandwidth |
 
 ### Scalability
 
-**Worker Count vs Throughput:**
-```
-1 worker:   1,500 img/s
-2 workers:  3,000 img/s  (2.0x)
-4 workers:  5,800 img/s  (3.9x)
-8 workers: 10,146 img/s  (6.8x)
-16 workers: 12,300 img/s  (8.2x)  ← diminishing returns
-```
+The default direct-batch fast path runs as **one process-wide C++ thread pool** that is
+already saturated from a single Python "worker" — it parallelizes internally across
+cores. Increasing `num_workers` on the fast path does **not** spin up additional
+processes the way a PyTorch DataLoader does, so it does not multiply throughput. (By
+contrast, a PyTorch DataLoader scales with `num_workers` because each worker is a
+separate process; tf.data uses AUTOTUNE.)
 
-**Bottleneck Analysis:**
-- 1-4 workers: CPU decode bound
-- 4-8 workers: Balanced (decode + transform)
-- 8-16 workers: Memory bandwidth bound
-- 16+ workers: Queue contention + cache misses
+End-to-end, on Apple Silicon over Imagenette-160 (9,469 real ImageNet JPEGs → 160px,
+`output_format='pytorch'`, batch 64, real consumption forcing materialization, warmup +
+median of 3 epochs):
+
+| Loader | Throughput |
+|--------|------------|
+| TurboLoader (cached, `cache_decoded=True`) | ~65,499 img/s |
+| TurboLoader (on the fly) | ~39,100 img/s |
+| TensorFlow tf.data (AUTOTUNE) | ~30,154 img/s |
+| PyTorch DataLoader (8 persistent workers) | ~18,991 img/s |
+
+On the fly, TurboLoader is about **1.3x** tf.data and **2.1x** the PyTorch DataLoader;
+with the decoded cache it is faster still.
 
 ### CPU Utilization
 
-**Target:** 90-95% CPU utilization on all cores
-
-**Achieved:**
-- 8 workers on 10-core CPU: **92% average**
-- Minimal idle time
-- Low mutex contention (<1% overhead)
+The direct-batch pool keeps all cores busy with minimal idle time, since decode,
+resize, and normalize run in parallel and write straight into the output batch buffer
+without a per-sample queue hop.
 
 ## Design Decisions
 
@@ -318,29 +336,28 @@ Example (8 workers): **~600 MB**
 - More complex build system
 - Requires C++20 compiler
 
-### Why Lock-Free Queues?
+### Why a Direct-Batch Fast Path?
 
-**Mutex-based queues (v0.5.0):**
-- Lock contention under high load
-- Throughput: **~500 img/s** (8 workers)
-
-**Lock-free queues (v0.6.0+):**
-- No lock contention
-- Throughput: **10,146 img/s** (8 workers)
-- **20x improvement**
+Earlier versions passed every sample through a queue between the worker threads and the
+Python consumer. The default fast path now skips that hop entirely: worker threads in
+the process-wide pool decode, resize, and normalize **directly into the output batch
+buffer**, so there is no per-sample enqueue / dequeue on the hot path. Lock-free SPSC
+queues are kept only for the legacy streaming and remote-source paths (see section 4),
+where producer and consumer genuinely run at different rates.
 
 ### Why mmap Instead of read()?
 
 **read() syscalls:**
-- Kernel → user space copy
-- System call overhead
-- Throughput: **~2 GB/s**
+- Kernel → user space copy on every call
+- System-call overhead per read
 
 **mmap():**
 - Zero-copy (kernel manages pages)
-- Page cache reuse
-- Throughput: **52+ GB/s**
-- **26x improvement**
+- Page-cache reuse across epochs
+- Random access without explicit seeks
+
+mmap avoids the per-read copy and lets the OS page cache serve repeated reads, which
+matters most when a dataset is read across many epochs.
 
 ## Code Organization
 
@@ -376,54 +393,44 @@ turboloader/
 
 ## Version History
 
-### v2.0.0 Current Features
+### v2.26.x Current Features
 
-1. **Tiered Caching System** ✅
-   - **L1 Memory Cache** - LRU cache with 512MB default size
-   - **L2 Disk Cache** - Async background writer for decoded images
-   - **xxHash64 content hashing** - 10+ GB/s cache key generation
-   - **Cache-aside pattern** - L1 → L2 → decode on miss
-   - **5-10x faster subsequent epochs** - Skip decode for cached images
+1. **Direct-batch fast path** ✅
+   - FFCV / tf.data-style loader: one parallel pass decodes → resizes → normalizes
+     straight into the output batch buffer
+   - Automatic libjpeg-turbo DCT scaled decode for large images
+   - Process-wide C++ thread pool (saturated from a single Python worker)
 
-2. **Smart Batching Default** ✅
-   - Enabled by default for ~1.2x throughput boost
-   - Increased prefetch batches (4, up from 2)
-   - Larger buffer pool (256, up from 128)
+2. **Multi-modality** ✅
+   - Images in WebDataset TAR
+   - LLM token streams via `TokenDataLoader`
+   - Generic `(N, ...)` arrays via `ArrayDataLoader`
 
-3. **TBL v2 Binary Format** ✅
-   - **LZ4 compression** - 40-60% space savings vs TAR
+3. **Decoded cache** ✅
+   - `cache_decoded=True` skips re-decoding on subsequent epochs
+   - Substantially faster repeat epochs once the cache is warm
+
+4. **TBL v2 Binary Format** ✅
+   - **LZ4 compression** - space savings vs TAR
    - **Streaming writer** - O(1) constant memory usage (not O(n))
    - **CRC32/CRC16 checksums** - Data integrity validation
    - **Cached image dimensions** - 16-bit width/height in index for fast filtering
    - **Rich metadata support** - JSON, Protobuf, MessagePack formats
-   - **64-byte cache-aligned header** - Optimal CPU cache performance
+   - **64-byte cache-aligned header**
    - **24-byte index entries** - Compressed size, format, dimensions, CRC16
-   - **4,875 img/s conversion** - TAR→TBL throughput with parallel processing
    - **Code Locations:** `src/formats/tbl_v2_format.hpp`, `src/readers/tbl_v2_reader.hpp`, `src/writers/tbl_v2_writer.hpp`, `src/compression/lz4_compressor.hpp`
 
-### v1.2.0-1.2.1 Features
-
-1. **GPU JPEG Decoding (nvJPEG)** ✅
-   - NVIDIA nvJPEG support for 10x faster JPEG decoding
-   - Automatic CPU fallback when GPU unavailable
-   - **Code Location:** `src/decode/nvjpeg_decoder.hpp`
-
-2. **Linux io_uring Async I/O** ✅
-   - 2-3x faster disk throughput on NVMe SSDs
-   - Zero-copy O_DIRECT support
-   - **Code Location:** `src/io/io_uring_reader.hpp`
-
-3. **Smart Batching** ✅
-   - Size-based sample grouping reduces padding by 15-25%
-   - ~1.2x throughput improvement
-   - **Code Location:** `src/pipeline/smart_batching.hpp`
-
-4. **Distributed Training** ✅
-   - Multi-node data loading with deterministic sharding
-   - Compatible with PyTorch DDP, Horovod, DeepSpeed
+5. **DDP-safe distributed sharding** ✅
+   - Equal / disjoint sharding across ranks for distributed training
+   - Compatible with PyTorch DDP
    - **Code Location:** `src/distributed/`
 
-### v1.1.0 Features
+6. **Packaging** ✅
+   - `setuptools_scm` versioning; Trusted-Publishing PyPI releases on tags
+   - Prebuilt manylinux wheels (Linux x86_64 + aarch64) plus an sdist; portable macOS
+     wheels (built from source) are being added
+
+### Earlier Features
 
 1. **AVX-512 SIMD Support** ✅
    - 16-wide vector operations (2x throughput vs AVX2)
@@ -441,19 +448,15 @@ turboloader/
    - O(1) random access via index table
    - Foundation for TBL v2 format
 
-### Future Improvements (v1.6+)
+### Future Improvements
 
 1. **ZSTD Compression**
    - Higher compression ratios than LZ4
    - Tunable compression levels
 
-2. **Video Dataloader Enhancements**
-   - Frame-level decoding
-   - Temporal augmentation
-
-3. **Cloud Storage Optimizations**
-   - S3/GCS streaming with TBL v2 format
-   - Intelligent prefetching for cloud data
+2. **Cloud Storage Optimizations**
+   - S3/GCS streaming with the TBL v2 format
+   - Not built into the published wheel today (source-only / optional, planned)
 
 ## References
 

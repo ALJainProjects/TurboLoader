@@ -4,7 +4,9 @@ DataLoader and pipeline configuration reference.
 
 ## DataLoader
 
-PyTorch-compatible data loader with TurboLoader performance.
+PyTorch-compatible data loader with TurboLoader performance. A single entry point for
+every modality: images (TAR / WebDataset), LLM token streams, and generic `(N, ...)`
+arrays via the `modality=` argument.
 
 ### Constructor
 
@@ -13,15 +15,47 @@ turboloader.DataLoader(
     data_path: str,
     batch_size: int = 32,
     num_workers: int = 4,
-    shuffle: bool = False
+    shuffle: bool = False,
+    transform=None,
+    image_size=None,
+    output_format: str = 'dict',
+    modality: str = 'image',
+    drop_last: bool = False,
+    cache_decoded: bool = False,
+    antialias: bool = False,
+    seed: int = 42,
+    # token / array modalities
+    seq_len: int = None,
+    token_dtype: str = 'uint16',
+    arrays=None,
 )
 ```
 
 **Parameters:**
-- `data_path` (str): Path to TAR archive (local file, http://, s3://, gs://)
+- `data_path` (str): Path to the data source (TAR archive for images, raw token file for
+  `modality='tokens'`). Remote schemes (`http://`, `s3://`, `gs://`) are only available
+  when the build was compiled with those readers — check `turboloader.features()`.
 - `batch_size` (int): Samples per batch (default: 32)
-- `num_workers` (int): Worker threads (default: 4)
+- `num_workers` (int): Worker threads (default: 4). The fast batch-assembly path uses one
+  process-wide C++ thread pool; it does not require multiple Python worker processes.
 - `shuffle` (bool): Shuffle samples within each worker's shard (default: False)
+- `transform`: Transform or composed transforms to apply (e.g.
+  `Resize(224, 224) | ImageNetNormalize()`)
+- `image_size` (tuple|int): Output `(H, W)` (or square `N`). Required by the fast
+  `output_format` paths when it cannot be inferred from the transform.
+- `output_format` (str): `'dict'` (per-sample dicts, default), `'numpy'`, `'numpy_chw'`,
+  `'pytorch'` (CHW), or `'tensorflow'` (HWC). The non-`'dict'` formats use the optimized
+  one-pass batch-assembly path (decode → resize → normalize straight into the output batch
+  buffer).
+- `modality` (str): `'image'` (default), `'tokens'`, or `'array'`
+- `drop_last` (bool): Drop the final incomplete batch (default: False)
+- `cache_decoded` (bool): Cache decoded arrays after the first pass for fast subsequent
+  epochs (default: False)
+- `antialias` (bool): Apply antialiasing on downscale to match PIL/PyTorch/TF (default: False)
+- `seed` (int): Seed for reproducible shuffling (default: 42)
+- `seq_len` (int): Sequence length, required for `modality='tokens'`
+- `token_dtype` (str): On-disk token dtype, e.g. `'uint16'` for GPT-2 BPE
+- `arrays` (sequence): Aligned `(N, ...)` arrays/memmaps for `modality='array'`
 
 **Returns:**
 - DataLoader instance
@@ -32,8 +66,10 @@ import turboloader
 
 loader = turboloader.DataLoader(
     'imagenet.tar',
-    batch_size=128,
-    num_workers=8
+    batch_size=64,
+    num_workers=8,
+    output_format='pytorch',   # one-pass decode/resize/normalize into a CHW batch
+    image_size=(160, 160),
 )
 ```
 
@@ -60,7 +96,7 @@ Check if all data has been processed.
 
 Stop the pipeline and clean up resources.
 
-#### `set_epoch(epoch: int) -> None` (v2.8.0)
+#### `set_epoch(epoch: int) -> None`
 
 Set epoch for reproducible shuffling.
 
@@ -109,7 +145,12 @@ with turboloader.DataLoader('data.tar', batch_size=32, num_workers=8) as loader:
 
 ## FastDataLoader
 
-High-performance loader returning contiguous numpy arrays. 8-12% faster than standard DataLoader due to reduced Python overhead.
+High-performance loader returning contiguous batch arrays. This is the FFCV / tf.data-style
+direct-batch path: one parallel pass over the shard decodes, resizes, and normalizes each
+image straight into the output batch buffer (no intermediate per-sample Python objects).
+Large JPEGs use libjpeg-turbo's DCT scaled decode automatically, so downscaling work is
+done during decode rather than after. The same fast path is reachable from `DataLoader` by
+choosing a non-`'dict'` `output_format`.
 
 ### Constructor
 
@@ -204,9 +245,9 @@ for images, metadata in loader:
     pass
 ```
 
-### Caching for Multi-Epoch Training (v2.7.0)
+### Caching for Multi-Epoch Training
 
-The `cache_decoded=True` parameter enables decoded tensor caching for fast subsequent epochs:
+The `cache_decoded=True` parameter enables decoded-array caching for fast subsequent epochs:
 
 ```python
 import turboloader
@@ -220,8 +261,8 @@ loader = turboloader.FastDataLoader(
 
 for epoch in range(10):
     for images, metadata in loader:
-        # First epoch: ~25K img/s (decode from TAR)
-        # Subsequent epochs: memory speed (cache hit)
+        # First epoch: decode from TAR
+        # Subsequent epochs: served from the decoded cache
         train_step(images)
 
     if loader.cache_populated:
@@ -231,10 +272,14 @@ for epoch in range(10):
 loader.clear_cache()
 ```
 
-**Performance:**
-- First epoch: Standard decode throughput (~25K img/s)
-- Cached epochs: Memory iteration speed (100K+ img/s)
-- Total time for 5 epochs: 2.6x faster than TensorFlow `.cache()`
+**Performance** (measured on Apple Silicon over Imagenette-160 = 9,469 real ImageNet JPEGs
+resized to 160px, `output_format='pytorch'`, batch 64, with real consumption forcing
+materialization; warmup + median of 3 epochs):
+- On-the-fly (first pass, decode from TAR): ~39,100 img/s
+- Cached epochs (`cache_decoded=True`): ~65,499 img/s
+
+Caching trades memory for speed: it keeps the decoded arrays resident, so subsequent epochs
+skip JPEG decode entirely. Size the cache to your dataset and RAM.
 
 ---
 
@@ -271,6 +316,71 @@ for batch in loader:
     for sample in batch:
         # Process sample
         pass
+```
+
+---
+
+## Multi-Modality
+
+`DataLoader` is not image-only. The `modality=` argument routes to a dedicated loader for
+each data type (the underlying `TokenDataLoader` / `ArrayDataLoader` classes live in
+`turboloader.sequence` and can also be used directly).
+
+### LLM token streams (`modality='tokens'`)
+
+Streams next-token training batches from a flat token file. The file is memory-mapped, so
+multi-GB corpora stream without loading into RAM. Yields `(inputs, targets)` int64 batches
+of shape `(batch_size, seq_len)`, where `targets` is `inputs` shifted by one (standard
+causal-LM objective).
+
+```python
+import turboloader
+
+loader = turboloader.DataLoader(
+    'train.bin',
+    modality='tokens',
+    seq_len=1024,
+    batch_size=8,
+    token_dtype='uint16',   # e.g. GPT-2 BPE
+    shuffle=True,
+)
+
+for x, y in loader:          # x, y: (8, 1024) int64
+    logits = model(x)
+    loss = loss_fn(logits, y)
+
+# Equivalent direct use:
+from turboloader.sequence import TokenDataLoader
+dl = TokenDataLoader('train.bin', seq_len=1024, batch_size=8)
+```
+
+**Throughput:** TurboLoader's token path sustains ~441M tokens/s versus ~163M tokens/s for
+the plain NumPy memmap idiom — about 2.7x — measured on the same machine.
+
+### Generic arrays (`modality='array'`)
+
+Batches one or more aligned `(N, ...)` arrays or memmaps — embeddings, tabular features,
+pre-tokenized sequences, labels, etc. Returns a single array for one input, otherwise a
+tuple (like `TensorDataset` + `DataLoader`).
+
+```python
+import turboloader
+
+loader = turboloader.DataLoader(
+    None,
+    modality='array',
+    arrays=[features, labels],
+    batch_size=256,
+    shuffle=True,
+    drop_last=True,
+)
+
+for xb, yb in loader:
+    train_step(xb, yb)
+
+# Equivalent direct use:
+from turboloader.sequence import ArrayDataLoader
+dl = ArrayDataLoader(features, labels, batch_size=256, shuffle=True)
 ```
 
 ---

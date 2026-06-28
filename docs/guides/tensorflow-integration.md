@@ -17,6 +17,12 @@ Complete guide for integrating TurboLoader with TensorFlow and Keras for trainin
 
 ## Quick Start
 
+Install (the `torch` extra is optional and not needed for the TensorFlow path):
+
+```bash
+pip install turboloader
+```
+
 Use TurboLoader with TensorFlow in 3 steps:
 
 ```python
@@ -458,9 +464,12 @@ model.fit(dataset, epochs=90)
 ```
 
 **Benefits:**
-- **10-12x faster data loading** (TurboLoader vs tf.data)
-- **SIMD-accelerated transforms** (2-5x faster than TF ops)
-- **Lower CPU usage** (C++ implementation vs Python)
+- **~1.3x faster end-to-end** than TensorFlow tf.data (AUTOTUNE) — ~39,100 vs ~30,154
+  img/s on the Imagenette-160 benchmark (Apple Silicon, 9,469 real ImageNet JPEGs → 160px,
+  batch 64, real consumption, median of 3 epochs); faster still with the decoded cache
+  (`cache_decoded=True`, ~65,499 img/s)
+- **SIMD-accelerated transforms** (NEON / AVX2 / AVX-512) running in a C++ thread pool
+- **Lower Python overhead** (decode + transform happen in C++, not per-element Python ops)
 
 ---
 

@@ -17,6 +17,18 @@ Complete guide for integrating TurboLoader with PyTorch for training, validation
 
 ## Quick Start
 
+Install with the optional PyTorch extra (torch is optional — TurboLoader's core works
+without it, and returns NumPy arrays you can convert yourself):
+
+```bash
+pip install turboloader[torch]
+```
+
+On the Imagenette-160 benchmark (Apple Silicon, 9,469 real ImageNet JPEGs → 160px,
+`output_format='pytorch'`, batch 64), TurboLoader's direct-batch fast path runs about
+**2.1x** a PyTorch DataLoader with 8 persistent workers (~39,100 vs ~18,991 img/s), and
+faster still with the decoded cache (`cache_decoded=True`).
+
 Replace PyTorch DataLoader with TurboLoader in 3 steps:
 
 ```python
@@ -483,6 +495,12 @@ for batch_idx, batch in enumerate(loader):
 
 ### Optimal Worker Count
 
+> **Note:** TurboLoader's default fast path is a single process-wide C++ thread pool that
+> is already saturated from one worker and parallelizes internally across cores. Unlike a
+> PyTorch DataLoader (where each worker is a separate process), raising `num_workers` does
+> not multiply throughput on the fast path. The loop below is still handy to confirm the
+> behavior on your hardware.
+
 Benchmark different worker counts:
 
 ```python
@@ -560,10 +578,10 @@ while True:
 **Symptoms**: GPU utilization < 80%, training takes too long
 
 **Solutions**:
-1. Increase `num_workers` (try 8, 16)
+1. Enable the decoded cache (`cache_decoded=True`) so repeat epochs skip decoding
 2. Increase `batch_size` if GPU memory allows
 3. Use TBL format instead of TAR for faster loading
-4. Check if CPU is bottleneck with `htop`
+4. Check if CPU is the bottleneck with `htop` (the C++ thread pool should keep cores busy)
 
 ### Issue: Out of Memory
 
@@ -601,6 +619,11 @@ while True:
 - [PyTorch Lightning Example](../../examples/pytorch_lightning_example.py) - Full working example
 - [Distributed Training Guide](distributed.md) - Multi-node setup
 - [Performance Benchmarks](../benchmarks/index.md) - Throughput analysis
+
+**Beyond images:** TurboLoader is multi-modal. Use `TokenDataLoader` for LLM token
+streams (TurboLoader's `TokenDataLoader` reaches ~441M tokens/s vs ~163M for the NumPy
+`memmap` idiom, ~2.7x) and `ArrayDataLoader` for generic `(N, ...)` arrays, in addition
+to images in WebDataset TAR / TBL.
 
 ---
 

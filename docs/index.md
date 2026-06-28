@@ -1,6 +1,6 @@
 # TurboLoader Documentation
 
-Welcome to TurboLoader - the fastest ML data loading library with SIMD-accelerated transforms.
+Welcome to TurboLoader - a high-performance, multi-modal ML data loading library with SIMD-accelerated transforms.
 
 ## Quick Links
 
@@ -15,32 +15,50 @@ Welcome to TurboLoader - the fastest ML data loading library with SIMD-accelerat
 TurboLoader is a C++20 data-loading library for ML featuring:
 
 - **Native C++20 implementation** - GIL released during processing
+- **FFCV / tf.data-style direct-batch loader** - one parallel pass decodes, resizes, and normalizes straight into the output batch buffer, with automatic libjpeg-turbo DCT scaled decode for large images
+- **Multi-modality** - images in WebDataset TAR, LLM token streams via `TokenDataLoader`, and generic `(N, ...)` arrays via `ArrayDataLoader`
 - **TBL v2 Binary Format** - LZ4 compression, streaming writer, CRC integrity checks
 - **Cached Dimensions** - Width/height in index for fast filtering without decoding
 - **24 transforms** - 19 per-image SIMD (AVX-512/AVX2/NEON) + 5 batch augmentations
+- **PIL/PyTorch/TF-matched resize** - half-pixel sampling with optional antialiasing
 - **Smart Batching** - Size-based grouping to reduce padding
-- **Distributed sharding** - `DataLoader(enable_distributed=...)` for PyTorch DDP
-- **Zero-copy tensor conversion** - Direct buffer handoff to PyTorch/TensorFlow
+- **Distributed sharding** - DDP-safe equal/disjoint sharding for PyTorch DDP
+- **Decoded cache** - reuse decoded arrays across epochs (`cache_decoded=True`)
+- **NumPy / PyTorch-CHW / TensorFlow-HWC output**
 - **Lock-free concurrent queues** - SPSC worker pipeline
 - **Memory-mapped I/O** - TAR/TBL parsing
 - **AutoAugment policies** - learned augmentation
 
-> Throughput vs PyTorch/`tf.data` is hardware- and pipeline-dependent. On a fair
-> Apple-Silicon benchmark (Imagenette-160) a correctly-configured PyTorch DataLoader
-> and `tf.data` are actually faster; run `benchmarks/` on your own setup.
+> Throughput is hardware- and pipeline-dependent, so run `benchmarks/` on your own
+> setup. On a fair Apple-Silicon benchmark (Imagenette-160: 9,469 real ImageNet
+> JPEGs decoded to 160px, batch 64, real consumption, median of 3 epochs)
+> TurboLoader's on-the-fly path reached ~39,100 img/s versus ~30,154 img/s for
+> TensorFlow `tf.data` (AUTOTUNE) and ~18,991 img/s for a PyTorch DataLoader with
+> 8 persistent workers.
 
 ## Key Features
 
 ### Performance
 
-Throughput depends heavily on hardware, image size, and pipeline configuration.
-Rather than quoting fixed numbers here, **run `benchmarks/` on your own machine**.
+Throughput depends on hardware, image size, and pipeline configuration, so
+**run `benchmarks/` on your own machine**. The numbers below were measured on
+Apple Silicon over Imagenette-160 (9,469 real ImageNet JPEGs decoded to 160px,
+`output_format='pytorch'`, batch 64, real consumption forcing materialization,
+warmup + median of 3 epochs):
 
-Known characteristics (Apple Silicon, Imagenette-160, fair steady-state):
-- The standard `DataLoader` path produces correct batches at a few thousand img/s and
-  beats a single-process PyTorch loader, but a correctly-configured multi-worker PyTorch
-  `DataLoader` and TensorFlow `tf.data` are currently faster.
-- Multi-worker scaling on the dict-output path is limited by Python-side batch assembly.
+| Loader | Throughput | Speedup |
+|--------|-----------:|:-------:|
+| TurboLoader cached (`cache_decoded=True`) | ~65,499 img/s | - |
+| TurboLoader on-the-fly | ~39,100 img/s | - |
+| TensorFlow `tf.data` (AUTOTUNE) | ~30,154 img/s | TurboLoader 1.3x |
+| PyTorch DataLoader (8 persistent workers) | ~18,991 img/s | TurboLoader 2.1x |
+
+For LLM token streams, `TokenDataLoader` reached ~441M tokens/s versus ~163M
+tokens/s for the NumPy memmap idiom (2.7x).
+
+Worker-scaling nuance: only PyTorch scales with `num_workers` (separate processes).
+TurboLoader's fast path is a single process-wide C++ thread pool already saturated
+at one worker; `tf.data` uses AUTOTUNE.
 
 See [Benchmark Results](benchmarks/index.md) for methodology.
 
@@ -63,10 +81,10 @@ TurboLoader includes 19 SIMD-accelerated transforms:
 - RandomErasing
 - Grayscale
 
-**Advanced Transforms (v0.7.0+):**
-- RandomPosterize (336K+ img/s)
-- RandomSolarize (21K+ img/s)
-- RandomPerspective (9.9K+ img/s)
+**Advanced Transforms:**
+- RandomPosterize
+- RandomSolarize
+- RandomPerspective
 - AutoAugment (ImageNet, CIFAR10, SVHN policies)
 
 **Tensor Conversion:**
@@ -80,9 +98,17 @@ See [Transforms API](api/transforms.md) for complete reference.
 pip install turboloader
 ```
 
+Prebuilt manylinux wheels are published for Linux x86_64 and aarch64 (plus an
+sdist); portable macOS wheels built from source are being added. PyTorch is an
+**optional** dependency - install it alongside TurboLoader with:
+
+```bash
+pip install turboloader[torch]
+```
+
 **Requirements:**
 - Python 3.10+
-- C++20 compiler
+- C++20 compiler (only needed when building from the sdist/source)
 - libjpeg-turbo, libpng, libwebp (optional but recommended)
 
 See [Installation Guide](guides/installation.md) for detailed instructions.
@@ -172,10 +198,8 @@ See [PyTorch Integration Guide](guides/pytorch-integration.md) for more examples
 
 ### Benchmarks
 
-- [Overview](benchmarks/index.md) - Performance results
-- [Methodology](benchmarks/methodology.md) - How we benchmark
-- [Results](benchmarks/results.md) - Detailed performance data
-- [Memory Profiling](benchmarks/memory-profiling.md) - Memory usage analysis
+- [Overview](benchmarks/index.md) - Measured performance results
+- [Benchmark Setup](benchmark_setup.md) - How to reproduce the benchmarks
 
 ### Development
 
@@ -211,16 +235,17 @@ See [Architecture Guide](architecture.md) for detailed design.
 
 ## Version History
 
-- **v2.7.0** (Current) - Decoded Tensor Caching (`cache_decoded=True`), FastDataLoader, MemoryEfficientDataLoader
+- **v2.26.2** (Current; v2.26.1 is the latest published on PyPI) - FFCV-style direct-batch loader, multi-modality (`TokenDataLoader`, `ArrayDataLoader`), decoded cache (`cache_decoded=True`), DDP-safe distributed sharding
+- **v2.7.0** - Decoded Tensor Caching (`cache_decoded=True`), FastDataLoader, MemoryEfficientDataLoader
 - **v2.4.0** - Integrated transform pipeline support in DataLoader
 - **v2.0.0** - Tiered Caching (L1 memory + L2 disk), Smart Batching enabled by default, Pipeline tuning optimizations
-- **v1.9.0** - Transform Pipe Operator, HDF5/TFRecord/Zarr support (headers), COCO/VOC annotations, Azure Blob Storage, GPU transforms, io_uring
+- **v1.9.0** - Transform Pipe Operator, COCO/VOC annotations, source-only/optional storage backends (HDF5/TFRecord/Zarr/cloud), io_uring
 - **v1.8.0** - Modern Augmentations (MixUp, CutMix, Mosaic, RandAugment, GridMask), Logging system
 - **v1.7.7** - Developer experience improvements: Issue templates, Quick Start notebook, PyTorch Lightning example
 - **v1.5.0** - TBL v2 Format with LZ4 compression (40-60% space savings)
-- **v1.2.0** - Smart Batching + Distributed Training (21,035 img/s peak)
+- **v1.2.0** - Smart Batching + Distributed Training
 - **v1.1.0** - AVX-512 SIMD + Binary Format Improvements + Prefetching
-- **v1.0.0** - Production/Stable Release (10,146 img/s)
+- **v1.0.0** - Production/Stable Release
 
 See [CHANGELOG](../CHANGELOG.md) for complete history.
 
@@ -243,7 +268,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {2.7.0},
+  version = {2.26.2},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```

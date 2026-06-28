@@ -10,6 +10,14 @@ This guide will help you get up and running with TurboLoader in minutes.
 pip install turboloader
 ```
 
+Prebuilt manylinux wheels ship for Linux x86_64 and aarch64 (plus an sdist);
+portable macOS wheels built from source are being added. PyTorch is **optional** -
+add it with the `torch` extra only if you need PyTorch tensor output:
+
+```bash
+pip install turboloader[torch]
+```
+
 ### From Source
 
 ```bash
@@ -238,6 +246,49 @@ for batch in loader:
     # Train with TensorFlow...
 ```
 
+## Beyond Images: Tokens and Arrays
+
+TurboLoader is multi-modal. Alongside images in WebDataset TAR archives, it can
+stream LLM tokens and generic N-dimensional arrays through the same pipeline. See
+the [API Reference](api/index.md) for the full set of options on each loader.
+
+### LLM Token Streams
+
+```python
+import turboloader
+
+# Stream fixed-length sequences from a tokenized corpus
+token_loader = turboloader.TokenDataLoader(
+    'corpus.bin',     # memmapped token file
+    seq_len=1024,
+    batch_size=32
+)
+
+for inputs, targets in token_loader:
+    # inputs, targets: (batch_size, seq_len) int64; targets = inputs shifted by one
+    # (pass return_targets=False to yield just inputs)
+    train_step(inputs, targets)
+```
+
+On Apple Silicon `TokenDataLoader` reached ~441M tokens/s, about 2.7x the
+throughput of the common NumPy memmap idiom (~163M tokens/s).
+
+### Generic Arrays
+
+```python
+import turboloader
+
+# Iterate batches over any (N, ...) array or memmapped array file
+array_loader = turboloader.ArrayDataLoader(
+    features,         # NumPy array or path, shape (N, ...)
+    batch_size=256,
+    shuffle=True
+)
+
+for batch in array_loader:
+    train_step(batch)
+```
+
 ## Performance Tips
 
 ### 1. Choose Optimal Worker Count
@@ -261,7 +312,7 @@ loader = turboloader.DataLoader(
 # Bilinear is fastest for most cases
 resize = turboloader.Resize(
     224, 224,
-    interpolation=turboloader.InterpolationMode.BILINEAR  # 3.2x faster
+    interpolation=turboloader.InterpolationMode.BILINEAR  # fastest path
 )
 
 # Lanczos for highest quality (slower)
@@ -285,6 +336,15 @@ loader_32 = turboloader.DataLoader('data.tar', batch_size=32, num_workers=8)
 loader_64 = turboloader.DataLoader('data.tar', batch_size=64, num_workers=8)
 loader_128 = turboloader.DataLoader('data.tar', batch_size=128, num_workers=8)
 ```
+
+### 5. Use the Direct-Batch Fast Path
+
+For maximum image throughput, use the FFCV / `tf.data`-style fast path
+(`FastDataLoader`). It decodes, resizes, and normalizes in one parallel pass
+straight into the output batch buffer (with automatic libjpeg-turbo DCT scaled
+decode for large images) and yields ready-made batches instead of per-sample
+dicts. This path runs on one process-wide C++ thread pool, so it is already
+saturated at a single worker and does not need a high `num_workers` to scale.
 
 ## Common Patterns
 

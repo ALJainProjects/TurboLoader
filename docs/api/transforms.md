@@ -85,7 +85,11 @@ resize_hq = turboloader.Resize(
 output_hq = resize_hq.apply(image)
 ```
 
-**Performance:** ~336,000 images/sec with AVX2 SIMD
+**Resampling:** Uses half-pixel coordinate alignment, matching PIL / PyTorch / TensorFlow.
+Optional antialiasing on downscale is available through the loader's fast path via
+`DataLoader(..., antialias=True)`.
+
+**Performance:** SIMD-accelerated (NEON / AVX2 / AVX-512).
 
 ---
 
@@ -162,7 +166,7 @@ flip = turboloader.RandomHorizontalFlip(0.5)
 output = flip.apply(image)
 ```
 
-**Performance:** ~310,000 images/sec with SIMD
+**Performance:** SIMD-accelerated (NEON / AVX2 / AVX-512).
 
 ---
 
@@ -401,7 +405,7 @@ normalize = turboloader.ImageNetNormalize()
 output = normalize.apply(image)  # float32 normalized
 ```
 
-**Performance:** ~250,000 images/sec with AVX2 SIMD
+**Performance:** SIMD-accelerated (NEON / AVX2 / AVX-512).
 
 ---
 
@@ -513,7 +517,7 @@ posterize = turboloader.RandomPosterize(4, 6)
 output = posterize.apply(image)
 ```
 
-**Performance:** ~336,000 images/sec (fastest transform)
+**Performance:** SIMD-accelerated (NEON / AVX2 / AVX-512); one of the cheapest transforms (a per-pixel bit mask).
 
 ---
 
@@ -575,7 +579,7 @@ autoaugment_cifar = turboloader.AutoAugment(
 output_cifar = autoaugment_cifar.apply(image)
 ```
 
-**Supported Operations (v2.8.0):**
+**Supported Operations:**
 
 All 14 AutoAugment operations are fully implemented:
 
@@ -642,19 +646,25 @@ All transforms use SIMD acceleration when available:
 - **x86_64**: AVX2 or AVX-512
 - **ARM64**: NEON
 
-### Throughput (Single-threaded on M4 Max)
+In the loader's fast path, decode, resize, and normalize run as a single parallel pass that
+writes directly into the output batch buffer, so transforms are not a separate per-image
+Python step. What matters in practice is end-to-end loader throughput, not isolated
+per-transform microbenchmarks.
 
-| Transform | Throughput (img/s) | SIMD |
-|-----------|-------------------|------|
-| RandomPosterize | 336,053 | ✓ |
-| RandomHorizontalFlip | 310,477 | ✓ |
-| Resize (256→224) | 285,000 | ✓ |
-| ImageNetNormalize | 250,000 | ✓ |
-| ColorJitter | 180,000 | ✓ |
-| GaussianBlur | 120,000 | ✓ |
-| RandomAffine | 95,000 | ✓ |
+### End-to-end throughput
 
-*Benchmarked on 256x256 RGB images*
+Measured on Apple Silicon over Imagenette-160 (9,469 real ImageNet JPEGs resized to 160px,
+`output_format='pytorch'`, batch 64, real consumption forcing materialization; warmup +
+median of 3 epochs):
+
+| Loader | Throughput (img/s) | Relative |
+|--------|--------------------|----------|
+| TurboLoader (cached, `cache_decoded=True`) | ~65,499 | — |
+| TurboLoader (on-the-fly) | ~39,100 | — |
+| TensorFlow `tf.data` (AUTOTUNE) | ~30,154 | TurboLoader 1.3x |
+| PyTorch `DataLoader` (8 persistent workers) | ~18,991 | TurboLoader 2.1x |
+
+See [Benchmarks](../benchmarks/index.md) for methodology.
 
 ---
 

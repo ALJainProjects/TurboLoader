@@ -8,11 +8,19 @@ Get up and running with TurboLoader in 5 minutes.
 pip install turboloader
 ```
 
+Prebuilt manylinux wheels are published for Linux x86_64 and aarch64 (plus an
+sdist); portable macOS wheels built from source are being added. PyTorch is
+**optional** - add it only if you need PyTorch tensor output:
+
+```bash
+pip install turboloader[torch]
+```
+
 Verify installation:
 
 ```python
 import turboloader
-print(turboloader.__version__)  # Should print "2.7.0" or later
+print(turboloader.__version__)  # Should print "2.26.2" or later
 ```
 
 ---
@@ -48,7 +56,7 @@ for batch in loader:
 
 ---
 
-## Shuffling Data (v2.8.0)
+## Shuffling Data
 
 Enable data shuffling for training:
 
@@ -224,6 +232,51 @@ model.fit(dataset, epochs=10, steps_per_epoch=100)
 
 ---
 
+## Beyond Images: Tokens and Arrays
+
+TurboLoader is multi-modal. The same fast pipeline also streams LLM tokens and
+generic N-dimensional arrays. See the [API Reference](api/index.md) for the full
+set of options on each loader.
+
+### LLM Token Streams
+
+```python
+import turboloader
+
+# Stream fixed-length sequences from a tokenized corpus
+token_loader = turboloader.TokenDataLoader(
+    'corpus.bin',     # memmapped token file
+    seq_len=1024,
+    batch_size=32
+)
+
+for inputs, targets in token_loader:
+    # inputs, targets: (batch_size, seq_len) int64; targets = inputs shifted by one
+    # (pass return_targets=False to yield just inputs)
+    train_step(inputs, targets)
+```
+
+On Apple Silicon `TokenDataLoader` reached ~441M tokens/s, about 2.7x the
+NumPy memmap idiom (~163M tokens/s).
+
+### Generic Arrays
+
+```python
+import turboloader
+
+# Iterate batches over any (N, ...) array or memmapped array file
+array_loader = turboloader.ArrayDataLoader(
+    features,         # NumPy array or path, shape (N, ...)
+    batch_size=256,
+    shuffle=True
+)
+
+for batch in array_loader:
+    train_step(batch)
+```
+
+---
+
 ## Available Transforms
 
 TurboLoader provides 19 SIMD-accelerated transforms:
@@ -311,9 +364,12 @@ writer.finalize()
 loader = turboloader.DataLoader('output.tbl', batch_size=64, num_workers=8)
 ```
 
-### 3. Use FastDataLoader with Caching (v2.7.0)
+### 3. Use the Direct-Batch Fast Path with Caching
 
-For multi-epoch training, use FastDataLoader with `cache_decoded=True` for 2.6x faster total training:
+`FastDataLoader` is the FFCV / `tf.data`-style fast path: it decodes, resizes, and
+normalizes in one parallel pass straight into the output batch buffer and yields
+ready-made batches instead of per-sample dicts. For multi-epoch training, set
+`cache_decoded=True` to reuse decoded arrays after the first pass:
 
 ```python
 import turboloader
@@ -328,8 +384,8 @@ loader = turboloader.FastDataLoader(
 
 for epoch in range(10):
     for images, metadata in loader:
-        # First epoch: ~25K img/s (decode from TAR)
-        # Subsequent epochs: 100K+ img/s (cache hit)
+        # First epoch decodes from the archive;
+        # later epochs serve from the in-memory cache
         train_step(images)
 
     if loader.cache_populated:
@@ -339,10 +395,12 @@ for epoch in range(10):
 loader.clear_cache()
 ```
 
-**Performance:**
-- First epoch: Standard decode throughput
-- Cached epochs: Memory iteration speed (100K+ img/s)
-- Total time for 5 epochs: 2.6x faster than TensorFlow `.cache()`
+**Performance (Apple Silicon, Imagenette-160, batch 64, `output_format='pytorch'`):**
+- On-the-fly decode: ~39,100 img/s
+- Cached epochs (`cache_decoded=True`): ~65,499 img/s
+
+The fast path runs on one process-wide C++ thread pool, so it is already saturated
+at a single worker and does not depend on a high `num_workers` to scale.
 
 ### 4. Use Larger Batch Sizes
 

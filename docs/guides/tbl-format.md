@@ -2,15 +2,14 @@
 
 **TBL v2 Binary Format**
 
-TurboLoader features TBL v2 (TurboLoader Binary v2), a custom binary format optimized for ML datasets with **40-60% space savings** through LZ4 compression, **O(1) memory streaming writer**, and **zero-copy memory-mapped reads**.
+TurboLoader features TBL v2 (TurboLoader Binary v2), a custom binary format optimized for ML datasets with **LZ4 compression**, an **O(1) memory streaming writer**, and **zero-copy memory-mapped reads**. Actual space savings are data-dependent (already-compressed JPEGs compress very little; uncompressed or PNG data benefits more).
 
 ## Overview
 
 TBL v2 is designed specifically for machine learning workloads where:
-- **Storage efficiency** is critical (40-60% smaller than TAR)
+- **Storage efficiency** matters (LZ4 compression; benefit depends on the data)
 - **Fast random access** to samples is required (O(1) lookup)
 - **Data integrity** matters (CRC32/CRC16 checksums)
-- **Conversion speed** is important (4,875 img/s throughput)
 - **Memory efficiency** during conversion is essential (O(1) memory, not O(n))
 - **Dimension filtering** without decoding saves compute (cached width/height)
 
@@ -18,13 +17,13 @@ TBL v2 is designed specifically for machine learning workloads where:
 
 | Feature | TAR | TBL v2 | Improvement |
 |---------|-----|--------|-------------|
-| **Compression** | None | LZ4 | **40-60% space savings** |
+| **Compression** | None | LZ4 | **Optional space savings (data-dependent)** |
 | **Write Memory** | Sequential | O(1) | **Streaming writer** |
 | **Checksums** | None | CRC32/CRC16 | **Data integrity** |
 | **Image Dimensions** | No | 16-bit cached | **Fast filtering** |
 | **Metadata** | Limited | Rich (JSON/Proto/MP) | **Flexible metadata** |
 | **Random Access** | O(n) | O(1) | **Instant lookup** |
-| **File Size** | 100% baseline | 40-55% of TAR | **Much smaller** |
+| **File Size** | baseline | smaller with LZ4 | **Depends on the data** |
 
 ### When to Use TBL v2
 
@@ -168,23 +167,18 @@ tar_to_tbl input.tar output.tbl --no-compression
 time tar_to_tbl dataset.tar dataset.tbl
 ```
 
-**Expected Output:**
+**Example output (illustrative — actual figures depend on data and hardware):**
 
 ```
 Converting TAR to TBL v2 format...
-Input: imagenet_train.tar (1,281,167 samples, 148.6 GB)
+Input:  imagenet_train.tar  (1,281,167 samples)
 Workers: 8 threads
 Compression: LZ4 (level 1, fast mode)
 
 Processing: [████████████████████] 100% (1,281,167/1,281,167)
-Throughput: 4,875 samples/second
-Elapsed: 262.8 seconds (4m 22s)
 
-Output: imagenet_train.tbl (82.4 GB)
-Space savings: 66.2 GB (44.5% reduction)
-Compression ratio: 1.80:1
-Average compressed size: 65.8 KB/sample (from 118.7 KB)
-
+Output: imagenet_train.tbl
+Compression ratio: <reported per dataset>   # already-compressed JPEGs compress little
 Completed successfully!
 ```
 
@@ -343,34 +337,29 @@ loader_224 = turboloader.DataLoader(
 
 ## Performance Characteristics
 
+> **Note:** The figures in this section are illustrative and depend on your data and
+> hardware. They are **not** part of TurboLoader's measured loader benchmark suite, which
+> covers image and token *loading* throughput rather than TBL conversion. Treat them as
+> rough expectations and measure on your own data.
+
 ### Conversion Performance
 
-Benchmarked on Apple M4 Max (16 cores, 48 GB RAM):
-
-| Dataset Size | Samples | TAR Size | TBL v2 Size | Conversion Time | Throughput |
-|--------------|---------|----------|-------------|-----------------|------------|
-| Small | 1,000 | 58 MB | 26 MB (45% saved) | 0.21s | 4,762 img/s |
-| Medium | 10,000 | 580 MB | 260 MB (55% saved) | 2.05s | 4,878 img/s |
-| Large | 100,000 | 5.8 GB | 2.6 GB (55% saved) | 20.5s | 4,878 img/s |
-| ImageNet | 1,281,167 | 148.6 GB | 82.4 GB (45% saved) | 262.8s | 4,875 img/s |
-
-**Average: 4,875 images/second**
+Conversion is parallel and largely I/O-bound: throughput scales with worker threads until
+disk bandwidth saturates, and stays roughly flat as the dataset grows because the writer
+streams to disk with O(1) memory. Run `tar_to_tbl --verbose` to measure on your dataset.
 
 ### Storage Efficiency
 
-Measured on ImageNet (1.28M images, mixed JPEG/PNG):
+TBL v2 is usually smaller than the equivalent TAR, but how much depends heavily on the
+data:
 
-```
-TAR format:          148.6 GB (100%)
-TBL v2 format (LZ4): 82.4 GB (55.5%, 44.5% savings)
-Improvement:         66.2 GB saved vs TAR
-```
-
-**Why much smaller than TAR?**
-1. **LZ4 compression** - 40-60% size reduction on image data
+1. **LZ4 compression** - Helps most on uncompressed or lightly-compressed data; already-
+   compressed JPEGs (quality 90+) compress very little
 2. **Per-sample compression** - Each image compressed independently (allows random access)
 3. **Efficient index** - 24-byte entries with cached dimensions
-4. **No TAR overhead** - No 512-byte headers or padding
+4. **No TAR overhead** - No 512-byte member headers or padding
+
+Use `tar_to_tbl --verbose` to see the actual compression ratio for your dataset.
 
 ### Decompression Performance
 
@@ -386,20 +375,19 @@ Batch of 64 images: ~2 milliseconds total LZ4 overhead
 
 ### Random Access Performance
 
-Accessing 10,000 random samples from ImageNet:
-
 ```
-TAR format:   18.2 seconds (O(n) scan)
-TBL v2 (LZ4): 0.034 seconds (O(1) lookup + LZ4 decompress)
-
-TBL v2 is 535x faster than TAR!
+TAR format:   O(n) — must scan member headers from the start to reach an arbitrary sample
+TBL v2 (LZ4): O(1) — direct index lookup + on-demand LZ4 decompress
 ```
+
+For shuffled training (a random access every step), the O(1) index lookup is the
+structural win over TAR's O(n) scan. The exact speedup depends on dataset size and storage.
 
 ### Memory-Mapped I/O
 
 ```cpp
 // TBL v2 uses mmap() for zero-copy reads
-TblV2Reader reader("imagenet.tbl");  // 82.4 GB file
+TblV2Reader reader("imagenet.tbl");  // large multi-GB file
 
 // This doesn't load the entire file into RAM!
 // Only maps the address space
@@ -505,18 +493,20 @@ writer_v2.finalize();  // Only writes index table (24 × n bytes)
 
 ### 1. Cloud Storage Optimization
 
-Save 40-60% on cloud storage costs:
+Cut cloud storage costs when your data compresses well (sizes below are illustrative —
+already-compressed JPEGs save little):
 
 ```bash
 # Upload to S3 with TBL v2
 tar_to_tbl imagenet_train.tar imagenet_train.tbl
 aws s3 cp imagenet_train.tbl s3://my-bucket/
 
-# Cost savings
-# TAR: 148.6 GB × $0.023/GB/month = $3.42/month
-# TBL v2: 82.4 GB × $0.023/GB/month = $1.89/month
-# Savings: $1.53/month per dataset (45% reduction)
+# Cost scales linearly with stored size, so any compression directly lowers the bill.
+# Run tar_to_tbl --verbose to see the actual compressed size for your dataset.
 ```
+
+> S3/GCS streaming is not built into the published wheel; the `aws s3 cp` step above is a
+> standard upload of the local `.tbl` file.
 
 ### 2. Distributed Training with Dimension Filtering
 
@@ -597,7 +587,7 @@ Convert large TAR files using multiple threads:
 # Use 16 worker threads for conversion
 tar_to_tbl imagenet.tar imagenet.tbl --workers 16
 
-# Expected speedup: ~12x (limited by I/O)
+# Speedup scales with available cores, ultimately bounded by I/O
 ```
 
 ### Compression Level Tuning
@@ -667,7 +657,7 @@ tar_to_tbl input.tar output.tbl --no-compression  # Uncompressed mode
 ### Issue: TBL v2 file larger than expected
 
 **Symptoms:**
-- File not 40-60% smaller than TAR
+- File barely smaller than TAR
 - Compression ratio < 1.5x
 
 **Cause:**
@@ -745,7 +735,7 @@ loader = turboloader.DataLoader('dataset.tbl', batch_size=64)
 
 ## Best Practices
 
-1. **Convert Once, Use Many Times**: TBL v2 conversion takes time (4.8k img/s), but saves 40-60% storage permanently
+1. **Convert Once, Use Many Times**: TBL v2 conversion has an up-front cost, but the storage savings and O(1) random access persist for every later read
 
 2. **Use for Large Datasets**: Benefits are most noticeable with >10 GB datasets
 
@@ -761,11 +751,10 @@ loader = turboloader.DataLoader('dataset.tbl', batch_size=64)
 
 | Operation | TAR | TBL v2 (LZ4) |
 |-----------|-----|--------------|
-| **Sequential Read** | 8,672 img/s | 4,950 img/s |
-| **Random Read** | 53 img/s | 4,800 img/s |
-| **File Size** | 100 GB | 45-55 GB |
-| **Conversion Speed** | N/A | 4,875 img/s |
-| **Write Memory** | Variable | O(1) |
+| **Sequential Read** | mmap, bounded by SSD bandwidth | mmap + on-demand LZ4 decompress |
+| **Random Read** | O(n) header scan | O(1) index lookup |
+| **File Size** | baseline | smaller (data-dependent) |
+| **Write Memory** | Variable | O(1) streaming |
 | **Data Integrity** | ❌ | ✅ (CRC32/16) |
 | **Cached Dimensions** | ❌ | ✅ |
 | **Compression** | ❌ | ✅ (LZ4) |

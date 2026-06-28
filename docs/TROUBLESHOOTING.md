@@ -226,6 +226,13 @@ This guide covers common issues and their solutions when using TurboLoader.
        print(f"Workers: {num_workers}, Throughput: {throughput:.1f} img/s")
    ```
 
+   **Worker-scaling nuance**: TurboLoader's direct-batch fast path runs on a
+   single process-wide C++ thread pool that is typically already saturated at
+   `num_workers=1`, so increasing `num_workers` often does **not** raise
+   throughput the way it does for PyTorch's `DataLoader` (which spawns separate
+   worker processes). If more workers don't help, that is expected — the fast
+   path is already multi-threaded internally.
+
 2. Increase batch size:
    ```python
    # Larger batches = better throughput
@@ -288,6 +295,23 @@ This guide covers common issues and their solutions when using TurboLoader.
        turboloader.RandomHorizontalFlip(0.5),
        turboloader.ImageNetNormalize()
    ])
+   ```
+
+4. Stay on the direct-batch fast path. TurboLoader's FFCV / tf.data-style
+   loader does decode -> resize -> normalize in one parallel pass straight into
+   the output batch buffer (with automatic libjpeg-turbo DCT scaled decode for
+   large images). Keeping the whole pipeline in TurboLoader transforms — rather
+   than handing decoded samples back to Python per-image — is what keeps that
+   fast path engaged.
+
+5. Cache decoded samples for repeat epochs:
+   ```python
+   # After the first pass, decoded samples are served from the cache
+   loader = turboloader.DataLoader(
+       'dataset.tar',
+       batch_size=64,
+       cache_decoded=True
+   )
    ```
 
 ---
@@ -601,13 +625,18 @@ for batch in loader:
 
 ## FAQ
 
-### Q: How do I check if SIMD acceleration is enabled?
+### Q: How do I check which acceleration features are compiled in?
 
-**A**: Check compile flags:
+**A**: Use `turboloader.features()` to see what was actually compiled into your
+installed wheel (this is the source of truth — do not assume a capability is
+present):
 ```python
 import turboloader
 print(turboloader.__version__)
-# SIMD is enabled by default on x86_64 (AVX2) and ARM64 (NEON)
+print(turboloader.features())
+# SIMD is enabled by default on x86_64 (AVX2 / AVX-512) and ARM64 (NEON).
+# Note: GPU/nvJPEG decode and video (H.264/HEVC) decode are NOT compiled in;
+# features() reports them as unavailable.
 ```
 
 Run benchmarks to verify performance:
@@ -648,10 +677,12 @@ for batch in loader:
 ### Q: What's the difference between TAR and TBL format?
 
 **A**:
-- **TAR**: Standard archive format, portable, larger file size
-- **TBL v2**: TurboLoader's optimized format, 40-60% smaller with LZ4 compression, faster loading
+- **TAR**: Standard (WebDataset-style) archive format, portable, larger file size
+- **TBL v2**: TurboLoader's optimized format with optional LZ4 compression and a
+  layout designed for faster sequential loading
 
-Use TAR for portability, TBL for production performance.
+Use TAR for portability, TBL for production performance. Actual size/throughput
+gains depend on your data — measure with `benchmarks/run_all_benchmarks.py`.
 
 ### Q: How do I debug which images are corrupted?
 
@@ -671,7 +702,16 @@ for i, batch in enumerate(loader):
 
 ### Q: Does TurboLoader support video/audio?
 
-**A**: Currently in development. Subscribe to:
+**A**: No. There is **no** built-in video (H.264/HEVC) or audio decoding —
+`turboloader.features()` reports these as unavailable, and any past claims of
+GPU/video decode were not accurate.
+
+TurboLoader is multi-modal in other ways, though:
+- **Images** in WebDataset-style TAR archives (and TBL).
+- **LLM token streams** via `TokenDataLoader`.
+- **Generic `(N, ...)` arrays** via `ArrayDataLoader`.
+
+For feature requests, follow:
 - [GitHub Discussions](https://github.com/ALJainProjects/TurboLoader/discussions)
 - [GitHub Issues](https://github.com/ALJainProjects/TurboLoader/issues)
 

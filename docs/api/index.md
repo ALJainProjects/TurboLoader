@@ -1,11 +1,11 @@
 # API Reference
 
-Complete API documentation for TurboLoader v2.7.0.
+Complete API documentation for TurboLoader v2.26.2.
 
 ## Quick Links
 
 - [Pipeline API](pipeline.md) - DataLoader and configuration
-- [Transforms API](transforms.md) - All 19 transforms
+- [Transforms API](transforms.md) - All transforms
 - [Tensor Conversion](tensor-conversion.md) - PyTorch/TensorFlow integration
 
 ## Module Overview
@@ -14,8 +14,13 @@ Complete API documentation for TurboLoader v2.7.0.
 import turboloader
 
 # Core functionality
-loader = turboloader.DataLoader(...)     # Main data loader
+loader = turboloader.DataLoader(...)        # Main data loader (images, tokens, arrays)
 pipeline = turboloader.TransformPipeline()  # Transform composition
+
+# Multi-modality through one entry point (modality=)
+turboloader.DataLoader(..., modality='image')                      # images (TAR / WebDataset)
+turboloader.DataLoader(..., modality='tokens', seq_len=1024)       # LLM token streams
+turboloader.DataLoader(..., modality='array', arrays=[X, y])       # generic (N, ...) arrays
 
 # Module functions
 turboloader.version()          # Get version string
@@ -36,13 +41,15 @@ turboloader.AutoAugmentPolicy  # IMAGENET, CIFAR10, SVHN
 Get TurboLoader version string.
 
 **Returns:**
-- `str`: Version string (e.g., "2.7.0")
+- `str`: Version string (e.g., "2.26.2")
 
 **Example:**
 ```python
 import turboloader
-print(turboloader.__version__)  # "2.7.0"
+print(turboloader.__version__)  # "2.26.2"
 ```
+
+The version is single-sourced from package metadata via `setuptools_scm` (derived from the git tag), so `version()`, `__version__`, and `features()['version']` never drift.
 
 ### `turboloader.features()`
 
@@ -54,20 +61,23 @@ Get TurboLoader feature flags and capabilities.
 **Keys:**
 - `version` (str): Version string
 - `tar_support` (bool): TAR archive support
-- `remote_tar` (bool): HTTP/S3/GCS support
-- `http_support` (bool): HTTP protocol
-- `s3_support` (bool): S3 protocol
-- `gcs_support` (bool): GCS protocol
-- `jpeg_decode` (bool): JPEG decoding
+- `jpeg_decode` (bool): JPEG decoding (libjpeg-turbo)
 - `png_decode` (bool): PNG decoding
 - `webp_decode` (bool): WebP decoding
-- `simd_acceleration` (bool): SIMD optimizations
+- `simd_acceleration` (bool): SIMD optimizations (NEON / AVX2 / AVX-512)
 - `lock_free_queues` (bool): Lock-free queues
-- `num_transforms` (int): Number of transforms (19)
+- `num_transforms` (int): Number of registered transforms
 - `autoaugment` (bool): AutoAugment support
 - `pytorch_tensors` (bool): PyTorch tensor conversion
 - `tensorflow_tensors` (bool): TensorFlow tensor conversion
 - `lanczos_interpolation` (bool): Lanczos resampling
+
+Optional backends are also reported, but are **off in the prebuilt wheels** and only
+compiled in for source builds configured with the relevant libraries: `remote_tar`,
+`http_support`, `s3_support`, `gcs_support`, `azure_support`, `hdf5_support`,
+`zarr_support`, `tfrecord_support`, `gpu_transforms`. Always call `features()` to see
+what your installed build actually supports — do not assume remote/cloud readers or any
+GPU/nvJPEG decode path are present in the standard wheel (they are not).
 
 **Example:**
 ```python

@@ -8,7 +8,18 @@ Complete installation instructions for TurboLoader on all supported platforms.
 pip install turboloader
 ```
 
-That's it! TurboLoader will be installed with pre-built wheels for most platforms.
+That's it! On Linux this installs a prebuilt wheel; on other platforms pip falls
+back to the source distribution (see below).
+
+PyTorch is an **optional** dependency. Install the extra only if you want the
+PyTorch helpers / `output_format='pytorch'` convenience integration:
+
+```bash
+pip install turboloader[torch]
+```
+
+TurboLoader itself works framework-agnostically with NumPy and also outputs
+TensorFlow-style HWC arrays, so `torch` is not required for the core loader.
 
 ---
 
@@ -16,9 +27,14 @@ That's it! TurboLoader will be installed with pre-built wheels for most platform
 
 ### Supported Platforms
 
-- **Linux**: Ubuntu 20.04+, Debian 10+, RHEL/CentOS 8+, Amazon Linux 2
-- **macOS**: 11+ (Big Sur and later)
-- **Windows**: Not officially supported yet (use WSL2)
+- **Linux**: Ubuntu 20.04+, Debian 10+, RHEL/CentOS 8+, Amazon Linux 2 —
+  prebuilt **manylinux** wheels for `x86_64` and `aarch64`.
+- **macOS**: 11+ (Big Sur and later) — portable wheels built from the source
+  distribution; self-contained portable binary wheels are being added.
+- **Windows**: Not officially supported yet (use WSL2).
+
+A source distribution (sdist) is also published for platforms without a
+matching prebuilt wheel.
 
 ### Python Versions
 
@@ -42,16 +58,22 @@ Install the latest stable release:
 pip install turboloader
 ```
 
-Install a specific version:
+Install a specific version (latest published on PyPI is `2.26.1`):
 
 ```bash
-pip install turboloader==2.7.0
+pip install turboloader==2.26.1
 ```
 
 Upgrade to latest:
 
 ```bash
 pip install --upgrade turboloader
+```
+
+With the optional PyTorch integration:
+
+```bash
+pip install "turboloader[torch]"
 ```
 
 ### Method 2: From Source
@@ -137,39 +159,35 @@ wsl --install
 
 ## Optional Dependencies
 
-### GPU Support (NVIDIA nvJPEG)
+### PyTorch integration
 
-For GPU-accelerated JPEG decoding:
+PyTorch is optional. Install the extra to enable the PyTorch helpers and the
+`output_format='pytorch'` (CHW tensor) path:
 
 ```bash
-# Install CUDA Toolkit (11.0+)
-# Download from: https://developer.nvidia.com/cuda-downloads
-
-# Install TurboLoader (will detect CUDA automatically)
-pip install turboloader
+pip install "turboloader[torch]"
 ```
 
-### Cloud Storage (S3, GCS)
+The core loader, SIMD transforms, and the NumPy / TensorFlow-HWC output paths
+work without PyTorch installed.
 
-Dependencies are included by default. Configure credentials:
+### GPU JPEG decode (NVIDIA nvJPEG) — future work
 
-**AWS S3:**
-```bash
-# Install AWS CLI
-pip install awscli
+> **Not available in the published wheels.** GPU/nvJPEG JPEG decoding is **not
+> compiled** into TurboLoader today — `turboloader.features()` reports it as
+> unavailable. The fast decode path is CPU-based libjpeg-turbo with SIMD
+> (NEON / AVX2 / AVX-512) and automatic DCT scaled decode for large images.
+> GPU-accelerated decode is tracked as potential future work; please follow the
+> repository for updates rather than installing CUDA expecting it to be detected.
 
-# Configure credentials
-aws configure
-```
+### Cloud / specialized storage (source-only / optional)
 
-**Google Cloud Storage:**
-```bash
-# Install gcloud SDK
-# Follow: https://cloud.google.com/sdk/docs/install
-
-# Authenticate
-gcloud auth login
-```
+Cloud and specialized storage backends (S3, GCS, Azure, HDF5, Zarr, TFRecord)
+are **not bundled in the prebuilt wheel**. Where supported they are optional,
+source-only integrations that require their own client libraries and
+credentials. The built-in loaders read local files and WebDataset-style TAR
+archives. If you need object storage today, stage data to a local path (or an
+NFS mount) and point TurboLoader at it.
 
 ---
 
@@ -242,9 +260,6 @@ pip install -e .
 ### Build Options
 
 ```bash
-# Build with GPU support
-cmake -DUSE_CUDA=ON ..
-
 # Build with AVX-512 support
 cmake -DUSE_AVX512=ON ..
 
@@ -323,20 +338,11 @@ gcc --version  # Should be 11.0+
 clang --version  # Should be 14.0+
 ```
 
-If compiler is too old, install from PyPI instead:
+If compiler is too old, install from PyPI instead (Linux gets a prebuilt
+manylinux wheel; other platforms build from the sdist):
 
 ```bash
-pip install turboloader  # Uses pre-built wheels
-```
-
-### Missing CUDA libraries (GPU support)
-
-**Solution:** Install CUDA Toolkit:
-
-```bash
-# Download from nvidia.com
-# Then reinstall TurboLoader
-pip install --force-reinstall turboloader
+pip install turboloader
 ```
 
 ---

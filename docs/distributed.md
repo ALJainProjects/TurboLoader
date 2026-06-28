@@ -89,7 +89,8 @@ This ensures:
 ### Prerequisites
 
 1. **Network Connectivity**: All nodes must be able to communicate
-2. **Shared Storage**: Data accessible from all nodes (NFS, S3, etc.)
+2. **Shared Storage**: Data accessible from all nodes via a local path or NFS
+   mount (object storage is not read directly — stage it locally first)
 3. **Same Environment**: Same Python packages and TurboLoader version
 
 ### Setup
@@ -142,11 +143,16 @@ loader = turboloader.DataLoader(
 )
 ```
 
-**Option 3: Cloud Storage**
+**Option 3: Object storage (stage locally first)**
+
+Object-storage backends (S3, GCS, Azure) are **not bundled** in the prebuilt
+wheel. Sync or mount your data to a local/NFS path, then point TurboLoader at
+the local file:
+
 ```python
-# Load from S3
+# e.g. after `aws s3 sync s3://bucket/ /shared/imagenet/`
 loader = turboloader.DataLoader(
-    's3://bucket/imagenet.tar',
+    '/shared/imagenet.tar',
     batch_size=256,
     num_workers=8,
     enable_distributed=True
@@ -484,8 +490,8 @@ for i, batch in enumerate(loader):
 ### 3. Use Fast Storage
 
 - **Best**: Local NVMe SSD
-- **Good**: Network storage with high bandwidth (100+ Gbps)
-- **OK**: S3 with good network connection
+- **Good**: High-bandwidth network/NFS storage
+- **OK**: Object storage synced to a local cache before training
 - **Slow**: Network storage with low bandwidth
 
 ---

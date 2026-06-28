@@ -1,6 +1,12 @@
 # Benchmark Setup Guide
 
-This guide explains how to set up all the data loading frameworks for benchmarking against TurboLoader.
+This guide explains how to set up the data loading frameworks used in TurboLoader's
+honest, measured comparison: **PyTorch `DataLoader`** and **TensorFlow `tf.data`**.
+
+> **Scope note:** FFCV and NVIDIA DALI head-to-head comparisons are future work and
+> have **not** been measured yet. They are intentionally omitted here so the setup
+> guide only covers frameworks whose numbers we actually report. There is no GPU /
+> nvJPEG path in the shipped wheel.
 
 ## Table of Contents
 
@@ -8,9 +14,7 @@ This guide explains how to set up all the data loading frameworks for benchmarki
 2. [TurboLoader Setup](#turboloader-setup)
 3. [PyTorch Setup](#pytorch-setup)
 4. [TensorFlow Setup](#tensorflow-setup)
-5. [FFCV Setup](#ffcv-setup)
-6. [NVIDIA DALI Setup](#nvidia-dali-setup)
-7. [Running Benchmarks](#running-benchmarks)
+5. [Running Benchmarks](#running-benchmarks)
 
 ---
 
@@ -18,10 +22,9 @@ This guide explains how to set up all the data loading frameworks for benchmarki
 
 ### System Requirements
 - Python 3.9+
-- C++17 compatible compiler (GCC 9+, Clang 10+, MSVC 2019+)
-- CMake 3.15+
+- Linux x86_64 / aarch64, or macOS (Apple Silicon)
 - 8GB+ RAM recommended
-- (Optional) NVIDIA GPU with CUDA 11.0+ for DALI
+- (Optional, source builds only) C++17 compiler (GCC 9+, Clang 10+, MSVC 2019+) and CMake 3.15+
 
 ### Python Dependencies
 
@@ -33,12 +36,23 @@ pip install numpy pillow psutil
 
 ## TurboLoader Setup
 
-### Build from Source
+### Install from PyPI (recommended)
+
+```bash
+# Prebuilt manylinux wheels are published for Linux x86_64 and aarch64 (plus an sdist).
+# Portable macOS wheels built from source are being added.
+pip install turboloader
+
+# torch is OPTIONAL — only needed for the PyTorch output path / torch interop:
+pip install turboloader[torch]
+```
+
+### Build from Source (optional)
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/turboloader.git
-cd turboloader
+git clone https://github.com/ALJainProjects/TurboLoader.git
+cd TurboLoader
 
 # Create build directory
 mkdir build && cd build
@@ -55,7 +69,7 @@ pip install -e .
 ### Verify Installation
 
 ```bash
-python3 -c "import _turboloader; print('TurboLoader installed successfully')"
+python3 -c "import turboloader; print('TurboLoader installed successfully')"
 ```
 
 ---
@@ -117,282 +131,61 @@ python3 -c "import tensorflow as tf; print(f'TensorFlow {tf.__version__} install
 
 ---
 
-## FFCV Setup
-
-FFCV (Fast Forward Computer Vision) is a high-performance data loading library from MIT.
-
-### Prerequisites
-
-FFCV requires:
-- **Rust/Cargo** for compilation
-- **NumPy** and **PyTorch**
-- **libjpeg-turbo** for fast JPEG decoding
-
-### Install Rust (if not already installed)
-
-```bash
-# Linux/macOS
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
-
-# Verify Rust installation
-rustc --version
-cargo --version
-```
-
-### Install System Dependencies
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-    build-essential \
-    pkg-config \
-    libjpeg-dev \
-    libpng-dev \
-    libturbojpeg-dev
-```
-
-**macOS:**
-```bash
-brew install jpeg-turbo pkg-config
-```
-
-**Fedora/RHEL:**
-```bash
-sudo dnf install -y \
-    gcc-c++ \
-    pkg-config \
-    libjpeg-turbo-devel \
-    libpng-devel
-```
-
-### Install FFCV
-
-```bash
-# Install FFCV from PyPI
-pip install ffcv
-
-# Or build from source for latest features
-git clone https://github.com/libffcv/ffcv.git
-cd ffcv
-pip install -e .
-```
-
-### Verify Installation
-
-```bash
-python3 -c "from ffcv.loader import Loader; print('FFCV installed successfully')"
-```
-
-### FFCV Dataset Preparation
-
-FFCV requires converting datasets to `.beton` format:
-
-```bash
-# Convert images to FFCV format
-python3 << EOF
-from ffcv.writer import DatasetWriter
-from ffcv.fields import RGBImageField, IntField
-from pathlib import Path
-
-# Create writer
-writer = DatasetWriter('dataset.beton', {
-    'image': RGBImageField(max_resolution=256),
-    'label': IntField()
-})
-
-# Write dataset
-# ... (see benchmark scripts for full example)
-EOF
-```
-
-### Common FFCV Issues
-
-**Issue: "cargo not found"**
-```bash
-# Make sure Rust is in PATH
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-**Issue: "libjpeg-turbo not found"**
-```bash
-# Ubuntu/Debian
-sudo apt-get install libturbojpeg-dev
-
-# macOS
-brew install jpeg-turbo
-export PKG_CONFIG_PATH="/opt/homebrew/opt/jpeg-turbo/lib/pkgconfig:$PKG_CONFIG_PATH"
-```
-
----
-
-## NVIDIA DALI Setup
-
-NVIDIA DALI (Data Loading Library) provides GPU-accelerated data loading.
-
-### Prerequisites
-
-DALI requires:
-- **NVIDIA GPU** with compute capability 3.5+
-- **CUDA 11.0+** or **CUDA 12.0+**
-- **cuDNN** (automatically handled by DALI package)
-- **Driver version** 450.80.02+ (Linux) or 452.39+ (Windows)
-
-### Check GPU Compatibility
-
-```bash
-# Check CUDA version
-nvcc --version
-
-# Check GPU compute capability
-nvidia-smi
-
-# Check driver version
-nvidia-smi --query-gpu=driver_version --format=csv
-```
-
-### Install DALI
-
-**For CUDA 11.x:**
-```bash
-pip install --extra-index-url https://developer.download.nvidia.com/compute/redist \
-    nvidia-dali-cuda110
-```
-
-**For CUDA 12.x:**
-```bash
-pip install --extra-index-url https://developer.download.nvidia.com/compute/redist \
-    nvidia-dali-cuda120
-```
-
-**CPU-only version (for testing):**
-```bash
-pip install --extra-index-url https://developer.download.nvidia.com/compute/redist \
-    nvidia-dali
-```
-
-### Verify Installation
-
-```bash
-python3 << EOF
-from nvidia.dali import pipeline_def
-import nvidia.dali.fn as fn
-print('NVIDIA DALI installed successfully')
-EOF
-```
-
-### DALI GPU Requirements
-
-**Minimum Requirements:**
-- GPU: GTX 1050 or better
-- VRAM: 2GB+ recommended
-- CUDA: 11.0+
-
-**Optimal Performance:**
-- GPU: RTX 3060 or better
-- VRAM: 6GB+
-- CUDA: 12.0+
-- NVMe SSD for data storage
-
-### Common DALI Issues
-
-**Issue: "CUDA not available"**
-```bash
-# Check CUDA installation
-which nvcc
-nvcc --version
-
-# Verify GPU is detected
-nvidia-smi
-```
-
-**Issue: "Driver version mismatch"**
-```bash
-# Update NVIDIA drivers
-# Ubuntu/Debian
-sudo ubuntu-drivers autoinstall
-
-# Or manually from NVIDIA website
-# https://www.nvidia.com/Download/index.aspx
-```
-
-**Issue: "cuDNN library not found"**
-- DALI packages include cuDNN, but if you get this error:
-```bash
-# Download cuDNN from NVIDIA Developer
-# https://developer.nvidia.com/cudnn
-
-# Install cuDNN (example for CUDA 11.8)
-tar -xzvf cudnn-linux-x86_64-8.x.x.x_cudaX.Y-archive.tar.xz
-sudo cp cuda/include/cudnn*.h /usr/local/cuda/include
-sudo cp cuda/lib64/libcudnn* /usr/local/cuda/lib64
-sudo chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn*
-```
-
----
-
 ## Running Benchmarks
 
-### Generate Test Dataset
+### Prepare the Dataset
+
+The published numbers use **Imagenette-160** — 9,469 real ImageNet JPEGs resized to
+160 px. Download the fast.ai Imagenette-160 archive and use its `train` split:
 
 ```bash
-# Generate 2000-image benchmark dataset
-python3 scripts/generate_benchmark_dataset.py \
-    --num-images 2000 \
-    --output /tmp/benchmark_datasets/bench_2k \
-    --image-size 256 256 \
-    --quality 90
+# Download and extract Imagenette-160 (~98 MB)
+curl -L -o imagenette2-160.tgz \
+    https://s3.amazonaws.com/fast-ai-imageclas/imagenette2-160.tgz
+tar -xzf imagenette2-160.tgz
+# The train split (imagenette2-160/train) contains 9,469 JPEGs.
 ```
 
 ### Run Individual Benchmarks
 
+All loaders are run with **batch size 64**, `output_format='pytorch'`, one warmup epoch
+and the median of 3 timed epochs under real consumption.
+
 ```bash
-# PIL Baseline
+# PIL baseline
 python3 benchmarks/01_pil_baseline.py \
-    /tmp/benchmark_datasets/bench_2k/images \
-    --epochs 3 --batch-size 32
+    imagenette2-160/train \
+    --epochs 3 --batch-size 64
 
-# PyTorch Naive
-python3 benchmarks/02_pytorch_naive.py \
-    /tmp/benchmark_datasets/bench_2k/images \
-    --epochs 3 --batch-size 32 --num-workers 4
-
-# PyTorch Optimized
+# PyTorch optimized (8 persistent workers — the reported PyTorch number)
 python3 benchmarks/03_pytorch_optimized.py \
-    /tmp/benchmark_datasets/bench_2k/images \
-    --epochs 3 --batch-size 32 --num-workers 8
+    imagenette2-160/train \
+    --epochs 3 --batch-size 64 --num-workers 8
 
-# PyTorch with Caching
-python3 benchmarks/04_pytorch_cached.py \
-    /tmp/benchmark_datasets/bench_2k/dataset.tar \
-    --epochs 3 --batch-size 32 --num-workers 8
-
-# TurboLoader
-python3 benchmarks/05_turboloader.py \
-    /tmp/benchmark_datasets/bench_2k/dataset.tar \
-    --epochs 3 --batch-size 32 --num-workers 8
-
-# FFCV (requires .beton conversion first)
-python3 benchmarks/06_ffcv.py \
-    /tmp/benchmark_datasets/bench_2k/images \
-    --epochs 3 --batch-size 32
-
-# NVIDIA DALI (GPU required)
-python3 benchmarks/07_dali.py \
-    /tmp/benchmark_datasets/bench_2k/dataset.tar \
-    --epochs 3 --batch-size 32 --device gpu
-
-# TensorFlow
+# TensorFlow tf.data (AUTOTUNE)
 python3 benchmarks/08_tensorflow.py \
-    /tmp/benchmark_datasets/bench_2k/dataset.tar \
-    --epochs 3 --batch-size 32 --num-workers 8
+    imagenette2-160/train \
+    --epochs 3 --batch-size 64
+
+# TurboLoader (single process-wide C++ thread pool; on-the-fly)
+python3 benchmarks/05_turboloader.py \
+    imagenette2-160/train \
+    --epochs 3 --batch-size 64
+
+# TurboLoader with decoded cache (cache_decoded=True)
+python3 benchmarks/05_turboloader.py \
+    imagenette2-160/train \
+    --epochs 3 --batch-size 64 --cache-decoded
 ```
+
+> Note: `--num-workers` is only meaningful for PyTorch (separate OS processes).
+> TurboLoader's fast path is a single saturated C++ thread pool, and `tf.data` uses
+> AUTOTUNE, so neither is swept over worker counts.
 
 ### Run All Benchmarks
 
 ```bash
-# Run comprehensive benchmark suite
+# Run the comparison suite
 ./scripts/run_all_benchmarks.sh
 ```
 
@@ -436,9 +229,6 @@ sudo mount -t tmpfs -o size=4g tmpfs /tmp/ramdisk
 # Set optimal thread count
 export OMP_NUM_THREADS=8
 export MKL_NUM_THREADS=8
-
-# Enable TF32 on Ampere GPUs
-export NVIDIA_TF32_OVERRIDE=1
 ```
 
 **TensorFlow:**
@@ -449,15 +239,6 @@ export TF_NUM_INTRAOP_THREADS=8
 
 # Enable XLA JIT compilation
 export TF_XLA_FLAGS=--tf_xla_auto_jit=2
-```
-
-**DALI:**
-```bash
-# Set GPU device
-export CUDA_VISIBLE_DEVICES=0
-
-# Enable async execution
-# (controlled in pipeline code)
 ```
 
 ---
@@ -486,9 +267,9 @@ pip install <packages>
 **Out of memory:**
 ```bash
 # Reduce batch size
---batch-size 16  # instead of 32
+--batch-size 32  # instead of 64
 
-# Reduce number of workers
+# Reduce number of workers (PyTorch only)
 --num-workers 4  # instead of 8
 ```
 
@@ -508,35 +289,13 @@ ulimit -n 65536
 python3 -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
 ```
 
-**FFCV "compilation failed":**
-```bash
-# Make sure Rust is updated
-rustup update
-
-# Clear build cache
-pip cache purge
-pip install --no-cache-dir ffcv
-```
-
-**DALI "CUDA error":**
-```bash
-# Check CUDA compatibility
-nvidia-smi
-nvcc --version
-
-# Match DALI CUDA version to system CUDA
-pip install nvidia-dali-cuda120  # for CUDA 12.x
-```
-
 ---
 
 ## Reference Documentation
 
-- **TurboLoader**: [GitHub](https://github.com/yourusername/turboloader)
+- **TurboLoader**: [GitHub](https://github.com/ALJainProjects/TurboLoader)
 - **PyTorch DataLoader**: [Docs](https://pytorch.org/docs/stable/data.html)
 - **TensorFlow tf.data**: [Guide](https://www.tensorflow.org/guide/data)
-- **FFCV**: [Docs](https://docs.ffcv.io/)
-- **NVIDIA DALI**: [Docs](https://docs.nvidia.com/deeplearning/dali/)
 
 ---
 
@@ -544,7 +303,7 @@ pip install nvidia-dali-cuda120  # for CUDA 12.x
 
 For issues or questions:
 1. Check the [Troubleshooting](#troubleshooting) section
-2. Search existing [GitHub Issues](https://github.com/yourusername/turboloader/issues)
+2. Search existing [GitHub Issues](https://github.com/ALJainProjects/TurboLoader/issues)
 3. Create a new issue with:
    - System information (`uname -a`, `python --version`)
    - Error message and full traceback
