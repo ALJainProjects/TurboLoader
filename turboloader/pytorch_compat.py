@@ -36,6 +36,11 @@ Usage:
         loss = criterion(outputs, labels)
 """
 
+# Annotations reference torch.Tensor, but torch is an OPTIONAL dependency (it may be
+# None here). PEP 563 keeps annotations as strings so they are never evaluated at
+# import time — otherwise `import turboloader` crashes when torch isn't installed.
+from __future__ import annotations
+
 import os
 import sys
 import json

@@ -46,11 +46,17 @@ classifiers = [
 ]
 
 dependencies = [
-    "numpy>=1.19.0",
-    "torch>=1.8.0"
+    "numpy>=1.19.0"
 ]
+# torch is optional: the loader returns numpy arrays and only the PyTorch-compat
+# helpers import torch (lazily). Making it a hard dependency broke installs on
+# platforms/Python versions with no torch wheel (e.g. linux aarch64). `pip install
+# turboloader[torch]` pulls it in.
 
 [project.optional-dependencies]
+torch = [
+    "torch>=1.8.0"
+]
 dev = [
     "pytest>=6.0",
     "black>=21.0",

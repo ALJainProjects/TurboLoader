@@ -452,8 +452,14 @@ class BuildExt(build_ext):
             if ct == "unix":
                 # macOS-specific flags
                 if system == "darwin":
-                    opts.append("-mmacosx-version-min=10.15")
-                    link_opts.append("-mmacosx-version-min=10.15")
+                    # Respect MACOSX_DEPLOYMENT_TARGET when the build sets it
+                    # (cibuildwheel does, matched to the runner's Homebrew dylibs).
+                    # Only fall back to an explicit minimum otherwise, and never force
+                    # 10.15 — it disables C++20 libc++ availability and breaks the
+                    # build inside <memory> on Xcode 15.x.
+                    if not os.environ.get("MACOSX_DEPLOYMENT_TARGET"):
+                        opts.append("-mmacosx-version-min=11.0")
+                        link_opts.append("-mmacosx-version-min=11.0")
                     if "arm64" in arch:
                         opts.append("-mcpu=native")
                     # Add rpath for Homebrew libraries on macOS
