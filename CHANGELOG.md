@@ -5,6 +5,14 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.26.3] - 2026-06-28
+
+### Added
+- **Python 3.13 and 3.14 support.** The full test suite now runs on 3.10–3.14, and
+  wheels are built for **cp314** (Linux x86_64/aarch64 + macOS arm64) in addition to
+  cp310–313. Bumped cibuildwheel to v4 (which knows CPython 3.14) and added the 3.13/
+  3.14 classifiers. (3.15 is still pre-release with no torch wheels — not yet built.)
+
 ## [2.26.2] - 2026-06-28
 
 Portable macOS wheels, an interactive benchmark dashboard, and an honest docs sweep.
