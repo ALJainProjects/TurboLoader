@@ -72,6 +72,17 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
             check_path = include_path
         return os.path.exists(check_path)
 
+    # Explicit prefix override: TURBOLOADER_DEPS_PREFIX points at dependencies built
+    # from source (used to make portable macOS wheels — Homebrew bottles target the
+    # runner's OS, which makes wheels non-portable). Only used when the prefix actually
+    # contains this library's headers; otherwise we fall through (e.g. system libcurl).
+    deps_prefix = os.environ.get("TURBOLOADER_DEPS_PREFIX")
+    if deps_prefix:
+        inc = os.path.join(deps_prefix, "include")
+        lib = os.path.join(deps_prefix, "lib")
+        if os.path.isdir(lib) and verify_include(inc):
+            return inc, lib
+
     # Try pkg-config first (most reliable on Linux)
     try:
         cflags = (

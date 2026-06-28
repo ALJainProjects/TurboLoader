@@ -10,18 +10,21 @@ jobs:
   build_wheels:
     name: Wheels ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # Linux-only wheels (portable manylinux, x86_64 + aarch64). macOS wheels are
-    # intentionally NOT built here: tying their minimum-OS to the runner's Homebrew
-    # bottles makes them non-portable, and GitHub's macOS runners currently fail on an
-    # Xcode libc++/C++20 toolchain bug. macOS users install the sdist, which compiles
-    # correctly against their own toolchain. Portable macOS wheels (deps built from
-    # source at a fixed target) can be added as a separate, deliberate effort.
+    # Portable wheels for Linux (manylinux x86_64 + aarch64) and macOS (arm64 + x86_64).
+    # macOS wheels build their C deps (jpeg-turbo/png/webp/lz4) FROM SOURCE at a fixed
+    # MACOSX_DEPLOYMENT_TARGET=11.0 (not Homebrew bottles, which target the runner's OS
+    # and are non-portable), so they install on macOS 11+. macOS legs are best-effort
+    # (continue-on-error) so a runner toolchain hiccup never blocks the release — the
+    # sdist always covers macOS too.
+    continue-on-error: ${{ matrix.optional == true }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - { name: linux-x86_64,   os: ubuntu-latest,    archs: x86_64 }
           - { name: linux-aarch64,  os: ubuntu-24.04-arm, archs: aarch64 }
+          - { name: macos-arm64,    os: macos-14,         archs: arm64,  optional: true }
+          - { name: macos-x86_64,   os: macos-13,         archs: x86_64, optional: true }
 
     steps:
       - uses: actions/checkout@v4
@@ -29,21 +32,16 @@ jobs:
           submodules: recursive
           fetch-depth: 0          # full history + tags for setuptools_scm
 
-      # macOS: install native deps for the current runner's architecture so the
-      # extension links against matching-arch dylibs (a universal2 build would link
-      # arm64-only Homebrew libs into the x86_64 slice and break it).
-      - name: Install macOS dependencies
+      # macOS: select the newest installed Xcode (older defaults like 15.4 have a libc++
+      # bug that mis-parses C++20 in <memory>), and install cmake for the build-from-
+      # source deps. Do NOT brew-install the C deps — we build them ourselves so the
+      # bundled dylibs target macOS 11.0 and the wheel stays portable.
+      - name: Prepare macOS toolchain
         if: runner.os == 'macOS'
-        run: brew install jpeg-turbo libpng webp lz4
-
-      # Homebrew bottles are built for the runner's current macOS, so the bundled
-      # dylibs carry that minimum version. delocate rejects the wheel unless
-      # MACOSX_DEPLOYMENT_TARGET >= that. Derive the target from the runner's OS major
-      # (auto-adjusts when GitHub bumps the runner image) instead of a fixed value.
-      - name: macOS deployment target
-        if: runner.os == 'macOS'
-        id: macos
-        run: echo "target=$(sw_vers -productVersion | cut -d. -f1).0" >> "$GITHUB_OUTPUT"
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer"
+          clang++ --version
+          brew install --quiet cmake || brew upgrade --quiet cmake || true
 
       # Resolve the version on the host and pass it into the build containers via
       # SETUPTOOLS_SCM_PRETEND_VERSION, so setuptools_scm never has to introspect git
@@ -69,12 +67,17 @@ jobs:
           CIBW_SKIP: "*-musllinux_* *-win32 *-manylinux_i686"
           CIBW_ARCHS: ${{ matrix.archs }}
 
-          # Build a single-arch macOS wheel (NOT universal2) so each slice links
-          # against same-arch Homebrew libraries.
+          # macOS: build the C deps from source at a FIXED 11.0 target (once per
+          # platform), into /tmp/tbl_deps; setup.py picks them up via
+          # TURBOLOADER_DEPS_PREFIX. Single-arch (not universal2).
+          CIBW_BEFORE_ALL_MACOS: >
+            MACOSX_DEPLOYMENT_TARGET=11.0 TURBOLOADER_DEPS_PREFIX=/tmp/tbl_deps
+            ARCH=${{ matrix.archs }} bash {project}/scripts/build_macos_deps.sh
           CIBW_ENVIRONMENT_MACOS: >
-            MACOSX_DEPLOYMENT_TARGET=${{ steps.macos.outputs.target }}
+            MACOSX_DEPLOYMENT_TARGET=11.0
             ARCHFLAGS="-arch ${{ matrix.archs }}"
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.scm.outputs.version }}
+            TURBOLOADER_DEPS_PREFIX=/tmp/tbl_deps
 
           # Linux: manylinux runs on AlmaLinux/yum.
           CIBW_BEFORE_ALL_LINUX: |
