@@ -32,15 +32,22 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install jpeg-turbo libpng webp lz4
 
-      # Resolve the version on the host (git available) and pass it into the build
-      # containers via SETUPTOOLS_SCM_PRETEND_VERSION, so setuptools_scm never has to
-      # introspect git inside manylinux (which is brittle).
+      # Resolve the version on the host and pass it into the build containers via
+      # SETUPTOOLS_SCM_PRETEND_VERSION, so setuptools_scm never has to introspect git
+      # inside manylinux (which is brittle). Derive it WITHOUT pip/setuptools_scm:
+      # macOS runners ship an externally-managed Python (PEP 668) that blocks
+      # `pip install`. On a release the version IS the tag; otherwise a dev placeholder.
       - name: Resolve version
         id: scm
         shell: bash
         run: |
-          python3 -m pip install --quiet "setuptools_scm>=8"
-          echo "version=$(python3 -m setuptools_scm)" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="0.0.0.dev0+$(echo "${GITHUB_SHA}" | cut -c1-8)"
+          fi
+          echo "Resolved version: $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21
