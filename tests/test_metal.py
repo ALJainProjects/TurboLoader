@@ -147,3 +147,36 @@ def test_crop_batch_independent_params():
             [0.229, 0.224, 0.225]
         )[:, None, None]
         assert np.abs(out[i] - ref).max() < 1e-3
+
+
+def test_gpu_image_loader(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    rng = np.random.default_rng(8)
+    paths = []
+    for i in range(20):
+        p = tmp_path / f"img_{i}.jpg"
+        Image.fromarray(rng.integers(0, 255, (120 + i, 140, 3), dtype=np.uint8)).save(
+            p, format="JPEG"
+        )
+        paths.append(str(p))
+    dl = tl.GpuImageLoader(paths, batch_size=8, image_size=64, num_workers=4)
+    batches = list(dl)
+    assert len(dl) == 3
+    assert sum(b.shape[0] for b in batches) == 20
+    assert batches[0].shape == (8, 3, 64, 64) and batches[0].dtype == np.float32
+
+
+def test_gpu_image_loader_train_aug_reproducible(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    rng = np.random.default_rng(9)
+    paths = []
+    for i in range(16):
+        p = tmp_path / f"a_{i}.jpg"
+        Image.fromarray(rng.integers(0, 255, (130, 150, 3), dtype=np.uint8)).save(p, format="JPEG")
+        paths.append(str(p))
+    dl = tl.GpuImageLoader(paths, batch_size=8, image_size=64, train_aug=True, shuffle=True, seed=1)
+    dl.set_epoch(0)
+    a = np.concatenate([b.ravel()[:20] for b in dl])
+    dl.set_epoch(0)
+    b = np.concatenate([b.ravel()[:20] for b in dl])
+    assert np.allclose(a, b)  # same epoch -> identical aug

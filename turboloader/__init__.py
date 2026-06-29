@@ -2167,6 +2167,22 @@ try:
     except Exception:
         pass
 
+    # CPU JPEG decode primitive (powers the GPU loader: decode on CPU, transform on GPU).
+    try:
+        from _turboloader import decode_jpeg
+
+        __all__ += ["decode_jpeg"]
+    except Exception:
+        pass
+
+    # GPU-accelerated image loader (Apple Silicon): parallel CPU decode + Metal transforms.
+    try:
+        from turboloader.gpu_loader import GpuImageLoader
+
+        __all__ += ["GpuImageLoader"]
+    except Exception:
+        pass
+
     # Import PyTorch compatibility layer
     try:
         from turboloader.pytorch_compat import (

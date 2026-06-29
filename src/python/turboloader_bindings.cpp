@@ -25,8 +25,12 @@
 #include "../pipeline/smart_batching.hpp"
 #include "../pipeline/direct_batch_loader.hpp"
 #include "../core/parallel_for.hpp"
+#include "../decode/jpeg_decoder.hpp"  // CPU JPEG decode primitive (decode_jpeg)
 #ifdef TURBOLOADER_METAL
 #include "../metal/metal_transforms.hpp"  // Apple GPU transform path (macOS arm64)
+#endif
+#ifdef TURBOLOADER_CUDA_TRANSFORMS
+#include "../cuda/cuda_transforms.hpp"  // NVIDIA GPU transform path (UNVALIDATED)
 #endif
 #include <thread>
 #include <chrono>
@@ -1054,6 +1058,29 @@ PYBIND11_MODULE(_turboloader, m) {
           "Get TurboLoader version\n\n"
           "Returns:\n"
           "    str: Version string matching the installed package");
+
+    m.def(
+        "decode_jpeg",
+        [](py::bytes data) -> py::array_t<uint8_t> {
+            // Copy the bytes into a C++ buffer so the decode can run with the GIL released
+            // (enables parallel decode across a Python thread pool).
+            std::string buf = data;
+            static thread_local turboloader::JPEGDecoder decoder;
+            std::vector<uint8_t> out;
+            int w = 0, h = 0, c = 0;
+            {
+                py::gil_scoped_release rel;
+                std::span<const uint8_t> sp(reinterpret_cast<const uint8_t*>(buf.data()),
+                                            buf.size());
+                decoder.decode(sp, out, w, h, c);
+            }
+            auto arr = py::array_t<uint8_t>({(py::ssize_t)h, (py::ssize_t)w, (py::ssize_t)c});
+            std::memcpy(arr.mutable_data(), out.data(), out.size());
+            return arr;
+        },
+        py::arg("data"),
+        "Decode a JPEG (bytes) to an HxWx3 uint8 RGB numpy array (CPU, libjpeg-turbo). "
+        "Releases the GIL, so it parallelizes across a thread pool.");
 
 #ifdef TURBOLOADER_METAL
     m.def("metal_available", []() { return turboloader::metal::available(); },

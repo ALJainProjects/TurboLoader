@@ -1,0 +1,160 @@
+// CUDA implementation of the GPU transform path. Compiled with nvcc only when
+// TURBOLOADER_ENABLE_CUDA=1 (see setup.py / docs/GPU_ACCELERATION.md).
+//
+// !!! UNVALIDATED !!!  This is a faithful, line-for-line port of the bit-exact, validated
+// Metal kernels in src/metal/metal_transforms.mm — the SAME half-pixel bilinear + normalize
+// math. But it has NOT been compiled or run: there is no NVIDIA GPU on the dev/CI machines.
+// It is committed so it's ready to build, test, and debug the moment a CUDA box is online.
+#include "cuda_transforms.hpp"
+
+#include <cuda_runtime.h>
+
+#include <algorithm>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace {
+
+// Mirrors the Metal `resize_normalize` kernel exactly.
+__global__ void resize_normalize_kernel(const uint8_t* src, float* dst, int srcW, int srcH,
+                                        int dstW, int dstH, float3 mean, float3 invstd) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= dstW || y >= dstH) return;
+    float sx = fmaxf(0.0f, (x + 0.5f) * (float)srcW / dstW - 0.5f);
+    float sy = fmaxf(0.0f, (y + 0.5f) * (float)srcH / dstH - 0.5f);
+    int x0 = (int)sx, y0 = (int)sy;
+    int x1 = min(x0 + 1, srcW - 1), y1 = min(y0 + 1, srcH - 1);
+    float dx = sx - x0, dy = sy - y0;
+    float m[3] = {mean.x, mean.y, mean.z};
+    float isd[3] = {invstd.x, invstd.y, invstd.z};
+    for (int c = 0; c < 3; c++) {
+        float p00 = src[(y0 * srcW + x0) * 3 + c], p10 = src[(y0 * srcW + x1) * 3 + c];
+        float p01 = src[(y1 * srcW + x0) * 3 + c], p11 = src[(y1 * srcW + x1) * 3 + c];
+        float top = p00 * (1 - dx) + p10 * dx, bot = p01 * (1 - dx) + p11 * dx;
+        float v = (top * (1 - dy) + bot * dy) / 255.0f;
+        dst[(c * dstH + y) * dstW + x] = (v - m[c]) * isd[c];
+    }
+}
+
+// Mirrors the Metal `crop_resize_normalize` kernel exactly.
+__global__ void crop_resize_normalize_kernel(const uint8_t* src, float* dst, int srcW, int srcH,
+                                             int dstW, int dstH, float4 crop, int flip,
+                                             float3 mean, float3 invstd) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= dstW || y >= dstH) return;
+    int ox = flip ? (dstW - 1 - x) : x;
+    float sx = crop.x + (ox + 0.5f) / (float)dstW * crop.z - 0.5f;
+    float sy = crop.y + (y + 0.5f) / (float)dstH * crop.w - 0.5f;
+    sx = fminf(fmaxf(sx, 0.0f), (float)(srcW - 1));
+    sy = fminf(fmaxf(sy, 0.0f), (float)(srcH - 1));
+    int x0 = (int)sx, y0 = (int)sy;
+    int x1 = min(x0 + 1, srcW - 1), y1 = min(y0 + 1, srcH - 1);
+    float dx = sx - x0, dy = sy - y0;
+    float m[3] = {mean.x, mean.y, mean.z};
+    float isd[3] = {invstd.x, invstd.y, invstd.z};
+    for (int c = 0; c < 3; c++) {
+        float p00 = src[(y0 * srcW + x0) * 3 + c], p10 = src[(y0 * srcW + x1) * 3 + c];
+        float p01 = src[(y1 * srcW + x0) * 3 + c], p11 = src[(y1 * srcW + x1) * 3 + c];
+        float top = p00 * (1 - dx) + p10 * dx, bot = p01 * (1 - dx) + p11 * dx;
+        float v = (top * (1 - dy) + bot * dy) / 255.0f;
+        dst[(c * dstH + y) * dstW + x] = (v - m[c]) * isd[c];
+    }
+}
+
+std::string g_name;
+
+// Pack variable-size images into one device buffer (offsets), like the Metal path.
+bool pack_to_device(const std::vector<turboloader::cuda::ImageRef>& imgs,
+                    std::vector<size_t>& off, uint8_t** d_src) {
+    const size_t N = imgs.size();
+    off.assign(N + 1, 0);
+    for (size_t i = 0; i < N; i++) {
+        if (!imgs[i].data || imgs[i].w <= 0 || imgs[i].h <= 0) return false;
+        off[i + 1] = off[i] + (size_t)imgs[i].w * imgs[i].h * 3;
+    }
+    if (cudaMalloc(d_src, std::max<size_t>(off[N], 1)) != cudaSuccess) return false;
+    for (size_t i = 0; i < N; i++)
+        cudaMemcpy(*d_src + off[i], imgs[i].data, off[i + 1] - off[i], cudaMemcpyHostToDevice);
+    return true;
+}
+
+}  // namespace
+
+namespace turboloader {
+namespace cuda {
+
+bool available() {
+    int n = 0;
+    return cudaGetDeviceCount(&n) == cudaSuccess && n > 0;
+}
+
+const char* device_name() {
+    if (!available()) return "";
+    cudaDeviceProp prop;
+    if (cudaGetDeviceProperties(&prop, 0) != cudaSuccess) return "";
+    g_name = prop.name;
+    return g_name.c_str();
+}
+
+bool resize_normalize_batch(const std::vector<ImageRef>& imgs, int dst_h, int dst_w,
+                            const float mean[3], const float std_[3], float* out) {
+    if (!available() || imgs.empty() || dst_h <= 0 || dst_w <= 0) return false;
+    const size_t N = imgs.size(), per_out = (size_t)3 * dst_h * dst_w;
+    std::vector<size_t> off;
+    uint8_t* d_src = nullptr;
+    float* d_dst = nullptr;
+    if (!pack_to_device(imgs, off, &d_src)) return false;
+    if (cudaMalloc(&d_dst, N * per_out * sizeof(float)) != cudaSuccess) {
+        cudaFree(d_src);
+        return false;
+    }
+    float3 m = make_float3(mean[0], mean[1], mean[2]);
+    float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
+    dim3 block(16, 16), grid((dst_w + 15) / 16, (dst_h + 15) / 16);
+    for (size_t i = 0; i < N; i++)
+        resize_normalize_kernel<<<grid, block>>>(d_src + off[i], d_dst + i * per_out, imgs[i].w,
+                                                 imgs[i].h, dst_w, dst_h, m, isd);
+    cudaDeviceSynchronize();
+    bool ok = cudaGetLastError() == cudaSuccess;
+    if (ok) cudaMemcpy(out, d_dst, N * per_out * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaFree(d_src);
+    cudaFree(d_dst);
+    return ok;
+}
+
+bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
+                                 const std::vector<CropParams>& crops, int dst_h, int dst_w,
+                                 const float mean[3], const float std_[3], float* out) {
+    if (!available() || imgs.empty() || crops.size() != imgs.size() || dst_h <= 0 || dst_w <= 0)
+        return false;
+    const size_t N = imgs.size(), per_out = (size_t)3 * dst_h * dst_w;
+    std::vector<size_t> off;
+    uint8_t* d_src = nullptr;
+    float* d_dst = nullptr;
+    if (!pack_to_device(imgs, off, &d_src)) return false;
+    if (cudaMalloc(&d_dst, N * per_out * sizeof(float)) != cudaSuccess) {
+        cudaFree(d_src);
+        return false;
+    }
+    float3 m = make_float3(mean[0], mean[1], mean[2]);
+    float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
+    dim3 block(16, 16), grid((dst_w + 15) / 16, (dst_h + 15) / 16);
+    for (size_t i = 0; i < N; i++) {
+        float4 crop = make_float4(crops[i].x, crops[i].y, crops[i].w, crops[i].h);
+        crop_resize_normalize_kernel<<<grid, block>>>(d_src + off[i], d_dst + i * per_out,
+                                                      imgs[i].w, imgs[i].h, dst_w, dst_h, crop,
+                                                      crops[i].flip, m, isd);
+    }
+    cudaDeviceSynchronize();
+    bool ok = cudaGetLastError() == cudaSuccess;
+    if (ok) cudaMemcpy(out, d_dst, N * per_out * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaFree(d_src);
+    cudaFree(d_dst);
+    return ok;
+}
+
+}  // namespace cuda
+}  // namespace turboloader
