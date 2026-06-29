@@ -5,6 +5,24 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.27.0] - 2026-06-28
+
+### Added
+- **`MapDataLoader` — wrap any Python dataset.** Batches any map-style dataset (an
+  object with `__len__`/`__getitem__(i)`, the `torch.utils.data.Dataset` protocol), so
+  loading/decoding/business logic can be arbitrary Python. Parallelizes `__getitem__` on
+  a bounded thread pool with read-ahead; collates tuples/dicts/arrays (or a custom
+  `collate_fn`); supports `shuffle`/`set_epoch`/`drop_last`/`num_workers`. Reachable as
+  `turboloader.MapDataLoader` or via `DataLoader(dataset=..., modality="map")`
+  (`data_path` is now optional). Also exports `default_collate`.
+  - Honest tradeoff: arbitrary per-sample work runs in Python, so this path is roughly
+    PyTorch-`DataLoader` throughput (GIL-bound for pure-Python CPU work) — it provides
+    flexibility, not the C++ fast path. Use the image/token/array loaders for max speed.
+
+### Docs
+- Documented (honestly) why FFCV/NVIDIA DALI aren't benchmarked here: DALI is CUDA-only
+  and FFCV doesn't build on macOS arm64 — a fair comparison needs Linux + GPU.
+
 ## [2.26.3] - 2026-06-28
 
 ### Added
