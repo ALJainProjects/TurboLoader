@@ -524,7 +524,7 @@ try:
 
         def __init__(
             self,
-            data_path,
+            data_path=None,
             batch_size=32,
             num_workers=4,
             shuffle=False,
@@ -535,6 +535,8 @@ try:
             seq_len=None,
             token_dtype="uint16",
             arrays=None,
+            dataset=None,
+            collate_fn=None,
             seed=42,
             enable_distributed=False,
             world_rank=0,
@@ -584,9 +586,29 @@ try:
                 )
                 self._fast = False
                 return
+            # Flexible "wrap any Python" path: a map-style dataset (object with
+            # __getitem__/__len__, the torch.utils.data.Dataset protocol). Triggered by
+            # passing dataset=... or modality='map'. Python-bound (≈ PyTorch DataLoader
+            # throughput) — use the native image/tokens/array paths for the C++ fast path.
+            if dataset is not None or modality in ("map", "dataset", "python"):
+                from turboloader.sequence import MapDataLoader
+
+                src = dataset if dataset is not None else data_path
+                self._delegate = MapDataLoader(
+                    src,
+                    batch_size=batch_size,
+                    shuffle=shuffle,
+                    num_workers=num_workers,
+                    collate_fn=collate_fn,
+                    seed=seed,
+                    drop_last=drop_last,
+                    prefetch_batches=prefetch_batches,
+                )
+                self._fast = False
+                return
             if modality != "image":
                 raise ValueError(
-                    "modality must be one of: 'image', 'tokens', 'array' (got %r)" % modality
+                    "modality must be one of: 'image', 'tokens', 'array', 'map' (got %r)" % modality
                 )
 
             self._delegate = None
@@ -2115,11 +2137,17 @@ try:
     # Add ProgressiveResizeLoader to exports
     __all__.append("ProgressiveResizeLoader")
 
-    # Non-image modalities: LLM token streams and generic array/tensor datasets.
+    # Non-image modalities: LLM token streams, generic arrays, and the flexible
+    # map-style "wrap any Python __getitem__" loader.
     try:
-        from turboloader.sequence import TokenDataLoader, ArrayDataLoader
+        from turboloader.sequence import (
+            TokenDataLoader,
+            ArrayDataLoader,
+            MapDataLoader,
+            default_collate,
+        )
 
-        __all__ += ["TokenDataLoader", "ArrayDataLoader"]
+        __all__ += ["TokenDataLoader", "ArrayDataLoader", "MapDataLoader", "default_collate"]
     except Exception:
         pass
 

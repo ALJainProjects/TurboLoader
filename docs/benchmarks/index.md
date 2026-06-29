@@ -99,6 +99,22 @@ See the [Benchmark Setup Guide](../benchmark_setup.md) for:
 - Dataset preparation (Imagenette-160)
 - Measurement technique (real consumption, warmup + median of timed epochs)
 
+## Why no FFCV / NVIDIA DALI numbers (yet)
+
+These are the most relevant high-performance comparisons, but they can't be measured
+fairly on the hardware these numbers were collected on (Apple Silicon CPU):
+
+- **NVIDIA DALI** is CUDA-only — there is no Apple Silicon / CPU-only build. A fair
+  comparison needs a Linux + NVIDIA GPU box. Note that DALI's **GPU** JPEG decode could
+  well *out-throughput* TurboLoader's CPU pipeline — that's a result worth having, not
+  one to fear.
+- **FFCV** is Linux/x86-oriented and its wheel does not build on macOS arm64; it also
+  uses its own `.beton` format (a conversion step).
+
+So the honest statement is: TurboLoader is **measured faster than PyTorch DataLoader and
+tf.data on CPU** (above), and FFCV/DALI are a deliberately open comparison — they belong
+on Linux + GPU and will be added when run there.
+
 ## Reproducing Results
 
 ```bash

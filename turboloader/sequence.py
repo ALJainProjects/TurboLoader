@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["TokenDataLoader", "ArrayDataLoader"]
+__all__ = ["TokenDataLoader", "ArrayDataLoader", "MapDataLoader", "default_collate"]
 
 
 class TokenDataLoader:
@@ -151,3 +151,129 @@ class ArrayDataLoader:
                 yield np.ascontiguousarray(self.arrays[0][sel])
             else:
                 yield tuple(np.ascontiguousarray(a[sel]) for a in self.arrays)
+
+
+def default_collate(samples):
+    """Collate a list of samples into a batch (numpy-based, like torch's default_collate).
+
+    - tuples/lists (e.g. ``(image, label)``) -> a tuple with each position collated
+    - dicts -> a dict with each value collated
+    - numpy arrays / array-likes -> stacked along a new leading axis
+    - scalars (int/float/bool) -> a 1-D array
+    """
+    first = samples[0]
+    if isinstance(first, tuple):
+        return tuple(default_collate([s[i] for s in samples]) for i in range(len(first)))
+    if isinstance(first, list):
+        return [default_collate([s[i] for s in samples]) for i in range(len(first))]
+    if isinstance(first, dict):
+        return {k: default_collate([s[k] for s in samples]) for k in first}
+    if isinstance(first, np.ndarray):
+        return np.stack(samples)
+    return np.asarray(samples)
+
+
+class MapDataLoader:
+    """Batch ANY map-style dataset — the flexible, "wrap arbitrary Python" path.
+
+    Accepts anything indexable with ``__len__`` and ``__getitem__(i)`` (exactly the
+    ``torch.utils.data.Dataset`` protocol), so your loading/decoding/business logic can
+    be arbitrary Python. Items are fetched on a bounded thread pool (with read-ahead) and
+    collated into batches.
+
+    Honest tradeoff: because the per-sample work runs in Python, this path is roughly
+    PyTorch-DataLoader speed (and GIL-bound for pure-Python CPU work — threads help most
+    when ``__getitem__`` releases the GIL, e.g. NumPy / PIL / file or network I/O). For
+    maximum throughput on images/tokens/arrays, use the native fast paths
+    (``DataLoader(... image_size=...)``, ``TokenDataLoader``, ``ArrayDataLoader``); use
+    this when the data simply doesn't fit those.
+
+    Args:
+        dataset: object with ``__getitem__(i)`` (and ``__len__``), or any sized sequence.
+        batch_size: samples per batch.
+        shuffle: shuffle indices each epoch (reproducible via ``set_epoch``).
+        num_workers: thread-pool size for concurrent ``__getitem__`` calls.
+        collate_fn: how to merge a list of samples into a batch (default: ``default_collate``).
+        drop_last: drop a ragged final batch.
+        prefetch_batches: how many batches' worth of items to keep in flight.
+
+    Example:
+        >>> class Squares:
+        ...     def __len__(self): return 1000
+        ...     def __getitem__(self, i): return np.full((4,), i), i % 10   # (x, label)
+        >>> for x, y in MapDataLoader(Squares(), batch_size=32, shuffle=True):
+        ...     train_step(x, y)
+    """
+
+    def __init__(
+        self,
+        dataset,
+        batch_size=32,
+        *,
+        shuffle=False,
+        num_workers=4,
+        collate_fn=None,
+        seed=42,
+        drop_last=False,
+        prefetch_batches=2,
+    ):
+        if not hasattr(dataset, "__getitem__"):
+            raise TypeError(
+                "MapDataLoader needs a map-style dataset with __getitem__(i) "
+                "(and __len__) — the torch.utils.data.Dataset protocol."
+            )
+        try:
+            self._n = len(dataset)
+        except TypeError:
+            raise TypeError("MapDataLoader dataset must define __len__")
+        self.dataset = dataset
+        self.batch_size = int(batch_size)
+        self.shuffle = bool(shuffle)
+        self.num_workers = max(1, int(num_workers))
+        self.collate_fn = collate_fn or default_collate
+        self.seed = int(seed)
+        self.drop_last = bool(drop_last)
+        self.prefetch_batches = max(1, int(prefetch_batches))
+        self._epoch = 0
+
+    def __len__(self):
+        n_full = self._n // self.batch_size
+        return n_full if self.drop_last else -(-self._n // self.batch_size)
+
+    def set_epoch(self, epoch):
+        """Reproducible per-epoch shuffling (matches PyTorch DistributedSampler)."""
+        self._epoch = int(epoch)
+
+    def __iter__(self):
+        from collections import deque
+        from concurrent.futures import ThreadPoolExecutor
+
+        if self.shuffle:
+            order = np.random.default_rng(self.seed + self._epoch).permutation(self._n)
+        else:
+            order = np.arange(self._n)
+        bs = self.batch_size
+        end = (self._n // bs) * bs if self.drop_last else self._n
+        indices = (int(i) for i in order[:end])
+        window = max(bs * 2, self.num_workers * 2, bs * self.prefetch_batches)
+        ds = self.dataset
+
+        with ThreadPoolExecutor(max_workers=self.num_workers) as ex:
+            futures = deque()
+            for _ in range(window):
+                try:
+                    futures.append(ex.submit(ds.__getitem__, next(indices)))
+                except StopIteration:
+                    break
+            batch = []
+            while futures:
+                batch.append(futures.popleft().result())  # ordered
+                try:
+                    futures.append(ex.submit(ds.__getitem__, next(indices)))
+                except StopIteration:
+                    pass
+                if len(batch) == bs:
+                    yield self.collate_fn(batch)
+                    batch = []
+            if batch:
+                yield self.collate_fn(batch)
