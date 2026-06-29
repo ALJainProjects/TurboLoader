@@ -30,3 +30,21 @@ transforms on the GPU, and hands back an **MPS tensor** for Apple-Silicon PyTorc
 (no copy-out). That would make TurboLoader the only loader doing DALI-style GPU transforms
 on Apple Silicon (DALI is CUDA-only). Build-system + MPS-interop + correctness work
 required; gated behind an opt-in flag so CPU wheels are unaffected.
+
+## End-to-end measurement (real Imagenette JPEGs) — `e2e_decode_transform.mm`
+
+Decodes 3,000 real Imagenette JPEGs (turbojpeg, CPU) then resize+normalize on CPU vs Metal:
+
+```
+PER-IMAGE (us):  decode=67.1   cpu_xform(SIMD ~90)   gpu_xform=2.8 (compute) / 6.7 (+upload)
+END-TO-END (single thread):  CPU 6,335 img/s  ->  GPU 13,550 img/s  (~2.1x), bit-exact
+```
+
+**Verdict: GO.** The GPU transform is essentially free (2.8 us vs 67 us decode), which makes
+the pipeline **decode-bound** — the DALI architecture. On Apple Silicon the per-image upload
+is only ~4 us (unified memory, same-RAM memcpy), not a real PCIe transfer, so it doesn't
+erase the win. Honest caveat: the SIMD figure includes Python call overhead, so the true
+single-thread multiplier is ~1.3-2.1x; the multi-threaded loader should gain more because
+the GPU serves transforms for ALL decode threads while the CPU cores do only decode. The
+separate structural win is **GPU-resident output -> MPS tensor** (zero-copy into Apple-Silicon
+PyTorch training).
