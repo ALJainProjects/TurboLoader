@@ -385,6 +385,7 @@ def get_extensions():
     # are byte-for-byte unaffected.
     extra_sources = []
     extra_macros = []
+    extra_libs = []
     if (
         _macos
         and _plat.machine().lower() in ("arm64", "aarch64")
@@ -392,6 +393,20 @@ def get_extensions():
     ):
         extra_sources.append("src/metal/metal_transforms.mm")
         extra_macros.append(("TURBOLOADER_METAL", "1"))
+
+    # Experimental CUDA / nvJPEG GPU decode path. UNVALIDATED in this repo's CI — there is
+    # no NVIDIA GPU on the dev/CI machines, so it is OFF by default and ships nowhere. On a
+    # real CUDA box, enable with TURBOLOADER_ENABLE_CUDA=1 (and optionally CUDA_HOME). This
+    # defines HAVE_NVJPEG (the host-API nvJPEG decoder in src/decode/nvjpeg_decoder.hpp,
+    # which compiles with the ordinary C++ compiler) and links cudart + nvjpeg. NOTE: the
+    # __global__ transform kernels in src/pipeline/gpu_pipeline_integration.hpp additionally
+    # require nvcc and are intentionally NOT wired into this flag yet — see GPU_ACCELERATION.md.
+    if os.environ.get("TURBOLOADER_ENABLE_CUDA", "0") == "1":
+        _cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
+        include_dirs.append(os.path.join(_cuda_home, "include"))
+        library_dirs.append(os.path.join(_cuda_home, "lib64"))
+        extra_macros.append(("HAVE_NVJPEG", "1"))
+        extra_libs += ["nvjpeg", "cudart"]
 
     return [
         Extension(
@@ -408,7 +423,8 @@ def get_extensions():
                 "webp",
                 "curl",
                 "lz4",
-            ],
+            ]
+            + extra_libs,
             language="c++",
             extra_compile_args=compile_args,
             extra_link_args=link_args,

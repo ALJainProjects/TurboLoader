@@ -1160,7 +1160,18 @@ PYBIND11_MODULE(_turboloader, m) {
 #ifdef TURBOLOADER_HAS_CUDA
         features["gpu_transforms"] = true;
 #else
-        features["gpu_transforms"] = false;
+        features["gpu_transforms"] = false;  // CUDA transform kernels (need nvcc); off
+#endif
+#ifdef HAVE_NVJPEG
+        features["nvjpeg_decode"] = true;
+#else
+        features["nvjpeg_decode"] = false;
+#endif
+#ifdef TURBOLOADER_METAL
+        // Apple-GPU resize+normalize is compiled in; report whether a device is live too.
+        features["metal_gpu_transforms"] = turboloader::metal::available();
+#else
+        features["metal_gpu_transforms"] = false;
 #endif
         return features;
     }, "Get TurboLoader feature support\n\n"
