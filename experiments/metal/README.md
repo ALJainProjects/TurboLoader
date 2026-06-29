@@ -48,3 +48,30 @@ single-thread multiplier is ~1.3-2.1x; the multi-threaded loader should gain mor
 the GPU serves transforms for ALL decode threads while the CPU cores do only decode. The
 separate structural win is **GPU-resident output -> MPS tensor** (zero-copy into Apple-Silicon
 PyTorch training).
+
+## Hybrid GPU JPEG decode (novel) — `hybrid_jpeg_decode.mm`
+
+Metal has no JPEG decoder, so this splits the work like nvJPEG does on CUDA — but on Apple
+GPUs (a first):
+
+- **CPU (libjpeg):** parse + Huffman entropy decode -> quantized DCT coefficients
+  (`jpeg_read_coefficients`, the serial part libjpeg already does optimally).
+- **GPU (Metal):** dequantize + 8x8 IDCT (the parallel ~4096-op/block heavy lifting).
+- **CPU:** chroma upsample + YCbCr->RGB.
+
+```bash
+clang++ -std=c++17 -ObjC++ -O3 hybrid_jpeg_decode.mm \
+  -I/opt/homebrew/opt/jpeg-turbo/include -L/opt/homebrew/opt/jpeg-turbo/lib -ljpeg \
+  -framework Metal -framework Foundation -o hybrid && ./hybrid <img.jpg>
+```
+
+### Proven (8 diverse Imagenette images), vs libjpeg `JDCT_FLOAT`:
+```
+my GPU IDCT  vs  libjpeg Y plane (grayscale):  mean abs diff 0.49, max 1   <- bit-exact float
+full RGB     vs  libjpeg RGB:                  mean abs diff 1.4,  max 4   <- + CPU upsample/colorconvert
+```
+
+Gotcha that cost the most: libjpeg's `quant_table->quantval[]` is **already natural-order**
+(it de-zigzags on read), matching the coefficients — de-zigzagging it again scrambles the
+AC terms (DC stays correct because zigzag[0]==natural[0], which is why it hid). Isolating
+the Y plane against libjpeg grayscale is what pinned it to the IDCT.
