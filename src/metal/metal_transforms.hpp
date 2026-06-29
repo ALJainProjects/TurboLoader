@@ -35,5 +35,28 @@ bool resize_normalize_batch(const std::vector<ImageRef>& imgs,
                             const float std_[3],
                             float* out);
 
+// Per-image augmentation: a crop window in source pixels (floats, so the resize is exact)
+// plus an optional horizontal flip. The randomness (RandomResizedCrop scale/ratio) is
+// chosen by the caller and passed in here, so it stays seedable/reproducible.
+struct CropParams {
+    float x;  // crop top-left x in source pixels
+    float y;  // crop top-left y in source pixels
+    float w;  // crop width in source pixels
+    float h;  // crop height in source pixels
+    int flip;  // 1 = horizontal flip, 0 = none
+};
+
+// Fused crop + bilinear-resize + (optional) horizontal-flip + normalize, one GPU pass per
+// image. crops[i] applies to imgs[i]. Output is CHW float32 (N*3*dst_h*dst_w), [n][c][y][x].
+// This is the canonical train-time pipeline (RandomResizedCrop + RandomHorizontalFlip +
+// Normalize) done entirely on the GPU. Returns false on any error.
+bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
+                                 const std::vector<CropParams>& crops,
+                                 int dst_h,
+                                 int dst_w,
+                                 const float mean[3],
+                                 const float std_[3],
+                                 float* out);
+
 }  // namespace metal
 }  // namespace turboloader

@@ -84,3 +84,66 @@ def test_custom_mean_std():
 def test_empty_list_raises():
     with pytest.raises(Exception):
         tl.metal_resize_normalize([], 160, 160)
+
+
+def _crop_ref(img, cx, cy, cw, ch, dst_h, dst_w, flip):
+    H, W, _ = img.shape
+    o = np.empty((3, dst_h, dst_w), np.float32)
+    for y in range(dst_h):
+        sy = min(max(cy + (y + 0.5) / dst_h * ch - 0.5, 0), H - 1)
+        y0 = int(sy)
+        y1 = min(y0 + 1, H - 1)
+        dy = sy - y0
+        for x in range(dst_w):
+            ox = (dst_w - 1 - x) if flip else x
+            sx = min(max(cx + (ox + 0.5) / dst_w * cw - 0.5, 0), W - 1)
+            x0 = int(sx)
+            x1 = min(x0 + 1, W - 1)
+            dx = sx - x0
+            o[:, y, x] = (
+                img[y0, x0] * (1 - dx) * (1 - dy)
+                + img[y0, x1] * dx * (1 - dy)
+                + img[y1, x0] * (1 - dx) * dy
+                + img[y1, x1] * dx * dy
+            ) / 255.0
+    return o
+
+
+def test_crop_resize_normalize_matches_numpy():
+    rng = np.random.default_rng(5)
+    img = rng.integers(0, 255, (200, 300, 3), dtype=np.uint8)
+    crops = np.array([[50, 40, 100, 100]], np.float32)
+    flips = np.array([0], np.int32)
+    out = tl.metal_crop_resize_normalize(
+        [img], crops, flips, 64, 64, mean=[0, 0, 0], std=[1, 1, 1]
+    )[0]
+    ref = _crop_ref(img, 50, 40, 100, 100, 64, 64, 0)
+    assert np.abs(out - ref).max() < 1e-3
+
+
+def test_crop_horizontal_flip():
+    rng = np.random.default_rng(6)
+    img = rng.integers(0, 255, (180, 220, 3), dtype=np.uint8)
+    crops = np.array([[20, 10, 150, 120]], np.float32)
+    no_flip = tl.metal_crop_resize_normalize(
+        [img], crops, np.array([0], np.int32), 64, 64, mean=[0, 0, 0], std=[1, 1, 1]
+    )[0]
+    flipped = tl.metal_crop_resize_normalize(
+        [img], crops, np.array([1], np.int32), 64, 64, mean=[0, 0, 0], std=[1, 1, 1]
+    )[0]
+    assert np.abs(flipped - no_flip[:, :, ::-1]).max() < 1e-4
+
+
+def test_crop_batch_independent_params():
+    rng = np.random.default_rng(7)
+    imgs = [rng.integers(0, 255, (160, 200, 3), dtype=np.uint8) for _ in range(4)]
+    crops = np.array([[i * 5, i * 4, 100, 100] for i in range(4)], np.float32)
+    flips = np.array([0, 1, 0, 1], np.int32)
+    out = tl.metal_crop_resize_normalize(imgs, crops, flips, 96, 96)
+    assert out.shape == (4, 3, 96, 96)
+    for i in range(4):
+        ref = _crop_ref(imgs[i], *crops[i], 96, 96, flips[i])
+        ref = (ref - np.float32([0.485, 0.456, 0.406])[:, None, None]) / np.float32(
+            [0.229, 0.224, 0.225]
+        )[:, None, None]
+        assert np.abs(out[i] - ref).max() < 1e-3

@@ -45,12 +45,46 @@ kernel void resize_normalize(
         dst[(c * dstH + gid.y) * dstW + gid.x] = (v - m[c]) * isd[c];
     }
 }
+
+// Fused RandomResizedCrop + horizontal-flip + normalize. The crop window (float pixels)
+// and flip are chosen per-image by the caller; this samples that window with half-pixel
+// bilinear into the (dstW,dstH) output. The canonical train-time pipeline in one pass.
+kernel void crop_resize_normalize(
+    device const uchar* src    [[buffer(0)]],
+    device float*       dst    [[buffer(1)]],
+    constant uint4&     dims   [[buffer(2)]],   // srcW, srcH, dstW, dstH
+    constant float4&    crop   [[buffer(3)]],   // cropX, cropY, cropW, cropH (src pixels)
+    constant uint&      flip   [[buffer(4)]],   // 1 = horizontal flip
+    constant float3&    mean   [[buffer(5)]],
+    constant float3&    invstd [[buffer(6)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    uint srcW = dims.x, srcH = dims.y, dstW = dims.z, dstH = dims.w;
+    if (gid.x >= dstW || gid.y >= dstH) return;
+    uint ox = (flip != 0u) ? (dstW - 1u - gid.x) : gid.x;   // flip the sampled column
+    float sx = crop.x + (float(ox) + 0.5f) / float(dstW) * crop.z - 0.5f;
+    float sy = crop.y + (float(gid.y) + 0.5f) / float(dstH) * crop.w - 0.5f;
+    sx = clamp(sx, 0.0f, float(srcW - 1u));
+    sy = clamp(sy, 0.0f, float(srcH - 1u));
+    uint x0 = uint(sx), y0 = uint(sy);
+    uint x1 = min(x0 + 1u, srcW - 1u), y1 = min(y0 + 1u, srcH - 1u);
+    float dx = sx - float(x0), dy = sy - float(y0);
+    float m[3]   = { mean.x, mean.y, mean.z };
+    float isd[3] = { invstd.x, invstd.y, invstd.z };
+    for (uint c = 0; c < 3; c++) {
+        float p00 = src[(y0 * srcW + x0) * 3 + c], p10 = src[(y0 * srcW + x1) * 3 + c];
+        float p01 = src[(y1 * srcW + x0) * 3 + c], p11 = src[(y1 * srcW + x1) * 3 + c];
+        float v = mix(mix(p00, p10, dx), mix(p01, p11, dx), dy) / 255.0f;
+        dst[(c * dstH + gid.y) * dstW + gid.x] = (v - m[c]) * isd[c];
+    }
+}
 )";
 
 // Process-lifetime singletons (ARC keeps file-scope strong globals retained).
 id<MTLDevice> g_dev = nil;
 id<MTLCommandQueue> g_queue = nil;
-id<MTLComputePipelineState> g_pso = nil;
+id<MTLComputePipelineState> g_pso = nil;       // resize_normalize
+id<MTLComputePipelineState> g_pso_crop = nil;  // crop_resize_normalize
 std::string g_name;
 bool g_ok = false;
 
@@ -69,6 +103,9 @@ void init_once() {
             id<MTLFunction> fn = [lib newFunctionWithName:@"resize_normalize"];
             g_pso = [g_dev newComputePipelineStateWithFunction:fn error:&err];
             if (!g_pso) return;
+            id<MTLFunction> fn_crop = [lib newFunctionWithName:@"crop_resize_normalize"];
+            g_pso_crop = [g_dev newComputePipelineStateWithFunction:fn_crop error:&err];
+            if (!g_pso_crop) return;
             g_queue = [g_dev newCommandQueue];
             g_name = g_dev.name ? g_dev.name.UTF8String : "Apple GPU";
             g_ok = (g_queue != nil);
@@ -127,6 +164,57 @@ bool resize_normalize_batch(const std::vector<ImageRef>& imgs, int dst_h, int ds
             [e setBytes:dims length:sizeof(dims) atIndex:2];
             [e setBytes:mean length:3 * sizeof(float) atIndex:3];
             [e setBytes:invstd length:3 * sizeof(float) atIndex:4];
+            [e dispatchThreads:MTLSizeMake(dst_w, dst_h, 1)
+                threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        }
+        [e endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];
+        if (cb.error) return false;
+        std::memcpy(out, bdst.contents, N * per_out * sizeof(float));
+    }
+    return true;
+}
+
+bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
+                                 const std::vector<CropParams>& crops, int dst_h, int dst_w,
+                                 const float mean[3], const float std_[3], float* out) {
+    init_once();
+    if (!g_ok || imgs.empty() || dst_h <= 0 || dst_w <= 0 || crops.size() != imgs.size())
+        return false;
+
+    @autoreleasepool {
+        const size_t N = imgs.size();
+        const size_t per_out = (size_t)3 * dst_h * dst_w;
+        std::vector<size_t> off(N + 1, 0);
+        for (size_t i = 0; i < N; i++) {
+            if (!imgs[i].data || imgs[i].w <= 0 || imgs[i].h <= 0) return false;
+            off[i + 1] = off[i] + (size_t)imgs[i].w * imgs[i].h * 3;
+        }
+        id<MTLBuffer> bsrc = [g_dev newBufferWithLength:std::max<size_t>(off[N], 1)
+                                                options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bdst = [g_dev newBufferWithLength:N * per_out * sizeof(float)
+                                                options:MTLResourceStorageModeShared];
+        if (!bsrc || !bdst) return false;
+        for (size_t i = 0; i < N; i++)
+            std::memcpy((uint8_t*)bsrc.contents + off[i], imgs[i].data, off[i + 1] - off[i]);
+
+        const float invstd[3] = {1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]};
+        id<MTLCommandBuffer> cb = [g_queue commandBuffer];
+        id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
+        [e setComputePipelineState:g_pso_crop];
+        for (size_t i = 0; i < N; i++) {
+            uint32_t dims[4] = {(uint32_t)imgs[i].w, (uint32_t)imgs[i].h, (uint32_t)dst_w,
+                                (uint32_t)dst_h};
+            float crop[4] = {crops[i].x, crops[i].y, crops[i].w, crops[i].h};
+            uint32_t flip = crops[i].flip ? 1u : 0u;
+            [e setBuffer:bsrc offset:off[i] atIndex:0];
+            [e setBuffer:bdst offset:i * per_out * sizeof(float) atIndex:1];
+            [e setBytes:dims length:sizeof(dims) atIndex:2];
+            [e setBytes:crop length:sizeof(crop) atIndex:3];
+            [e setBytes:&flip length:sizeof(flip) atIndex:4];
+            [e setBytes:mean length:3 * sizeof(float) atIndex:5];
+            [e setBytes:invstd length:3 * sizeof(float) atIndex:6];
             [e dispatchThreads:MTLSizeMake(dst_w, dst_h, 1)
                 threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
         }

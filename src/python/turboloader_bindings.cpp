@@ -1094,6 +1094,52 @@ PYBIND11_MODULE(_turboloader, m) {
         py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
         py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
         "GPU resize+normalize: list of HWC uint8 RGB images -> (N,3,dst_h,dst_w) CHW float32.");
+    m.def(
+        "metal_crop_resize_normalize",
+        [](py::list images,
+           py::array_t<float, py::array::c_style | py::array::forcecast> crops,
+           py::array_t<int32_t, py::array::c_style | py::array::forcecast> flips, int dst_h,
+           int dst_w, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> py::array_t<float> {
+            const size_t N = images.size();
+            if (N == 0) throw std::runtime_error("metal_crop_resize_normalize: empty image list");
+            if (crops.ndim() != 2 || (size_t)crops.shape(0) != N || crops.shape(1) != 4)
+                throw std::runtime_error("crops must have shape (N, 4): x, y, w, h in src pixels");
+            if (flips.ndim() != 1 || (size_t)flips.shape(0) != N)
+                throw std::runtime_error("flips must have shape (N,)");
+            std::vector<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>> holds;
+            std::vector<turboloader::metal::ImageRef> refs;
+            std::vector<turboloader::metal::CropParams> cps;
+            holds.reserve(N);
+            refs.reserve(N);
+            cps.reserve(N);
+            auto cr = crops.unchecked<2>();
+            auto fl = flips.unchecked<1>();
+            for (size_t i = 0; i < N; i++) {
+                auto arr = images[i]
+                               .cast<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>>();
+                if (arr.ndim() != 3 || arr.shape(2) != 3)
+                    throw std::runtime_error("each image must be HxWx3 uint8 (RGB)");
+                refs.push_back({arr.data(), (int)arr.shape(1), (int)arr.shape(0)});
+                cps.push_back({cr(i, 0), cr(i, 1), cr(i, 2), cr(i, 3), (int)fl(i)});
+                holds.push_back(std::move(arr));
+            }
+            auto out = py::array_t<float>({(py::ssize_t)N, (py::ssize_t)3, (py::ssize_t)dst_h,
+                                           (py::ssize_t)dst_w});
+            bool ok;
+            {
+                py::gil_scoped_release rel;
+                ok = turboloader::metal::crop_resize_normalize_batch(
+                    refs, cps, dst_h, dst_w, mean.data(), std_.data(), out.mutable_data());
+            }
+            if (!ok) throw std::runtime_error("Metal crop_resize_normalize_batch failed");
+            return out;
+        },
+        py::arg("images"), py::arg("crops"), py::arg("flips"), py::arg("dst_h"),
+        py::arg("dst_w"), py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "Fused GPU RandomResizedCrop+hflip+normalize. crops:(N,4) x,y,w,h in src px; "
+        "flips:(N,) 0/1 -> (N,3,dst_h,dst_w) CHW float32.");
 #else
     m.def("metal_available", []() { return false; },
           "True if the Metal GPU transform path is available. Not compiled in this build.");

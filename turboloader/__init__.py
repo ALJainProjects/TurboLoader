@@ -2159,9 +2159,9 @@ try:
 
         __all__ += ["metal_available", "metal_device_name"]
         try:
-            from _turboloader import metal_resize_normalize
+            from _turboloader import metal_resize_normalize, metal_crop_resize_normalize
 
-            __all__ += ["metal_resize_normalize"]
+            __all__ += ["metal_resize_normalize", "metal_crop_resize_normalize"]
         except ImportError:
             pass
     except Exception:
