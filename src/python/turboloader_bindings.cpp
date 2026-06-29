@@ -25,6 +25,9 @@
 #include "../pipeline/smart_batching.hpp"
 #include "../pipeline/direct_batch_loader.hpp"
 #include "../core/parallel_for.hpp"
+#ifdef TURBOLOADER_METAL
+#include "../metal/metal_transforms.hpp"  // Apple GPU transform path (macOS arm64)
+#endif
 #include <thread>
 #include <chrono>
 
@@ -1051,6 +1054,52 @@ PYBIND11_MODULE(_turboloader, m) {
           "Get TurboLoader version\n\n"
           "Returns:\n"
           "    str: Version string matching the installed package");
+
+#ifdef TURBOLOADER_METAL
+    m.def("metal_available", []() { return turboloader::metal::available(); },
+          "True if the Metal GPU transform path is available (compiled in AND a device present).");
+    m.def("metal_device_name", []() { return std::string(turboloader::metal::device_name()); },
+          "Name of the Metal GPU device (e.g. 'Apple M4 Max'), or '' if unavailable.");
+    m.def(
+        "metal_resize_normalize",
+        [](py::list images, int dst_h, int dst_w, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> py::array_t<float> {
+            const size_t N = images.size();
+            if (N == 0) throw std::runtime_error("metal_resize_normalize: empty image list");
+            // Keep the (possibly force-cast) arrays alive for the duration of the GPU call.
+            std::vector<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>> holds;
+            std::vector<turboloader::metal::ImageRef> refs;
+            holds.reserve(N);
+            refs.reserve(N);
+            for (auto item : images) {
+                auto arr =
+                    item.cast<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>>();
+                if (arr.ndim() != 3 || arr.shape(2) != 3)
+                    throw std::runtime_error("each image must be HxWx3 uint8 (RGB)");
+                refs.push_back({arr.data(), (int)arr.shape(1), (int)arr.shape(0)});
+                holds.push_back(std::move(arr));
+            }
+            auto out = py::array_t<float>({(py::ssize_t)N, (py::ssize_t)3, (py::ssize_t)dst_h,
+                                           (py::ssize_t)dst_w});
+            bool ok;
+            {
+                py::gil_scoped_release rel;
+                ok = turboloader::metal::resize_normalize_batch(refs, dst_h, dst_w, mean.data(),
+                                                                std_.data(), out.mutable_data());
+            }
+            if (!ok) throw std::runtime_error("Metal resize_normalize_batch failed");
+            return out;
+        },
+        py::arg("images"), py::arg("dst_h"), py::arg("dst_w"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "GPU resize+normalize: list of HWC uint8 RGB images -> (N,3,dst_h,dst_w) CHW float32.");
+#else
+    m.def("metal_available", []() { return false; },
+          "True if the Metal GPU transform path is available. Not compiled in this build.");
+    m.def("metal_device_name", []() { return std::string(); },
+          "Name of the Metal GPU device. Not compiled in this build.");
+#endif
 
     m.def("features", []() {
         py::dict features;

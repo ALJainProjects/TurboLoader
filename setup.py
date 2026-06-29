@@ -378,12 +378,28 @@ def get_extensions():
         if omp["lib"]:
             library_dirs.append(omp["lib"])
 
+    # Metal GPU transform path: macOS arm64 only. Adds the Obj-C++ .mm (clang compiles it
+    # as Objective-C++ by file extension) plus a -DTURBOLOADER_METAL define so the binding
+    # exposes the GPU entry points; build_ext links the Metal framework. Opt out with
+    # TURBOLOADER_ENABLE_METAL=0. On Linux/Intel it is simply never added, so those wheels
+    # are byte-for-byte unaffected.
+    extra_sources = []
+    extra_macros = []
+    if (
+        _macos
+        and _plat.machine().lower() in ("arm64", "aarch64")
+        and os.environ.get("TURBOLOADER_ENABLE_METAL", "1") == "1"
+    ):
+        extra_sources.append("src/metal/metal_transforms.mm")
+        extra_macros.append(("TURBOLOADER_METAL", "1"))
+
     return [
         Extension(
             "_turboloader",
             sources=[
                 "src/python/turboloader_bindings.cpp",
-            ],
+            ]
+            + extra_sources,
             include_dirs=include_dirs,
             library_dirs=library_dirs,
             libraries=[
@@ -396,7 +412,7 @@ def get_extensions():
             language="c++",
             extra_compile_args=compile_args,
             extra_link_args=link_args,
-            define_macros=[("TURBOLOADER_VERSION", '"{}"'.format(VERSION))],
+            define_macros=[("TURBOLOADER_VERSION", '"{}"'.format(VERSION))] + extra_macros,
         ),
     ]
 
@@ -438,6 +454,13 @@ class BuildExt(build_ext):
         ct = self.compiler.compiler_type
         arch = platform.machine().lower()
         system = platform.system().lower()
+
+        # Teach distutils to accept Objective-C++ (.mm) sources on macOS (the Metal
+        # transform unit). The Extension language is "c++", so every source — including
+        # .mm — is compiled with the C++ frontend (clang++), which handles Objective-C++
+        # by file extension.
+        if system == "darwin" and ".mm" not in self.compiler.src_extensions:
+            self.compiler.src_extensions.append(".mm")
 
         # On macOS, strip problematic flags from Python's embedded compiler configuration
         # python.org Python embeds CFLAGS/CPPFLAGS that can interfere with libc++ headers
@@ -509,6 +532,10 @@ class BuildExt(build_ext):
                     for lib_dir in ext.library_dirs:
                         if lib_dir and os.path.exists(lib_dir):
                             link_opts.append(f"-Wl,-rpath,{lib_dir}")
+                    # Link the Metal framework when the GPU transform path is compiled in
+                    # (presence of the -DTURBOLOADER_METAL macro is the single source of truth).
+                    if any(name == "TURBOLOADER_METAL" for name, _ in ext.define_macros):
+                        link_opts += ["-framework", "Metal", "-framework", "Foundation"]
                 else:
                     # Linux x86 SIMD flags
                     if "x86" in arch or "amd64" in arch:

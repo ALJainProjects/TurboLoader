@@ -2151,6 +2151,22 @@ try:
     except Exception:
         pass
 
+    # Metal GPU transform path. metal_available()/metal_device_name() exist in every
+    # build (they report False/"" when not compiled in); metal_resize_normalize only
+    # exists on a macOS arm64 build with Metal enabled.
+    try:
+        from _turboloader import metal_available, metal_device_name
+
+        __all__ += ["metal_available", "metal_device_name"]
+        try:
+            from _turboloader import metal_resize_normalize
+
+            __all__ += ["metal_resize_normalize"]
+        except ImportError:
+            pass
+    except Exception:
+        pass
+
     # Import PyTorch compatibility layer
     try:
         from turboloader.pytorch_compat import (
