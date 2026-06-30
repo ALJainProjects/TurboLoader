@@ -14,8 +14,6 @@
 #ifdef HAVE_NVIMGCODEC
 #include <nvimgcodec.h>
 #include <dlfcn.h>
-#include <atomic>
-#include "../core/parallel_for.hpp"  // GIL-free thread pool for the per-image setup fan-out
 #endif
 
 #include <algorithm>
@@ -523,12 +521,6 @@ static float* g_nv_out_pool[NV_OUT_RING] = {nullptr};
 static size_t g_nv_out_cap[NV_OUT_RING] = {0};
 static int g_nv_out_idx = 0;
 
-// DEDICATED thread pool for the per-image setup fan-out. The GLOBAL pool is single-caller
-// (shared body_/cursor_/remaining_ state) and the loader's reader thread already drives it via
-// read_files; running the setup loop on it concurrently corrupts that state -> crash. A private
-// pool used only by the (serialized) decode thread keeps each pool single-caller.
-static turboloader::ThreadPool* g_nv_pool = nullptr;
-
 template <typename T>
 static bool load_sym(void* h, T& fn, const char* name) {
     fn = reinterpret_cast<T>(dlsym(h, name));
@@ -582,11 +574,6 @@ bool nvimgcodec_pipeline_init(const char* lib_path, const char* ext_path, int de
         return false;
     }
     if (cudaStreamCreate(&g_nv_stream) != cudaSuccess) return false;
-    if (!g_nv_pool) {
-        unsigned hc = std::thread::hardware_concurrency();
-        if (hc < 2) hc = 2;
-        g_nv_pool = new turboloader::ThreadPool(hc - 1);  // + the decode thread == hc
-    }
     g_nv_ready = true;
     return true;
 }
@@ -611,41 +598,29 @@ uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& 
     dp.struct_size = sizeof(dp);
     dp.apply_exif_orientation = 1;
 
-    // Per-image setup (parse header, size the device buffer, wrap input+output handles) is
-    // independent per image, so fan it out across the thread pool with the GIL released — this
-    // is the host-side work DALI parallelizes across num_threads. The batched decode and the
-    // resize kernel stay single-call on g_nv_stream.
-    std::atomic<bool> ok{true};
-    g_nv_pool->parallel_for(N, [&](size_t ii) {
-        const int i = (int)ii;
-        if (!ok.load(std::memory_order_relaxed)) return;
+    // Per-image setup: parse the JPEG header for dims, size the device buffer, wrap input+output
+    // handles. Kept SERIAL on the decode thread — these 64 ops are too cheap to amortize thread-
+    // pool dispatch, and fanning them out (measured) regressed throughput vs the batched decode,
+    // which already parallelizes internally across nvImageCodec's own threads.
+    for (int i = 0; i < N; i++) {
         // Reuse the handle if non-null (nvImageCodec rebinds it to the new source).
         if (nv_CodeStreamFromHostMem(g_nv_instance, &g_nv_streams[i], jpegs[i], sizes[i],
-                                     nullptr) != NVIMGCODEC_STATUS_SUCCESS) {
-            ok = false;
-            return;
-        }
+                                     nullptr) != NVIMGCODEC_STATUS_SUCCESS)
+            return 0;
         nvimgcodecImageInfo_t si{};
         si.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
         si.struct_size = sizeof(si);
-        if (nv_CodeStreamGetImageInfo(g_nv_streams[i], &si) != NVIMGCODEC_STATUS_SUCCESS) {
-            ok = false;
-            return;
-        }
+        if (nv_CodeStreamGetImageInfo(g_nv_streams[i], &si) != NVIMGCODEC_STATUS_SUCCESS) return 0;
         const int W = (int)si.plane_info[0].width, H = (int)si.plane_info[0].height;
-        if (W <= 0 || H <= 0) {
-            ok = false;
-            return;
-        }
+        if (W <= 0 || H <= 0) return 0;
         ws[i] = W;
         hs[i] = H;
         const size_t need = (size_t)W * H * 3;
-        if (need > g_nv_incap[i]) {  // grow only (steady state: no alloc); cudaMalloc is thread-safe
+        if (need > g_nv_incap[i]) {
             if (g_nv_inbuf[i]) cudaFree(g_nv_inbuf[i]);
             if (cudaMalloc(&g_nv_inbuf[i], need) != cudaSuccess) {
                 g_nv_incap[i] = 0;
-                ok = false;
-                return;
+                return 0;
             }
             g_nv_incap[i] = need;
         }
@@ -670,12 +645,9 @@ uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& 
         oi.buffer = g_nv_inbuf[i];
         oi.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
         oi.cuda_stream = g_nv_stream;
-        if (nv_ImageCreate(g_nv_instance, &g_nv_images[i], &oi) != NVIMGCODEC_STATUS_SUCCESS) {
-            ok = false;
-            return;
-        }
-    });
-    if (!ok.load()) return 0;
+        if (nv_ImageCreate(g_nv_instance, &g_nv_images[i], &oi) != NVIMGCODEC_STATUS_SUCCESS)
+            return 0;
+    }
 
     nvimgcodecFuture_t fut = nullptr;
     if (nv_DecoderDecode(g_nv_decoder, g_nv_streams.data(), g_nv_images.data(), N, &dp, &fut) !=
