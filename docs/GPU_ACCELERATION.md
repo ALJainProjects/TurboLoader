@@ -44,25 +44,37 @@ proven bit-exact vs libjpeg (see `experiments/metal/`).
 - **Roadmap:** GPU-resident output (hand back an MPS tensor with no copy-out) for zero-copy
   Apple-Silicon PyTorch training. Not done yet.
 
-## CUDA — written, gated, UNVALIDATED here
+## CUDA — transforms VALIDATED on a Jetson Orin; nvJPEG decode still pending
 
-A full CUDA path is **written and wired**, mirroring the proven Metal stack — but there is
-no NVIDIA GPU on the dev/CI machines, so **none of it has been compiled or run**. It ships
-nowhere by default; `cuda_available()` returns `False`. Treat it as ready-to-validate, not
-proven.
+The CUDA transform path is **real**: the kernels (a faithful port of the bit-exact Metal
+math) were compiled with nvcc (CUDA 11.4, aarch64) and run on an actual **Jetson Orin**
+GPU — `cuda_resize_normalize` matches the numpy bilinear reference to **3.2e-05** (bit-exact,
+same as Metal). It still ships nowhere by default (off-CUDA `cuda_available()` is `False`);
+it builds with the flags below.
 
-Enable on a real CUDA box (needs `nvcc` + the CUDA toolkit):
+The **nvJPEG decode** path (`cuda_decode_jpeg`) is the one still unproven — Jetson ships
+only a *tegra* `libnvjpeg` (no `nvjpeg.h`, different API), so it's gated behind a separate
+`TURBOLOADER_ENABLE_NVJPEG=1` and needs a box with the **standard** CUDA nvJPEG (e.g. a
+desktop/server with the full CUDA toolkit).
+
+Enable on a real CUDA box (needs `nvcc` + the CUDA toolkit; use gcc 10+ for C++20):
 
 ```bash
-TURBOLOADER_ENABLE_CUDA=1 CUDA_HOME=/usr/local/cuda pip install -e . --no-build-isolation
+# CUDA transforms only (validated on Jetson Orin / CUDA 11.4):
+CC=gcc-10 CXX=g++-10 CUDA_HOME=/usr/local/cuda TURBOLOADER_ENABLE_CUDA=1 \
+  pip install -e . --no-build-isolation
+
+# + nvJPEG decode, on a box with the STANDARD CUDA nvJPEG (not Jetson tegra):
+#   add TURBOLOADER_ENABLE_NVJPEG=1
+# Jetson: nvJPEG/other CUDA libs in a non-standard dir? add TURBOLOADER_CUDA_LIB=<dir>
 ```
 
 This:
 - compiles **`src/cuda/cuda_transforms.cu`** with `nvcc` (the transform kernels — a
   line-for-line port of the bit-exact Metal `resize_normalize` / `crop_resize_normalize`),
-  defining `TURBOLOADER_CUDA_TRANSFORMS`;
-- defines `HAVE_NVJPEG` and links `cudart` + `nvjpeg`, activating the **nvJPEG full-GPU
-  decoder** (`src/decode/nvjpeg_decoder.hpp`).
+  defining `TURBOLOADER_CUDA_TRANSFORMS` and linking `cudart`;
+- with `TURBOLOADER_ENABLE_NVJPEG=1`, also defines `HAVE_NVJPEG` and links `nvjpeg`,
+  activating the **nvJPEG full-GPU decoder** (`src/decode/nvjpeg_decoder.hpp`).
 
 Then these become available (CUDA analogues of the Metal API):
 
