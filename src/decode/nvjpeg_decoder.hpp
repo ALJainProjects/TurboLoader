@@ -91,7 +91,7 @@ public:
         // Try to initialize GPU decoder
         if (!initialize_gpu()) {
             // Fallback to CPU decoder
-            cpu_decoder_ = std::make_unique<JpegDecoder>();
+            cpu_decoder_ = std::make_unique<JPEGDecoder>();
             gpu_available_ = false;
         } else {
             gpu_available_ = true;
@@ -253,97 +253,51 @@ private:
             return false;
         }
 
-        // Parse JPEG stream to get dimensions
-        nvjpegStatus_t status = nvjpegJpegStreamParse(
-            nvjpeg_handle_,
-            jpeg_data,
-            jpeg_size,
-            0,  // save_metadata
-            0,  // save_stream
-            jpeg_stream_
-        );
-
+        // Simple, version-stable nvJPEG path: nvjpegGetImageInfo for dimensions, then a
+        // single nvjpegDecode (it parses + decodes internally). The advanced
+        // host/transfer/device API needs a separate nvjpegJpegDecoder_t and is brittle
+        // across CUDA versions (the original code mis-passed nvjpegJpegState_t there).
+        int n_components = 0;
+        nvjpegChromaSubsampling_t subsampling;
+        int widths[NVJPEG_MAX_COMPONENT] = {0};
+        int heights[NVJPEG_MAX_COMPONENT] = {0};
+        nvjpegStatus_t status = nvjpegGetImageInfo(
+            nvjpeg_handle_, jpeg_data, jpeg_size, &n_components, &subsampling, widths, heights);
         if (status != NVJPEG_STATUS_SUCCESS) {
-            result.error_message = "Failed to parse JPEG stream";
+            result.error_message = "nvjpegGetImageInfo failed";
             return false;
         }
-
-        // Get image dimensions
-        nvjpegJpegEncoding encoding;
-        unsigned int width, height;
-        nvjpegJpegStreamGetFrameDimensions(jpeg_stream_, &width, &height);
-        nvjpegJpegStreamGetJpegEncoding(jpeg_stream_, &encoding);
-
+        const int width = widths[0], height = heights[0];
         result.width = width;
         result.height = height;
-        result.channels = 3;  // RGB
+        result.channels = 3;  // interleaved RGB
 
-        // Allocate output image
-        nvjpegImage_t output_image;
-        for (int c = 0; c < 3; ++c) {
-            output_image.channel[c] = nullptr;
-            output_image.pitch[c] = width * sizeof(uint8_t);
-        }
-
-        // For interleaved format, allocate single buffer
-        size_t output_size = width * height * 3;
+        const size_t output_size = (size_t)width * height * 3;
         result.data.resize(output_size);
-
-        // Allocate GPU memory
         uint8_t* d_output = nullptr;
-        cudaMalloc(&d_output, output_size);
-
-        output_image.channel[0] = d_output;
-        output_image.pitch[0] = width * 3;  // Interleaved
-
-        // Decode
-        status = nvjpegDecodeJpegHost(
-            nvjpeg_handle_,
-            jpeg_state_,
-            decode_params_,
-            jpeg_stream_
-        );
-
-        if (status != NVJPEG_STATUS_SUCCESS) {
-            cudaFree(d_output);
-            result.error_message = "Failed to decode JPEG on host";
+        if (cudaMalloc(&d_output, output_size) != cudaSuccess) {
+            result.error_message = "cudaMalloc failed";
             return false;
         }
 
-        // Transfer to device and decode
-        status = nvjpegDecodeJpegTransferToDevice(
-            nvjpeg_handle_,
-            jpeg_state_,
-            jpeg_stream_,
-            stream_
-        );
+        nvjpegImage_t output_image;
+        for (int c = 0; c < NVJPEG_MAX_COMPONENT; ++c) {
+            output_image.channel[c] = nullptr;
+            output_image.pitch[c] = 0;
+        }
+        output_image.channel[0] = d_output;          // interleaved RGB goes in channel 0
+        output_image.pitch[0] = (size_t)width * 3;
 
+        status = nvjpegDecode(nvjpeg_handle_, jpeg_state_, jpeg_data, jpeg_size,
+                              NVJPEG_OUTPUT_RGBI, &output_image, stream_);
         if (status != NVJPEG_STATUS_SUCCESS) {
             cudaFree(d_output);
-            result.error_message = "Failed to transfer JPEG to device";
+            result.error_message = "nvjpegDecode failed";
             return false;
         }
 
-        status = nvjpegDecodeJpegDevice(
-            nvjpeg_handle_,
-            jpeg_state_,
-            &output_image,
-            stream_
-        );
-
-        if (status != NVJPEG_STATUS_SUCCESS) {
-            cudaFree(d_output);
-            result.error_message = "Failed to decode JPEG on device";
-            return false;
-        }
-
-        // Wait for completion
         cudaStreamSynchronize(stream_);
-
-        // Copy result back to host
         cudaMemcpy(result.data.data(), d_output, output_size, cudaMemcpyDeviceToHost);
-
-        // Free GPU memory
         cudaFree(d_output);
 
         return true;
