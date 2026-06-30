@@ -185,7 +185,13 @@ static void nvjpeg_init() {
     static bool done = false;
     if (done) return;
     done = true;
-    if (nvjpegCreateSimple(&g_nvjpeg) != NVJPEG_STATUS_SUCCESS) return;
+    // Prefer the hardware JPEG decoder (Ampere+), then GPU-hybrid, then the basic backend —
+    // this is what DALI uses for its decode speed. nvjpegCreateEx falls through gracefully.
+    nvjpegStatus_t s = nvjpegCreateEx(NVJPEG_BACKEND_HARDWARE, nullptr, nullptr, 0, &g_nvjpeg);
+    if (s != NVJPEG_STATUS_SUCCESS)
+        s = nvjpegCreateEx(NVJPEG_BACKEND_GPU_HYBRID, nullptr, nullptr, 0, &g_nvjpeg);
+    if (s != NVJPEG_STATUS_SUCCESS) s = nvjpegCreateSimple(&g_nvjpeg);
+    if (s != NVJPEG_STATUS_SUCCESS) return;
     if (nvjpegJpegStateCreate(g_nvjpeg, &g_batched_state) != NVJPEG_STATUS_SUCCESS) return;
     cudaStreamCreate(&g_stream);
     g_nvjpeg_ready = true;
