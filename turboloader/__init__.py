@@ -2214,6 +2214,14 @@ try:
     except Exception:
         pass
 
+    # CUDA end-to-end image loader (NVIDIA): nvJPEG decode + cuda_resize_normalize.
+    try:
+        from turboloader.cuda_loader import CudaImageLoader
+
+        __all__ += ["CudaImageLoader"]
+    except Exception:
+        pass
+
     # Import PyTorch compatibility layer
     try:
         from turboloader.pytorch_compat import (
