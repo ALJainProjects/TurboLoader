@@ -2208,6 +2208,18 @@ try:
             ]
         except ImportError:
             pass
+        try:
+            from _turboloader import (
+                cuda_nvimgcodec_init,
+                cuda_nvimgcodec_decode_resize_normalize,
+            )
+
+            __all__ += [
+                "cuda_nvimgcodec_init",
+                "cuda_nvimgcodec_decode_resize_normalize",
+            ]
+        except ImportError:
+            pass
     except Exception:
         pass
 

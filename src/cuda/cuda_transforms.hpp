@@ -73,5 +73,26 @@ uintptr_t resize_normalize_device_batch(const std::vector<uintptr_t>& d_imgs,
                                         int dst_h, int dst_w, const float mean[3],
                                         const float std_[3]);
 
+// ---- In-C++ nvImageCodec decode pipeline (needs HAVE_NVIMGCODEC) ----
+// DALI moved off nvjpegDecodeBatched to nvImageCodec, NVIDIA's modern codec library
+// (~21.6k img/s decode on a 3090). These run the WHOLE decode->resize->normalize->batch path
+// inside one C++ call so a Python loader pays no per-image overhead and the GIL stays released
+// the entire time — the last step to close the gap to DALI's GIL-free C++ data path.
+
+// Initialize the pipeline once: dlopen libnvimgcodec at `lib_path` (the wheel's
+// libnvimgcodec.so.0), load codec extensions from `ext_path` (the wheel's extensions dir, may
+// be empty for auto-discovery), and create the instance + decoder on `device_id`
+// (NVIMGCODEC_DEVICE_CURRENT = -1). Returns false if built without nvImageCodec or on error.
+bool nvimgcodec_pipeline_init(const char* lib_path, const char* ext_path, int device_id);
+
+// Decode a batch of JPEG byte buffers on the GPU and resize+normalize -> device pointer of the
+// (N,3,dst_h,dst_w) CHW float32 result (valid until the next NV_OUT_RING-th call). nvImageCodec
+// decodes straight into device buffers; the resize_normalize kernel runs on the SAME CUDA
+// stream (auto-ordered after decode, no cross-stream sync). Returns 0 on error / if not built
+// with nvImageCodec / before init.
+uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& jpegs,
+                                             const std::vector<size_t>& sizes, int dst_h,
+                                             int dst_w, const float mean[3], const float std_[3]);
+
 }  // namespace cuda
 }  // namespace turboloader

@@ -83,16 +83,37 @@ class CudaImageLoader:
         # the C++ output ring (OUT_RING=4: producing + queued + consuming slots).
         self._prefetch = max(0, min(int(prefetch), 2))
         # nvImageCodec backend (decode="nvimgcodec"): NVIDIA's modern codec, ~2x nvJPEG here.
-        # It decodes on the GPU; our transform reads its device images in place (zero copies),
-        # reaching ~17.7k img/s on a 3090 (vs ~9k with nvJPEG) — DALI-competitive.
+        # Two implementations, fastest first:
+        #   self._nv_cpp     -> the WHOLE decode+resize+normalize+batch runs in one GIL-released
+        #                       C++ call (cuda_nvimgcodec_decode_resize_normalize). No per-image
+        #                       Python — the path that chases DALI's GIL-free C++ pipeline.
+        #   self._nvimgcodec -> Python nvimgcodec.Decoder + cuda_resize_normalize_from_device
+        #                       (still GPU decode, but per-batch Python orchestration overhead).
+        self._nv_cpp = False
         self._nvimgcodec = None
-        if decode == "nvimgcodec" and hasattr(t, "cuda_resize_normalize_from_device"):
-            try:
-                from nvidia import nvimgcodec
+        if decode == "nvimgcodec":
+            if hasattr(t, "cuda_nvimgcodec_init"):
+                try:
+                    import os as _os
 
-                self._nvimgcodec = nvimgcodec.Decoder()
-            except Exception:
-                self._nvimgcodec = None
+                    from nvidia import nvimgcodec as _nv  # loads libnvimgcodec.so.0 + deps
+
+                    _d = _os.path.dirname(_nv.__file__)
+                    if t.cuda_nvimgcodec_init(
+                        _os.path.join(_d, "libnvimgcodec.so.0"),
+                        _os.path.join(_d, "extensions"),
+                        -1,
+                    ):
+                        self._nv_cpp = True
+                except Exception:
+                    self._nv_cpp = False
+            if not self._nv_cpp and hasattr(t, "cuda_resize_normalize_from_device"):
+                try:
+                    from nvidia import nvimgcodec
+
+                    self._nvimgcodec = nvimgcodec.Decoder()
+                except Exception:
+                    self._nvimgcodec = None
         self.paths = list(paths)
         self.batch_size = int(batch_size)
         self.image_size = image_size if isinstance(image_size, tuple) else (image_size, image_size)
@@ -131,6 +152,61 @@ class CudaImageLoader:
 
         def _load(i):
             return decode(_read(i))
+
+        # Fastest path: the whole decode+resize+normalize+batch runs in ONE GIL-released C++
+        # call (in-C++ nvImageCodec). Python only reads bytes and wraps the output pointer — no
+        # per-image orchestration — so the 3-stage pipeline (read || C++ decode+transform ||
+        # consume) keeps the GPU saturated the way DALI's GIL-free C++ pipeline does.
+        if self._nv_cpp:
+            pipe = self._t.cuda_nvimgcodec_decode_resize_normalize
+            read_files = getattr(self._t, "read_files", None)
+
+            def _read_batch(bidx):
+                if read_files is not None:
+                    return read_files([paths[int(i)] for i in bidx])
+                return [_read(i) for i in bidx]
+
+            def _cpp_batch(jpegs):
+                ptr = pipe(jpegs, dh, dw, mean=self.mean, std=self.std)
+                return _CudaArray(ptr, (len(jpegs), 3, dh, dw))
+
+            if self._prefetch > 0:
+                bytes_q = queue.Queue(maxsize=self._prefetch)
+                out_q = queue.Queue(maxsize=self._prefetch)
+                sentinel = object()
+
+                def _reader():
+                    try:
+                        for start in range(0, end, bs):
+                            bytes_q.put(_read_batch(idx[start : start + bs]))
+                    finally:
+                        bytes_q.put(sentinel)
+
+                def _xform():
+                    try:
+                        while True:
+                            jb = bytes_q.get()
+                            if jb is sentinel:
+                                break
+                            out_q.put(_cpp_batch(jb))
+                    finally:
+                        out_q.put(sentinel)
+
+                tr = threading.Thread(target=_reader, daemon=True)
+                tt = threading.Thread(target=_xform, daemon=True)
+                tr.start()
+                tt.start()
+                while True:
+                    item = out_q.get()
+                    if item is sentinel:
+                        break
+                    yield item
+                tr.join(timeout=0.5)
+                tt.join(timeout=0.5)
+            else:
+                for start in range(0, end, bs):
+                    yield _cpp_batch(_read_batch(idx[start : start + bs]))
+            return
 
         # nvImageCodec path (decode="nvimgcodec"): its GPU decoder produces HWC uint8 RGB
         # device images; we hand their device pointers straight to the transform kernel (zero

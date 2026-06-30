@@ -1432,6 +1432,50 @@ PYBIND11_MODULE(_turboloader, m) {
         "pointers (ptrs) + dims (ws,hs): resize+normalize -> device pointer of (N,3,dst_h,dst_w) "
         "float32. Wrap via __cuda_array_interface__. Zero extra copies.");
 #endif
+#ifdef HAVE_NVIMGCODEC
+    m.def(
+        "cuda_nvimgcodec_init",
+        [](const std::string& lib_path, const std::string& ext_path, int device_id) {
+            return turboloader::cuda::nvimgcodec_pipeline_init(lib_path.c_str(), ext_path.c_str(),
+                                                               device_id);
+        },
+        py::arg("lib_path"), py::arg("ext_path") = std::string(), py::arg("device_id") = -1,
+        "Initialize the in-C++ nvImageCodec decode pipeline: dlopen libnvimgcodec at lib_path "
+        "(the wheel's libnvimgcodec.so.0), load codec extensions from ext_path (the wheel's "
+        "extensions dir), create instance+decoder. Returns True on success. Call once.");
+    m.def(
+        "cuda_nvimgcodec_decode_resize_normalize",
+        [](py::list jpegs, int dst_h, int dst_w, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> uintptr_t {
+            const ssize_t n = py::len(jpegs);
+            std::vector<const uint8_t*> ptrs;
+            std::vector<size_t> sizes;
+            ptrs.reserve(n);
+            sizes.reserve(n);
+            for (auto h : jpegs) {  // GIL held: pull raw (ptr,len) out of each bytes object
+                char* buf = nullptr;
+                ssize_t sz = 0;
+                if (PyBytes_AsStringAndSize(h.ptr(), &buf, &sz) != 0) throw py::error_already_set();
+                ptrs.push_back(reinterpret_cast<const uint8_t*>(buf));
+                sizes.push_back((size_t)sz);
+            }
+            uintptr_t out;
+            {  // jpegs (the list) keeps the bytes alive across the GIL-released decode
+                py::gil_scoped_release rel;
+                out = turboloader::cuda::nvimgcodec_decode_resize_normalize(
+                    ptrs, sizes, dst_h, dst_w, mean.data(), std_.data());
+            }
+            if (!out) throw std::runtime_error("cuda_nvimgcodec_decode_resize_normalize failed");
+            return out;
+        },
+        py::arg("jpegs"), py::arg("dst_h"), py::arg("dst_w"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "In-C++ nvImageCodec pipeline: GPU-decode a batch of JPEG byte buffers + resize/normalize "
+        "-> CUDA device pointer (int) of the (N,3,dst_h,dst_w) float32 result (valid until the "
+        "4th-next call). The GIL is released for the whole decode+transform. Wrap zero-copy via "
+        "__cuda_array_interface__.");
+#endif
 #else
     m.def("cuda_available", []() { return false; },
           "True if the CUDA transform path is available. Not compiled in this build.");

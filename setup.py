@@ -419,6 +419,15 @@ def get_extensions():
         if os.environ.get("TURBOLOADER_ENABLE_NVJPEG", "0") == "1":
             extra_macros.append(("HAVE_NVJPEG", "1"))
             extra_libs += ["nvjpeg"]
+        # nvImageCodec (NVIDIA's modern codec; what DALI uses). dlopen'd at runtime, so we link
+        # nothing — only need the header (TURBOLOADER_NVIMGCODEC_INCLUDE, the wheel's include
+        # dir) and libdl for dlopen. Opt in with TURBOLOADER_ENABLE_NVIMGCODEC=1.
+        if os.environ.get("TURBOLOADER_ENABLE_NVIMGCODEC", "0") == "1":
+            extra_macros.append(("HAVE_NVIMGCODEC", "1"))
+            extra_libs += ["dl"]
+            _nvinc = os.environ.get("TURBOLOADER_NVIMGCODEC_INCLUDE")
+            if _nvinc:
+                include_dirs.append(_nvinc)
         # Extra lib dir for non-standard CUDA library locations (e.g. Jetson's tegra dir).
         _cuda_lib = os.environ.get("TURBOLOADER_CUDA_LIB")
         if _cuda_lib:
@@ -529,6 +538,12 @@ class BuildExt(build_ext):
                 _cinc = os.environ.get("TURBOLOADER_CUDA_INCLUDE")
                 if _cinc:
                     cmd += ["-I", _cinc]
+            # nvImageCodec pipeline in the .cu needs its header + the HAVE_NVIMGCODEC macro.
+            if os.environ.get("TURBOLOADER_ENABLE_NVIMGCODEC", "0") == "1":
+                cmd += ["-DHAVE_NVIMGCODEC=1"]
+                _nvinc = os.environ.get("TURBOLOADER_NVIMGCODEC_INCLUDE")
+                if _nvinc:
+                    cmd += ["-I", _nvinc]
             print("[turboloader] compiling CUDA:", " ".join(cmd))
             subprocess.check_call(cmd)
             for ext in self.extensions:
