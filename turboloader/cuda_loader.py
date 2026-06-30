@@ -140,8 +140,8 @@ class CudaImageLoader:
                     return read_files([paths[int(i)] for i in bidx])
                 return [_read(i) for i in bidx]
 
-            def _nvimg_batch(bidx):  # imgs held alive across the (synchronous) transform
-                imgs = dec.decode(_read_batch(bidx))
+            def _decode_transform(jpegs):  # imgs held alive across the (synchronous) transform
+                imgs = dec.decode(jpegs)
                 cai = [im.__cuda_array_interface__ for im in imgs]
                 ptr = xform(
                     [c["data"][0] for c in cai], [c["shape"][1] for c in cai],
@@ -150,31 +150,49 @@ class CudaImageLoader:
                 return _CudaArray(ptr, (len(imgs), 3, dh, dw))
 
             if self._prefetch > 0:
-                # A producer thread does the WHOLE batch (read + GPU decode+transform + build the
-                # wrapper) while the consumer adopts the previous batch's tensor — so the per-batch
-                # Python overhead (list comprehensions, byte reads) overlaps the consumer's work.
-                # Splitting read into its own thread was slower: the GIL serializes the list-comps.
-                q = queue.Queue(maxsize=self._prefetch)
+                # 3-stage pipeline overlaps disk-read || GPU decode+transform || consumer:
+                #   reader thread (GIL-released read_files) -> bytes_q
+                #   transform thread (nvImageCodec decode + resize/normalize) -> out_q
+                #   this generator yields; the caller consumes its tensor.
+                # Measured fastest (~14.9k img/s) vs a single producer (~13.9k) on a 3090 — each
+                # stage runs while the others do, instead of serializing read->decode->consume.
+                # prefetch<=2 keeps live outputs within the C++ ring (OUT_RING=4): consuming +
+                # out_q (<=2) + the batch being transformed.
+                bytes_q = queue.Queue(maxsize=self._prefetch)
+                out_q = queue.Queue(maxsize=self._prefetch)
                 sentinel = object()
 
-                def _producer():
+                def _reader():
                     try:
                         for start in range(0, end, bs):
-                            q.put(_nvimg_batch(idx[start : start + bs]))
+                            bytes_q.put(_read_batch(idx[start : start + bs]))
                     finally:
-                        q.put(sentinel)
+                        bytes_q.put(sentinel)
 
-                th = threading.Thread(target=_producer, daemon=True)
-                th.start()
+                def _transformer():
+                    try:
+                        while True:
+                            jpegs = bytes_q.get()
+                            if jpegs is sentinel:
+                                break
+                            out_q.put(_decode_transform(jpegs))
+                    finally:
+                        out_q.put(sentinel)
+
+                tr = threading.Thread(target=_reader, daemon=True)
+                tt = threading.Thread(target=_transformer, daemon=True)
+                tr.start()
+                tt.start()
                 while True:
-                    item = q.get()
+                    item = out_q.get()
                     if item is sentinel:
                         break
                     yield item
-                th.join(timeout=0.5)
+                tr.join(timeout=0.5)
+                tt.join(timeout=0.5)
             else:
                 for start in range(0, end, bs):
-                    yield _nvimg_batch(idx[start : start + bs])
+                    yield _decode_transform(_read_batch(idx[start : start + bs]))
             return
 
         gpu_out = (
