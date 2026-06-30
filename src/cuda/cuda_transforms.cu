@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -185,6 +186,17 @@ static int g_out_idx = 0;
 static int g_batched_max = 0;
 static std::mutex g_pool_mutex;
 
+// Advanced/decoupled nvJPEG API for host/device PIPELINING (DALI-style): double-buffered
+// states + streams so image N+1's host Huffman (CPU) overlaps image N's device IDCT (GPU).
+static nvjpegJpegDecoder_t g_decoder = nullptr;
+static nvjpegJpegState_t g_pipe_state[2] = {nullptr, nullptr};
+static nvjpegBufferPinned_t g_pinned[2] = {nullptr, nullptr};
+static nvjpegBufferDevice_t g_device[2] = {nullptr, nullptr};
+static nvjpegJpegStream_t g_jstream[2] = {nullptr, nullptr};
+static cudaStream_t g_pstream[2] = {nullptr, nullptr};
+static nvjpegDecodeParams_t g_dparams = nullptr;
+static bool g_pipe_ready = false;
+
 static void nvjpeg_init() {
     static bool done = false;
     if (done) return;
@@ -199,6 +211,67 @@ static void nvjpeg_init() {
     if (nvjpegJpegStateCreate(g_nvjpeg, &g_batched_state) != NVJPEG_STATUS_SUCCESS) return;
     cudaStreamCreate(&g_stream);
     g_nvjpeg_ready = true;
+
+    // Set up the decoupled (advanced) API for pipelined decode. Best-effort: if any of it
+    // fails, g_pipe_ready stays false and we fall back to nvjpegDecodeBatched.
+    if (nvjpegDecoderCreate(g_nvjpeg, NVJPEG_BACKEND_GPU_HYBRID, &g_decoder) ==
+        NVJPEG_STATUS_SUCCESS) {
+        bool ok = true;
+        for (int b = 0; b < 2 && ok; b++) {
+            ok = ok && nvjpegDecoderStateCreate(g_nvjpeg, g_decoder, &g_pipe_state[b]) ==
+                           NVJPEG_STATUS_SUCCESS;
+            ok = ok && nvjpegBufferPinnedCreate(g_nvjpeg, nullptr, &g_pinned[b]) ==
+                           NVJPEG_STATUS_SUCCESS;
+            ok = ok && nvjpegBufferDeviceCreate(g_nvjpeg, nullptr, &g_device[b]) ==
+                           NVJPEG_STATUS_SUCCESS;
+            ok = ok &&
+                 nvjpegJpegStreamCreate(g_nvjpeg, &g_jstream[b]) == NVJPEG_STATUS_SUCCESS;
+            cudaStreamCreate(&g_pstream[b]);
+        }
+        ok = ok &&
+             nvjpegDecodeParamsCreate(g_nvjpeg, &g_dparams) == NVJPEG_STATUS_SUCCESS;
+        if (ok) {
+            nvjpegDecodeParamsSetOutputFormat(g_dparams, NVJPEG_OUTPUT_RGBI);
+            g_pipe_ready = true;
+        }
+    }
+}
+
+// Pipelined decode via the decoupled API: image i+1's host Huffman overlaps image i's
+// device IDCT (double-buffered states/streams). Decodes into decode_pool at off[i].
+static bool pipelined_decode(const std::vector<const uint8_t*>& jpegs,
+                             const std::vector<size_t>& sizes, const std::vector<int>& ws,
+                             const std::vector<int>& hs, const std::vector<size_t>& off,
+                             uint8_t* decode_pool) {
+    const int N = (int)jpegs.size();
+    for (int i = 0; i < N; i++) {
+        const int b = i & 1;
+        if (i >= 2) cudaStreamSynchronize(g_pstream[b]);  // image i-2's work done -> reuse buffer
+        if (nvjpegJpegStreamParse(g_nvjpeg, jpegs[i], sizes[i], 0, 0, g_jstream[b]) !=
+            NVJPEG_STATUS_SUCCESS)
+            return false;
+        nvjpegStateAttachPinnedBuffer(g_pipe_state[b], g_pinned[b]);
+        nvjpegStateAttachDeviceBuffer(g_pipe_state[b], g_device[b]);
+        if (nvjpegDecodeJpegHost(g_nvjpeg, g_decoder, g_pipe_state[b], g_dparams,
+                                 g_jstream[b]) != NVJPEG_STATUS_SUCCESS)
+            return false;  // CPU Huffman (overlaps the previous image's async GPU work)
+        if (nvjpegDecodeJpegTransferToDevice(g_nvjpeg, g_decoder, g_pipe_state[b], g_jstream[b],
+                                             g_pstream[b]) != NVJPEG_STATUS_SUCCESS)
+            return false;
+        nvjpegImage_t oi;
+        for (int c = 0; c < NVJPEG_MAX_COMPONENT; c++) {
+            oi.channel[c] = nullptr;
+            oi.pitch[c] = 0;
+        }
+        oi.channel[0] = decode_pool + off[i];
+        oi.pitch[0] = (size_t)ws[i] * 3;
+        if (nvjpegDecodeJpegDevice(g_nvjpeg, g_decoder, g_pipe_state[b], &oi, g_pstream[b]) !=
+            NVJPEG_STATUS_SUCCESS)
+            return false;  // async GPU IDCT
+    }
+    cudaStreamSynchronize(g_pstream[0]);
+    cudaStreamSynchronize(g_pstream[1]);
+    return true;
 }
 
 // Core fused decode+transform into a ring output slot (device, N*3*dst_h*dst_w float32).
@@ -245,30 +318,33 @@ static float* fused_into_pool(const std::vector<const uint8_t*>& jpegs,
         }
         g_out_cap[g_out_idx] = out_bytes;
     }
-    if (N != g_batched_max) {  // re-init on ANY batch-size change (e.g. a ragged last batch)
-        // max_cpu_threads for the host-side Huffman decode — single-threaded was the
-        // bottleneck (DALI parallelizes this). Use the hardware concurrency.
-        int cpu_threads = (int)std::thread::hardware_concurrency();
-        if (cpu_threads < 1) cpu_threads = 8;
-        if (nvjpegDecodeBatchedInitialize(g_nvjpeg, g_batched_state, N, cpu_threads,
-                                          NVJPEG_OUTPUT_RGBI) != NVJPEG_STATUS_SUCCESS)
-            return nullptr;
-        g_batched_max = N;
-    }
-
-    // Point each output image into the pool; decode the whole batch in one parallel call.
-    std::vector<nvjpegImage_t> imgs(N);
-    for (int i = 0; i < N; i++) {
-        for (int c = 0; c < NVJPEG_MAX_COMPONENT; c++) {
-            imgs[i].channel[c] = nullptr;
-            imgs[i].pitch[c] = 0;
+    // Decode the batch into the decode pool. Prefer the pipelined (decoupled) API which
+    // overlaps host Huffman with device IDCT (DALI-style); fall back to nvjpegDecodeBatched.
+    if (g_pipe_ready &&
+        std::getenv("TURBOLOADER_NVJPEG_BATCHED") == nullptr) {
+        if (!pipelined_decode(jpegs, sizes, ws, hs, off, g_decode_pool)) return nullptr;
+    } else {
+        if (N != g_batched_max) {  // re-init on ANY batch-size change (e.g. a ragged last batch)
+            int cpu_threads = (int)std::thread::hardware_concurrency();
+            if (cpu_threads < 1) cpu_threads = 8;
+            if (nvjpegDecodeBatchedInitialize(g_nvjpeg, g_batched_state, N, cpu_threads,
+                                              NVJPEG_OUTPUT_RGBI) != NVJPEG_STATUS_SUCCESS)
+                return nullptr;
+            g_batched_max = N;
         }
-        imgs[i].channel[0] = g_decode_pool + off[i];
-        imgs[i].pitch[0] = (size_t)ws[i] * 3;
+        std::vector<nvjpegImage_t> imgs(N);
+        for (int i = 0; i < N; i++) {
+            for (int c = 0; c < NVJPEG_MAX_COMPONENT; c++) {
+                imgs[i].channel[c] = nullptr;
+                imgs[i].pitch[c] = 0;
+            }
+            imgs[i].channel[0] = g_decode_pool + off[i];
+            imgs[i].pitch[0] = (size_t)ws[i] * 3;
+        }
+        if (nvjpegDecodeBatched(g_nvjpeg, g_batched_state, jpegs.data(), sizes.data(),
+                                imgs.data(), g_stream) != NVJPEG_STATUS_SUCCESS)
+            return nullptr;
     }
-    if (nvjpegDecodeBatched(g_nvjpeg, g_batched_state, jpegs.data(), sizes.data(), imgs.data(),
-                            g_stream) != NVJPEG_STATUS_SUCCESS)
-        return nullptr;
 
     // Transform reads the decode pool in place (no host round-trip).
     float3 m = make_float3(mean[0], mean[1], mean[2]);
