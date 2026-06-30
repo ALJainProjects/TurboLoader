@@ -235,7 +235,7 @@ bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
         }
         g_out_cap = out_bytes;
     }
-    if (N > g_batched_max) {
+    if (N != g_batched_max) {  // re-init on ANY batch-size change (e.g. a ragged last batch)
         if (nvjpegDecodeBatchedInitialize(g_nvjpeg, g_batched_state, N, 1, NVJPEG_OUTPUT_RGBI) !=
             NVJPEG_STATUS_SUCCESS)
             return false;
