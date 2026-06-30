@@ -32,6 +32,9 @@
 #ifdef TURBOLOADER_CUDA_TRANSFORMS
 #include "../cuda/cuda_transforms.hpp"  // NVIDIA GPU transform path (UNVALIDATED)
 #endif
+#ifdef HAVE_NVJPEG
+#include "../decode/nvjpeg_decoder.hpp"  // nvJPEG full-GPU JPEG decode (UNVALIDATED)
+#endif
 #include <thread>
 #include <chrono>
 
@@ -1290,6 +1293,32 @@ PYBIND11_MODULE(_turboloader, m) {
         py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
         py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
         "CUDA resize+normalize (mirror of metal_resize_normalize). UNVALIDATED.");
+#ifdef HAVE_NVJPEG
+    // nvJPEG full-GPU JPEG decode (the CUDA analogue of metal_decode_jpeg; nvJPEG decodes
+    // entirely on the GPU, vs Metal's hybrid CPU-Huffman+GPU-IDCT). UNVALIDATED.
+    m.def(
+        "cuda_decode_jpeg",
+        [](py::bytes data) -> py::array_t<uint8_t> {
+            std::string buf = data;
+            static thread_local turboloader::NvJpegDecoder decoder;
+            turboloader::NvJpegResult res;
+            bool ok;
+            {
+                py::gil_scoped_release rel;
+                ok = decoder.decode(reinterpret_cast<const uint8_t*>(buf.data()), buf.size(),
+                                    res);
+            }
+            if (!ok || res.channels != 3)
+                throw std::runtime_error("cuda_decode_jpeg failed: " + res.error_message);
+            auto arr = py::array_t<uint8_t>(
+                {(py::ssize_t)res.height, (py::ssize_t)res.width, (py::ssize_t)3});
+            std::memcpy(arr.mutable_data(), res.data.data(), res.data.size());
+            return arr;
+        },
+        py::arg("data"),
+        "nvJPEG full-GPU JPEG decode -> HxWx3 uint8 RGB (CUDA analogue of metal_decode_jpeg). "
+        "UNVALIDATED — needs an NVIDIA GPU.");
+#endif
 #else
     m.def("cuda_available", []() { return false; },
           "True if the CUDA transform path is available. Not compiled in this build.");

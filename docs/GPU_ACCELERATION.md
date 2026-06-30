@@ -44,26 +44,42 @@ proven bit-exact vs libjpeg (see `experiments/metal/`).
 - **Roadmap:** GPU-resident output (hand back an MPS tensor with no copy-out) for zero-copy
   Apple-Silicon PyTorch training. Not done yet.
 
-## CUDA / nvJPEG — experimental, gated, UNVALIDATED here
+## CUDA — written, gated, UNVALIDATED here
 
-Dormant CUDA code exists (`src/decode/nvjpeg_decoder.hpp`, `src/transforms/gpu/`,
-`src/gpu/`, `src/pipeline/gpu_pipeline_integration.hpp`). **It is not built into any
-released wheel, and we cannot validate it** — there is no NVIDIA GPU on the dev/CI
-machines. Treat it as a starting point, not a working feature.
+A full CUDA path is **written and wired**, mirroring the proven Metal stack — but there is
+no NVIDIA GPU on the dev/CI machines, so **none of it has been compiled or run**. It ships
+nowhere by default; `cuda_available()` returns `False`. Treat it as ready-to-validate, not
+proven.
 
-To attempt it on a real CUDA box:
+Enable on a real CUDA box (needs `nvcc` + the CUDA toolkit):
 
 ```bash
 TURBOLOADER_ENABLE_CUDA=1 CUDA_HOME=/usr/local/cuda pip install -e . --no-build-isolation
 ```
 
-This defines `HAVE_NVJPEG` and links `cudart` + `nvjpeg` for the **host-API nvJPEG decode
-path** (which compiles with the ordinary C++ compiler). What this flag does **not** do:
+This:
+- compiles **`src/cuda/cuda_transforms.cu`** with `nvcc` (the transform kernels — a
+  line-for-line port of the bit-exact Metal `resize_normalize` / `crop_resize_normalize`),
+  defining `TURBOLOADER_CUDA_TRANSFORMS`;
+- defines `HAVE_NVJPEG` and links `cudart` + `nvjpeg`, activating the **nvJPEG full-GPU
+  decoder** (`src/decode/nvjpeg_decoder.hpp`).
 
-- It does **not** compile the `__global__` CUDA transform kernels in
-  `gpu_pipeline_integration.hpp` — those require `nvcc` and a separate build rule
-  (`TURBOLOADER_HAS_CUDA`), which is not wired up.
-- Nothing here has been compiled or run by the maintainers. Expect to fix build issues.
+Then these become available (CUDA analogues of the Metal API):
 
-If you have a CUDA box and want this finished and benchmarked against FFCV/DALI on their
-home turf, that's the right place to do it.
+```python
+turboloader.cuda_available(), turboloader.cuda_device_name()
+turboloader.cuda_resize_normalize(imgs, dst_h, dst_w, mean, std)   # mirror of metal_*
+turboloader.cuda_decode_jpeg(jpeg_bytes)                            # nvJPEG full-GPU decode
+```
+
+### Validation checklist (on the GPU box)
+1. `pip install` with the flags above; fix any nvcc/include issues (expect some).
+2. `assert turboloader.cuda_available()` and check `cuda_device_name()`.
+3. **Correctness:** `cuda_resize_normalize` should match `metal_resize_normalize` /
+   numpy bit-close (same kernel math); `cuda_decode_jpeg` should match a CPU `decode_jpeg`
+   the way `metal_decode_jpeg` does (~1–2 levels, JPEG-lossy range).
+4. **Then** run the real FFCV / NVIDIA DALI comparison there — their home turf — to see how
+   TurboLoader's CUDA path stacks up (DALI's GPU decode may well win; that's worth knowing).
+
+Note: the older `__global__` kernels in `gpu_pipeline_integration.hpp` (`TURBOLOADER_HAS_CUDA`)
+are a separate, still-unwired path; this flag uses the clean `cuda_transforms.cu` instead.
