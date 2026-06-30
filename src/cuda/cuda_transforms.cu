@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -502,24 +503,29 @@ static pfn_FutureGetProcessingStatus nv_FutureGetProcessingStatus = nullptr;
 static pfn_FutureDestroy nv_FutureDestroy = nullptr;
 
 static nvimgcodecInstance_t g_nv_instance = nullptr;
-static nvimgcodecDecoder_t g_nv_decoder = nullptr;
-static cudaStream_t g_nv_stream = nullptr;
 static bool g_nv_ready = false;
-static std::mutex g_nv_mutex;
+static std::mutex g_nv_init_mutex;  // guards init only
 
-// Reused per-image handles + persistent device input buffers (one decoded image each), grown
-// on demand. A single decode thread calls the pipeline, so these are reused serially.
-static std::vector<nvimgcodecCodeStream_t> g_nv_streams;
-static std::vector<nvimgcodecImage_t> g_nv_images;
-static std::vector<uint8_t*> g_nv_inbuf;
-static std::vector<size_t> g_nv_incap;
-
-// Output ring (independent of the nvJPEG path's): each call returns a different slot so up to
-// NV_OUT_RING-1 prefetched batches stay valid while the consumer reads an earlier one.
-static const int NV_OUT_RING = 4;
-static float* g_nv_out_pool[NV_OUT_RING] = {nullptr};
-static size_t g_nv_out_cap[NV_OUT_RING] = {0};
-static int g_nv_out_idx = 0;
+// One independent pipeline slot: its own decoder + CUDA stream + reused per-image handles +
+// persistent device input buffers + output ring. K slots, each driven by ONE Python thread, let
+// the host Huffman-decode of one batch overlap the GPU work of another (DALI-style multi-batch-
+// in-flight). A slot is single-threaded, so its state needs no per-call locking; its mutex only
+// guards against accidental concurrent reuse. Output ring depth must be >= the loader's out_q
+// maxsize + 2, so a queued-but-unconsumed output is never overwritten by the slot's later calls.
+static const int NV_OUT_RING = 8;
+struct NvSlot {
+    nvimgcodecDecoder_t decoder = nullptr;
+    cudaStream_t stream = nullptr;
+    std::vector<nvimgcodecCodeStream_t> cs;   // reused code-stream handles (one per image)
+    std::vector<nvimgcodecImage_t> img;       // reused output image handles
+    std::vector<uint8_t*> inbuf;              // persistent device decode buffers (grown on demand)
+    std::vector<size_t> incap;
+    float* out_pool[NV_OUT_RING] = {nullptr};
+    size_t out_cap[NV_OUT_RING] = {0};
+    int out_idx = 0;
+    std::mutex mu;
+};
+static std::vector<std::unique_ptr<NvSlot>> g_slots;
 
 template <typename T>
 static bool load_sym(void* h, T& fn, const char* name) {
@@ -530,9 +536,11 @@ static bool load_sym(void* h, T& fn, const char* name) {
 
 }  // namespace
 
-bool nvimgcodec_pipeline_init(const char* lib_path, const char* ext_path, int device_id) {
-    std::lock_guard<std::mutex> lk(g_nv_mutex);
-    if (g_nv_ready) return true;
+bool nvimgcodec_pipeline_init(int num_slots, const char* lib_path, const char* ext_path,
+                              int device_id) {
+    std::lock_guard<std::mutex> lk(g_nv_init_mutex);
+    if (num_slots < 1) num_slots = 1;
+    if (g_nv_ready) return (int)g_slots.size() >= num_slots;  // already up (idempotent)
     if (!available()) return false;
     void* h = dlopen(lib_path, RTLD_NOW | RTLD_GLOBAL);
     if (!h) {
@@ -561,35 +569,52 @@ bool nvimgcodec_pipeline_init(const char* lib_path, const char* ext_path, int de
         fprintf(stderr, "[turboloader nvimgcodec] InstanceCreate failed\n");
         return false;
     }
-    nvimgcodecExecutionParams_t ep{};
-    ep.struct_type = NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS;
-    ep.struct_size = sizeof(ep);
-    ep.device_id = device_id;       // NVIMGCODEC_DEVICE_CURRENT = -1
-    ep.max_num_cpu_threads = 0;     // default = number of cores
-    ep.pre_init = 1;
-    ep.num_backends = 0;            // all backends allowed (HW + GPU-hybrid + CPU fallback)
-    ep.backends = nullptr;
-    if (nv_DecoderCreate(g_nv_instance, &g_nv_decoder, &ep, nullptr) != NVIMGCODEC_STATUS_SUCCESS) {
-        fprintf(stderr, "[turboloader nvimgcodec] DecoderCreate failed\n");
-        return false;
+    // Split host decode threads across the slots so K decoders total ~= the core count rather
+    // than K * cores (which would thrash). This mirrors DALI's num_threads budget.
+    unsigned hc = std::thread::hardware_concurrency();
+    if (hc < 2) hc = 2;
+    int per = (int)(hc / (unsigned)num_slots);
+    if (per < 2) per = 2;
+    for (int s = 0; s < num_slots; s++) {
+        auto slot = std::make_unique<NvSlot>();
+        nvimgcodecExecutionParams_t ep{};
+        ep.struct_type = NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS;
+        ep.struct_size = sizeof(ep);
+        ep.device_id = device_id;  // NVIMGCODEC_DEVICE_CURRENT = -1
+        ep.max_num_cpu_threads = per;
+        ep.pre_init = 1;
+        ep.num_backends = 0;  // all backends allowed (HW + GPU-hybrid + CPU fallback)
+        ep.backends = nullptr;
+        if (nv_DecoderCreate(g_nv_instance, &slot->decoder, &ep, nullptr) !=
+            NVIMGCODEC_STATUS_SUCCESS) {
+            fprintf(stderr, "[turboloader nvimgcodec] DecoderCreate(slot %d) failed\n", s);
+            return false;
+        }
+        if (cudaStreamCreate(&slot->stream) != cudaSuccess) return false;
+        g_slots.push_back(std::move(slot));
     }
-    if (cudaStreamCreate(&g_nv_stream) != cudaSuccess) return false;
     g_nv_ready = true;
     return true;
 }
 
-uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& jpegs,
-                                             const std::vector<size_t>& sizes, int dst_h,
-                                             int dst_w, const float mean[3], const float std_[3]) {
-    if (!g_nv_ready || jpegs.empty() || jpegs.size() != sizes.size() || dst_h <= 0 || dst_w <= 0)
+int nvimgcodec_num_slots() { return (int)g_slots.size(); }
+
+uintptr_t nvimgcodec_decode_resize_normalize_slot(int slot,
+                                                  const std::vector<const uint8_t*>& jpegs,
+                                                  const std::vector<size_t>& sizes, int dst_h,
+                                                  int dst_w, const float mean[3],
+                                                  const float std_[3]) {
+    if (!g_nv_ready || slot < 0 || slot >= (int)g_slots.size() || jpegs.empty() ||
+        jpegs.size() != sizes.size() || dst_h <= 0 || dst_w <= 0)
         return 0;
-    std::lock_guard<std::mutex> lk(g_nv_mutex);
+    NvSlot& S = *g_slots[slot];
+    std::lock_guard<std::mutex> lk(S.mu);  // single-thread-per-slot; guards accidental reuse
     const int N = (int)jpegs.size();
-    if ((int)g_nv_streams.size() < N) {
-        g_nv_streams.resize(N, nullptr);
-        g_nv_images.resize(N, nullptr);
-        g_nv_inbuf.resize(N, nullptr);
-        g_nv_incap.resize(N, 0);
+    if ((int)S.cs.size() < N) {
+        S.cs.resize(N, nullptr);
+        S.img.resize(N, nullptr);
+        S.inbuf.resize(N, nullptr);
+        S.incap.resize(N, 0);
     }
     std::vector<int> ws(N), hs(N);
 
@@ -598,35 +623,29 @@ uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& 
     dp.struct_size = sizeof(dp);
     dp.apply_exif_orientation = 1;
 
-    // Per-image setup: parse the JPEG header for dims, size the device buffer, wrap input+output
-    // handles. Kept SERIAL on the decode thread — these 64 ops are too cheap to amortize thread-
-    // pool dispatch, and fanning them out (measured) regressed throughput vs the batched decode,
-    // which already parallelizes internally across nvImageCodec's own threads.
+    // Per-image setup (serial on this slot's thread): parse header, size device buffer, wrap
+    // input+output handles. Decode onto S.stream so the kernel (same stream) is ordered after it.
     for (int i = 0; i < N; i++) {
-        // Reuse the handle if non-null (nvImageCodec rebinds it to the new source).
-        if (nv_CodeStreamFromHostMem(g_nv_instance, &g_nv_streams[i], jpegs[i], sizes[i],
-                                     nullptr) != NVIMGCODEC_STATUS_SUCCESS)
+        if (nv_CodeStreamFromHostMem(g_nv_instance, &S.cs[i], jpegs[i], sizes[i], nullptr) !=
+            NVIMGCODEC_STATUS_SUCCESS)
             return 0;
         nvimgcodecImageInfo_t si{};
         si.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
         si.struct_size = sizeof(si);
-        if (nv_CodeStreamGetImageInfo(g_nv_streams[i], &si) != NVIMGCODEC_STATUS_SUCCESS) return 0;
+        if (nv_CodeStreamGetImageInfo(S.cs[i], &si) != NVIMGCODEC_STATUS_SUCCESS) return 0;
         const int W = (int)si.plane_info[0].width, H = (int)si.plane_info[0].height;
         if (W <= 0 || H <= 0) return 0;
         ws[i] = W;
         hs[i] = H;
         const size_t need = (size_t)W * H * 3;
-        if (need > g_nv_incap[i]) {
-            if (g_nv_inbuf[i]) cudaFree(g_nv_inbuf[i]);
-            if (cudaMalloc(&g_nv_inbuf[i], need) != cudaSuccess) {
-                g_nv_incap[i] = 0;
+        if (need > S.incap[i]) {
+            if (S.inbuf[i]) cudaFree(S.inbuf[i]);
+            if (cudaMalloc(&S.inbuf[i], need) != cudaSuccess) {
+                S.incap[i] = 0;
                 return 0;
             }
-            g_nv_incap[i] = need;
+            S.incap[i] = need;
         }
-        // Output image: interleaved RGB (HWC) uint8 in our device buffer, contiguous rows
-        // (row_stride = W*3) so resize_normalize_kernel's implicit stride matches, decoded on
-        // g_nv_stream so the kernel (same stream) is ordered after it.
         nvimgcodecImageInfo_t oi{};
         oi.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
         oi.struct_size = sizeof(oi);
@@ -642,15 +661,14 @@ uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& 
         oi.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
         oi.plane_info[0].row_stride = (size_t)W * 3;
         oi.plane_info[0].precision = 0;
-        oi.buffer = g_nv_inbuf[i];
+        oi.buffer = S.inbuf[i];
         oi.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
-        oi.cuda_stream = g_nv_stream;
-        if (nv_ImageCreate(g_nv_instance, &g_nv_images[i], &oi) != NVIMGCODEC_STATUS_SUCCESS)
-            return 0;
+        oi.cuda_stream = S.stream;
+        if (nv_ImageCreate(g_nv_instance, &S.img[i], &oi) != NVIMGCODEC_STATUS_SUCCESS) return 0;
     }
 
     nvimgcodecFuture_t fut = nullptr;
-    if (nv_DecoderDecode(g_nv_decoder, g_nv_streams.data(), g_nv_images.data(), N, &dp, &fut) !=
+    if (nv_DecoderDecode(S.decoder, S.cs.data(), S.img.data(), N, &dp, &fut) !=
         NVIMGCODEC_STATUS_SUCCESS)
         return 0;
     nv_FutureWaitForAll(fut);
@@ -667,34 +685,48 @@ uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& 
     }
 
     const size_t per_out = (size_t)3 * dst_h * dst_w;
-    float*& outp = g_nv_out_pool[g_nv_out_idx];
+    float*& outp = S.out_pool[S.out_idx];
     const size_t out_bytes = (size_t)N * per_out * sizeof(float);
-    if (out_bytes > g_nv_out_cap[g_nv_out_idx]) {
+    if (out_bytes > S.out_cap[S.out_idx]) {
         if (outp) cudaFree(outp);
         if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
-            g_nv_out_cap[g_nv_out_idx] = 0;
+            S.out_cap[S.out_idx] = 0;
             return 0;
         }
-        g_nv_out_cap[g_nv_out_idx] = out_bytes;
+        S.out_cap[S.out_idx] = out_bytes;
     }
     const float3 m = make_float3(mean[0], mean[1], mean[2]);
     const float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
     dim3 block(16, 16), grid((dst_w + 15) / 16, (dst_h + 15) / 16);
     for (int i = 0; i < N; i++)
-        resize_normalize_kernel<<<grid, block, 0, g_nv_stream>>>(
-            g_nv_inbuf[i], outp + (size_t)i * per_out, ws[i], hs[i], dst_w, dst_h, m, isd);
-    cudaError_t err = cudaStreamSynchronize(g_nv_stream);
+        resize_normalize_kernel<<<grid, block, 0, S.stream>>>(
+            S.inbuf[i], outp + (size_t)i * per_out, ws[i], hs[i], dst_w, dst_h, m, isd);
+    // Sync THIS slot's stream so the returned pointer is fully ready (no async-handoff race).
+    // Concurrency comes from K slots overlapping, not from skipping the sync.
+    cudaError_t err = cudaStreamSynchronize(S.stream);
     if (err == cudaSuccess) err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "[turboloader nvimgcodec] kernel: %s\n", cudaGetErrorString(err));
         return 0;
     }
     float* result = outp;
-    g_nv_out_idx = (g_nv_out_idx + 1) % NV_OUT_RING;
+    S.out_idx = (S.out_idx + 1) % NV_OUT_RING;
     return reinterpret_cast<uintptr_t>(result);
 }
+
+uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& jpegs,
+                                             const std::vector<size_t>& sizes, int dst_h,
+                                             int dst_w, const float mean[3], const float std_[3]) {
+    return nvimgcodec_decode_resize_normalize_slot(0, jpegs, sizes, dst_h, dst_w, mean, std_);
+}
 #else
-bool nvimgcodec_pipeline_init(const char*, const char*, int) { return false; }
+bool nvimgcodec_pipeline_init(int, const char*, const char*, int) { return false; }
+int nvimgcodec_num_slots() { return 0; }
+uintptr_t nvimgcodec_decode_resize_normalize_slot(int, const std::vector<const uint8_t*>&,
+                                                  const std::vector<size_t>&, int, int,
+                                                  const float[3], const float[3]) {
+    return 0;  // built without nvImageCodec
+}
 uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>&,
                                              const std::vector<size_t>&, int, int, const float[3],
                                              const float[3]) {

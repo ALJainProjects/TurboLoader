@@ -1435,18 +1435,23 @@ PYBIND11_MODULE(_turboloader, m) {
 #ifdef HAVE_NVIMGCODEC
     m.def(
         "cuda_nvimgcodec_init",
-        [](const std::string& lib_path, const std::string& ext_path, int device_id) {
-            return turboloader::cuda::nvimgcodec_pipeline_init(lib_path.c_str(), ext_path.c_str(),
-                                                               device_id);
+        [](const std::string& lib_path, const std::string& ext_path, int device_id,
+           int num_slots) {
+            return turboloader::cuda::nvimgcodec_pipeline_init(num_slots, lib_path.c_str(),
+                                                               ext_path.c_str(), device_id);
         },
         py::arg("lib_path"), py::arg("ext_path") = std::string(), py::arg("device_id") = -1,
+        py::arg("num_slots") = 1,
         "Initialize the in-C++ nvImageCodec decode pipeline: dlopen libnvimgcodec at lib_path "
         "(the wheel's libnvimgcodec.so.0), load codec extensions from ext_path (the wheel's "
-        "extensions dir), create instance+decoder. Returns True on success. Call once.");
+        "extensions dir), create num_slots independent decode slots (each its own decoder + "
+        "stream + buffers). Returns True on success. Call once.");
+    m.def("cuda_nvimgcodec_num_slots", []() { return turboloader::cuda::nvimgcodec_num_slots(); },
+          "Number of in-C++ nvImageCodec decode slots created by cuda_nvimgcodec_init.");
     m.def(
         "cuda_nvimgcodec_decode_resize_normalize",
-        [](py::list jpegs, int dst_h, int dst_w, std::array<float, 3> mean,
-           std::array<float, 3> std_) -> uintptr_t {
+        [](py::list jpegs, int dst_h, int dst_w, std::array<float, 3> mean, std::array<float, 3> std_,
+           int slot) -> uintptr_t {
             const ssize_t n = py::len(jpegs);
             std::vector<const uint8_t*> ptrs;
             std::vector<size_t> sizes;
@@ -1462,18 +1467,19 @@ PYBIND11_MODULE(_turboloader, m) {
             uintptr_t out;
             {  // jpegs (the list) keeps the bytes alive across the GIL-released decode
                 py::gil_scoped_release rel;
-                out = turboloader::cuda::nvimgcodec_decode_resize_normalize(
-                    ptrs, sizes, dst_h, dst_w, mean.data(), std_.data());
+                out = turboloader::cuda::nvimgcodec_decode_resize_normalize_slot(
+                    slot, ptrs, sizes, dst_h, dst_w, mean.data(), std_.data());
             }
             if (!out) throw std::runtime_error("cuda_nvimgcodec_decode_resize_normalize failed");
             return out;
         },
         py::arg("jpegs"), py::arg("dst_h"), py::arg("dst_w"),
         py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
-        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
-        "In-C++ nvImageCodec pipeline: GPU-decode a batch of JPEG byte buffers + resize/normalize "
-        "-> CUDA device pointer (int) of the (N,3,dst_h,dst_w) float32 result (valid until the "
-        "4th-next call). The GIL is released for the whole decode+transform. Wrap zero-copy via "
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f}, py::arg("slot") = 0,
+        "In-C++ nvImageCodec pipeline on `slot`: GPU-decode a batch of JPEG byte buffers + "
+        "resize/normalize -> CUDA device pointer (int) of the (N,3,dst_h,dst_w) float32 result "
+        "(valid until that slot's 8th-next call). GIL released for the whole decode+transform. "
+        "Each slot must be driven by at most one thread at a time. Wrap via "
         "__cuda_array_interface__.");
 #endif
 #else

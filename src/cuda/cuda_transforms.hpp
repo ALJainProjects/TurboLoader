@@ -81,15 +81,29 @@ uintptr_t resize_normalize_device_batch(const std::vector<uintptr_t>& d_imgs,
 
 // Initialize the pipeline once: dlopen libnvimgcodec at `lib_path` (the wheel's
 // libnvimgcodec.so.0), load codec extensions from `ext_path` (the wheel's extensions dir, may
-// be empty for auto-discovery), and create the instance + decoder on `device_id`
-// (NVIMGCODEC_DEVICE_CURRENT = -1). Returns false if built without nvImageCodec or on error.
-bool nvimgcodec_pipeline_init(const char* lib_path, const char* ext_path, int device_id);
+// be empty for auto-discovery), and create `num_slots` INDEPENDENT pipeline slots on `device_id`
+// (NVIMGCODEC_DEVICE_CURRENT = -1) — each its own decoder + CUDA stream + buffers + output ring.
+// K>1 slots, driven by K threads, overlap one batch's host decode with another's GPU work
+// (DALI-style multi-batch-in-flight). Returns false if built without nvImageCodec or on error.
+bool nvimgcodec_pipeline_init(int num_slots, const char* lib_path, const char* ext_path,
+                              int device_id);
 
-// Decode a batch of JPEG byte buffers on the GPU and resize+normalize -> device pointer of the
-// (N,3,dst_h,dst_w) CHW float32 result (valid until the next NV_OUT_RING-th call). nvImageCodec
-// decodes straight into device buffers; the resize_normalize kernel runs on the SAME CUDA
-// stream (auto-ordered after decode, no cross-stream sync). Returns 0 on error / if not built
-// with nvImageCodec / before init.
+// Number of slots created by init (0 if not initialized / not built with nvImageCodec).
+int nvimgcodec_num_slots();
+
+// Decode a batch of JPEG byte buffers on SLOT `slot` and resize+normalize -> device pointer of
+// the (N,3,dst_h,dst_w) CHW float32 result (valid until that slot's NV_OUT_RING-th next call).
+// nvImageCodec decodes straight into the slot's device buffers; the resize_normalize kernel runs
+// on the slot's CUDA stream (auto-ordered after decode), then the call syncs that stream so the
+// returned pointer is fully ready (no async-handoff race). Each slot must be driven by at most
+// ONE thread at a time. Returns 0 on error / bad slot / before init.
+uintptr_t nvimgcodec_decode_resize_normalize_slot(int slot,
+                                                  const std::vector<const uint8_t*>& jpegs,
+                                                  const std::vector<size_t>& sizes, int dst_h,
+                                                  int dst_w, const float mean[3],
+                                                  const float std_[3]);
+
+// Convenience: slot 0 (the single-slot synchronous path).
 uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& jpegs,
                                              const std::vector<size_t>& sizes, int dst_h,
                                              int dst_w, const float mean[3], const float std_[3]);

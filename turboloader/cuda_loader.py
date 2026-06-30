@@ -69,6 +69,7 @@ class CudaImageLoader:
         decode="gpu",
         gpu_output=False,
         prefetch=0,
+        nvimgcodec_slots=3,
     ):
         import turboloader as t
 
@@ -93,8 +94,14 @@ class CudaImageLoader:
         #   self._nvimgcodec -> Python nvimgcodec.Decoder + cuda_resize_normalize_from_device
         #                       (still GPU decode, but per-batch Python orchestration overhead).
         self._nv_cpp = False
+        self._nv_slots = 1
         self._nvimgcodec = None
         if decode == "nvimgcodec":
+            # K independent decode slots (each own decoder+stream+buffers), driven by K threads,
+            # overlap one batch's host decode with another's GPU work — DALI-style multi-batch-
+            # in-flight. Capped at 3: the C++ output ring (NV_OUT_RING=8) must cover all of a
+            # slot's in-flight outputs (out_q + consuming + producing).
+            want_slots = max(1, min(int(nvimgcodec_slots), 3))
             if hasattr(t, "cuda_nvimgcodec_init"):
                 try:
                     import os as _os
@@ -102,12 +109,16 @@ class CudaImageLoader:
                     from nvidia import nvimgcodec as _nv  # loads libnvimgcodec.so.0 + deps
 
                     _d = _os.path.dirname(_nv.__file__)
-                    if t.cuda_nvimgcodec_init(
+                    t.cuda_nvimgcodec_init(
                         _os.path.join(_d, "libnvimgcodec.so.0"),
                         _os.path.join(_d, "extensions"),
                         -1,
-                    ):
+                        want_slots,
+                    )
+                    ns = t.cuda_nvimgcodec_num_slots() if hasattr(t, "cuda_nvimgcodec_num_slots") else 0
+                    if ns >= 1:
                         self._nv_cpp = True
+                        self._nv_slots = min(want_slots, ns)
                 except Exception:
                     self._nv_cpp = False
             if not self._nv_cpp and hasattr(t, "cuda_resize_normalize_from_device"):
@@ -157,58 +168,61 @@ class CudaImageLoader:
             return decode(_read(i))
 
         # Fastest path: the whole decode+resize+normalize+batch runs in ONE GIL-released C++
-        # call (in-C++ nvImageCodec). Python only reads bytes and wraps the output pointer — no
-        # per-image orchestration — so the 3-stage pipeline (read || C++ decode+transform ||
-        # consume) keeps the GPU saturated the way DALI's GIL-free C++ pipeline does.
+        # call (in-C++ nvImageCodec). With K>1 slots, K worker threads each drive their own
+        # decoder+stream so one batch's host decode overlaps another's GPU work (DALI-style
+        # multi-batch-in-flight). Pipeline: reader -> bytes_q -> K workers (slot s) -> out_q ->
+        # consumer. Batches are yielded AS COMPLETED (out of index order when K>1) — correct for
+        # training, which processes every batch per epoch regardless of order.
         if self._nv_cpp:
             pipe = self._t.cuda_nvimgcodec_decode_resize_normalize
             read_files = getattr(self._t, "read_files", None)
+            K = self._nv_slots
+            q_size = K + 1  # with NV_OUT_RING=8, a slot's in-flight outputs never overwrite
 
             def _read_batch(bidx):
                 if read_files is not None:
                     return read_files([paths[int(i)] for i in bidx])
                 return [_read(i) for i in bidx]
 
-            def _cpp_batch(jpegs):
-                ptr = pipe(jpegs, dh, dw, mean=self.mean, std=self.std)
-                return _CudaArray(ptr, (len(jpegs), 3, dh, dw))
+            bytes_q = queue.Queue(maxsize=q_size)
+            out_q = queue.Queue(maxsize=q_size)
+            read_done = object()  # one per worker, ends each worker's loop
+            work_done = object()  # one per worker, tells the consumer that worker finished
 
-            if self._prefetch > 0:
-                bytes_q = queue.Queue(maxsize=self._prefetch)
-                out_q = queue.Queue(maxsize=self._prefetch)
-                sentinel = object()
+            def _reader():
+                try:
+                    for start in range(0, end, bs):
+                        bytes_q.put(_read_batch(idx[start : start + bs]))
+                finally:
+                    for _ in range(K):
+                        bytes_q.put(read_done)
 
-                def _reader():
-                    try:
-                        for start in range(0, end, bs):
-                            bytes_q.put(_read_batch(idx[start : start + bs]))
-                    finally:
-                        bytes_q.put(sentinel)
+            def _worker(slot):
+                try:
+                    while True:
+                        jb = bytes_q.get()
+                        if jb is read_done:
+                            break
+                        ptr = pipe(jb, dh, dw, mean=self.mean, std=self.std, slot=slot)
+                        out_q.put(_CudaArray(ptr, (len(jb), 3, dh, dw)))
+                finally:
+                    out_q.put(work_done)
 
-                def _xform():
-                    try:
-                        while True:
-                            jb = bytes_q.get()
-                            if jb is sentinel:
-                                break
-                            out_q.put(_cpp_batch(jb))
-                    finally:
-                        out_q.put(sentinel)
-
-                tr = threading.Thread(target=_reader, daemon=True)
-                tt = threading.Thread(target=_xform, daemon=True)
-                tr.start()
-                tt.start()
-                while True:
-                    item = out_q.get()
-                    if item is sentinel:
-                        break
-                    yield item
-                tr.join(timeout=0.5)
-                tt.join(timeout=0.5)
-            else:
-                for start in range(0, end, bs):
-                    yield _cpp_batch(_read_batch(idx[start : start + bs]))
+            rt = threading.Thread(target=_reader, daemon=True)
+            workers = [threading.Thread(target=_worker, args=(s,), daemon=True) for s in range(K)]
+            rt.start()
+            for w in workers:
+                w.start()
+            finished = 0
+            while finished < K:
+                item = out_q.get()
+                if item is work_done:
+                    finished += 1
+                    continue
+                yield item
+            rt.join(timeout=0.5)
+            for w in workers:
+                w.join(timeout=0.5)
             return
 
         # nvImageCodec path (decode="nvimgcodec"): its GPU decoder produces HWC uint8 RGB

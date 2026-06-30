@@ -2211,11 +2211,13 @@ try:
         try:
             from _turboloader import (
                 cuda_nvimgcodec_init,
+                cuda_nvimgcodec_num_slots,
                 cuda_nvimgcodec_decode_resize_normalize,
             )
 
             __all__ += [
                 "cuda_nvimgcodec_init",
+                "cuda_nvimgcodec_num_slots",
                 "cuda_nvimgcodec_decode_resize_normalize",
             ]
         except ImportError:
