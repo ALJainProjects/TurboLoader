@@ -8,6 +8,9 @@
 #include "cuda_transforms.hpp"
 
 #include <cuda_runtime.h>
+#ifdef HAVE_NVJPEG
+#include <nvjpeg.h>
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -160,6 +163,97 @@ bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
     cudaFree(d_dst);
     return ok;
 }
+
+#ifdef HAVE_NVJPEG
+// Process-lifetime nvJPEG handle/state (simple API), created once.
+static nvjpegHandle_t g_nvjpeg = nullptr;
+static nvjpegJpegState_t g_nvjpeg_state = nullptr;
+static cudaStream_t g_nvjpeg_stream = nullptr;
+static bool g_nvjpeg_ready = false;
+static void nvjpeg_init() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    if (nvjpegCreateSimple(&g_nvjpeg) != NVJPEG_STATUS_SUCCESS) return;
+    if (nvjpegJpegStateCreate(g_nvjpeg, &g_nvjpeg_state) != NVJPEG_STATUS_SUCCESS) return;
+    cudaStreamCreate(&g_nvjpeg_stream);
+    g_nvjpeg_ready = true;
+}
+
+bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
+                                   const std::vector<size_t>& sizes, int dst_h, int dst_w,
+                                   const float mean[3], const float std_[3], float* out) {
+    if (!available() || jpegs.empty() || jpegs.size() != sizes.size() || dst_h <= 0 || dst_w <= 0)
+        return false;
+    nvjpeg_init();
+    if (!g_nvjpeg_ready) return false;
+
+    const size_t N = jpegs.size();
+    const size_t per_out = (size_t)3 * dst_h * dst_w;
+    float* d_out = nullptr;
+    if (cudaMalloc(&d_out, N * per_out * sizeof(float)) != cudaSuccess) return false;
+
+    std::vector<uint8_t*> d_img(N, nullptr);
+    std::vector<int> ws(N), hs(N);
+    bool ok = true;
+    for (size_t i = 0; i < N; i++) {
+        int nc;
+        nvjpegChromaSubsampling_t ss;
+        int w[NVJPEG_MAX_COMPONENT], h[NVJPEG_MAX_COMPONENT];
+        if (nvjpegGetImageInfo(g_nvjpeg, jpegs[i], sizes[i], &nc, &ss, w, h) !=
+            NVJPEG_STATUS_SUCCESS) {
+            ok = false;
+            break;
+        }
+        ws[i] = w[0];
+        hs[i] = h[0];
+        if (cudaMalloc(&d_img[i], (size_t)ws[i] * hs[i] * 3) != cudaSuccess) {
+            ok = false;
+            break;
+        }
+        nvjpegImage_t oi;
+        for (int c = 0; c < NVJPEG_MAX_COMPONENT; c++) {
+            oi.channel[c] = nullptr;
+            oi.pitch[c] = 0;
+        }
+        oi.channel[0] = d_img[i];          // decode straight into a device buffer (no host)
+        oi.pitch[0] = (size_t)ws[i] * 3;
+        if (nvjpegDecode(g_nvjpeg, g_nvjpeg_state, jpegs[i], sizes[i], NVJPEG_OUTPUT_RGBI, &oi,
+                         g_nvjpeg_stream) != NVJPEG_STATUS_SUCCESS) {
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok) {
+        cudaStreamSynchronize(g_nvjpeg_stream);
+        float3 m = make_float3(mean[0], mean[1], mean[2]);
+        float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
+        dim3 block(16, 16), grid((dst_w + 15) / 16, (dst_h + 15) / 16);
+        for (size_t i = 0; i < N; i++)  // transform reads the device decode buffers in place
+            resize_normalize_kernel<<<grid, block>>>(d_img[i], d_out + i * per_out, ws[i], hs[i],
+                                                     dst_w, dst_h, m, isd);
+        cudaError_t err = cudaDeviceSynchronize();
+        if (err == cudaSuccess) err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[turboloader cuda] fused pipeline: %s\n", cudaGetErrorString(err));
+            ok = false;
+        } else {
+            cudaMemcpy(out, d_out, N * per_out * sizeof(float), cudaMemcpyDeviceToHost);
+        }
+    }
+    for (size_t i = 0; i < N; i++)
+        if (d_img[i]) cudaFree(d_img[i]);
+    cudaFree(d_out);
+    return ok;
+}
+#else
+bool decode_resize_normalize_batch(const std::vector<const uint8_t*>&,
+                                   const std::vector<size_t>&, int, int, const float[3],
+                                   const float[3], float*) {
+    return false;  // built without nvJPEG
+}
+#endif
 
 }  // namespace cuda
 }  // namespace turboloader

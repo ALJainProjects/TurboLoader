@@ -522,6 +522,13 @@ class BuildExt(build_ext):
             _arch = os.environ.get("TURBOLOADER_CUDA_ARCH")
             if _arch:
                 cmd += ["-arch", _arch]
+            # The fused decode+transform path in the .cu uses nvJPEG; give nvcc the macro +
+            # header dir (TURBOLOADER_CUDA_INCLUDE, e.g. the Jetson/CUDA targets include).
+            if os.environ.get("TURBOLOADER_ENABLE_NVJPEG", "0") == "1":
+                cmd += ["-DHAVE_NVJPEG=1"]
+                _cinc = os.environ.get("TURBOLOADER_CUDA_INCLUDE")
+                if _cinc:
+                    cmd += ["-I", _cinc]
             print("[turboloader] compiling CUDA:", " ".join(cmd))
             subprocess.check_call(cmd)
             for ext in self.extensions:

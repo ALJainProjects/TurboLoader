@@ -48,5 +48,13 @@ bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
                                  const std::vector<CropParams>& crops, int dst_h, int dst_w,
                                  const float mean[3], const float std_[3], float* out);
 
+// GPU-RESIDENT fused pipeline (needs HAVE_NVJPEG): nvJPEG decodes each JPEG straight into a
+// device buffer, the resize+normalize kernel reads it in place, and a SINGLE D2H copies the
+// (N,3,dst_h,dst_w) CHW float32 result to `out`. No per-image host round-trips. Returns
+// false if not compiled with nvJPEG or on error.
+bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
+                                   const std::vector<size_t>& sizes, int dst_h, int dst_w,
+                                   const float mean[3], const float std_[3], float* out);
+
 }  // namespace cuda
 }  // namespace turboloader

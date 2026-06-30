@@ -2190,9 +2190,9 @@ try:
         except ImportError:
             pass
         try:
-            from _turboloader import cuda_decode_jpeg
+            from _turboloader import cuda_decode_jpeg, cuda_decode_resize_normalize
 
-            __all__ += ["cuda_decode_jpeg"]
+            __all__ += ["cuda_decode_jpeg", "cuda_decode_resize_normalize"]
         except ImportError:
             pass
     except Exception:
