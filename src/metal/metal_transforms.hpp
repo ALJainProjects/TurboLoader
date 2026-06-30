@@ -58,5 +58,32 @@ bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
                                  const float std_[3],
                                  float* out);
 
+// Per-image color-jitter factors (multiplicative; 1.0 = no change). Contrast is applied
+// around mid-gray (0.5), saturation blends toward luminance.
+struct JitterParams {
+    float brightness;
+    float contrast;
+    float saturation;
+};
+
+// Fused crop + resize + (optional) hflip + color-jitter + normalize: the full ImageNet
+// train-time pipeline in ONE GPU pass. crops[i]/jitter[i] apply to imgs[i]. Output CHW
+// float32 (N*3*dst_h*dst_w). Returns false on error.
+bool train_transform_batch(const std::vector<ImageRef>& imgs,
+                           const std::vector<CropParams>& crops,
+                           const std::vector<JitterParams>& jitter,
+                           int dst_h,
+                           int dst_w,
+                           const float mean[3],
+                           const float std_[3],
+                           float* out);
+
+// Hybrid GPU JPEG decode (implemented in metal_decode.mm): CPU (libjpeg) parse + Huffman
+// entropy decode -> GPU dequant + 8x8 IDCT -> CPU chroma upsample + YCbCr->RGB. Writes
+// HWC uint8 RGB (width*height*3) into `out`. Returns false on error / unsupported JPEG
+// (caller should fall back to the CPU decode_jpeg). The GPU IDCT is bit-exact vs libjpeg.
+bool decode_jpeg(const uint8_t* data, size_t size, std::vector<uint8_t>& out, int& width,
+                 int& height);
+
 }  // namespace metal
 }  // namespace turboloader

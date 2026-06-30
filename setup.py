@@ -10,6 +10,7 @@ import sys
 import os
 import subprocess
 
+
 # The package version is derived from the git tag by setuptools_scm (see pyproject
 # [tool.setuptools_scm]); setup() does NOT set it. We only need the resolved string
 # here to pass to the C++ extension as -DTURBOLOADER_VERSION so the native module's
@@ -18,13 +19,13 @@ import subprocess
 def _resolve_version():
     # 1. Honor the pretend-version env (set in CI) so the C++ macro matches the wheel
     #    metadata exactly — the wheel smoke-test asserts version() == __version__.
-    for _k in ("SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TURBOLOADER",
-               "SETUPTOOLS_SCM_PRETEND_VERSION"):
+    for _k in ("SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TURBOLOADER", "SETUPTOOLS_SCM_PRETEND_VERSION"):
         if os.environ.get(_k):
             return os.environ[_k]
     # 2. setuptools_scm from a git checkout.
     try:
         from setuptools_scm import get_version
+
         return get_version(root=".", relative_to=__file__)
     except Exception:
         pass
@@ -207,15 +208,14 @@ def find_library(name, brew_name=None, pkg_config_name=None, header_subdir=None)
 def find_openmp():
     """Find OpenMP installation for the current platform"""
     import platform
+
     system = platform.system().lower()
 
     if system == "darwin":
         # macOS: OpenMP requires Homebrew libomp
         try:
             omp_prefix = (
-                subprocess.check_output(
-                    ["brew", "--prefix", "libomp"], stderr=subprocess.DEVNULL
-                )
+                subprocess.check_output(["brew", "--prefix", "libomp"], stderr=subprocess.DEVNULL)
                 .decode()
                 .strip()
             )
@@ -308,8 +308,10 @@ def get_extensions():
     elif enable_omp:
         print("  OpenMP: requested but not found; building without it")
     else:
-        print("  OpenMP: disabled by default (avoids libomp/PyTorch crash); "
-              "set TURBOLOADER_ENABLE_OPENMP=1 to enable")
+        print(
+            "  OpenMP: disabled by default (avoids libomp/PyTorch crash); "
+            "set TURBOLOADER_ENABLE_OPENMP=1 to enable"
+        )
 
     # On macOS, do NOT add a system SDK include root (e.g. the SDK's usr/include where
     # libcurl lives) as an explicit -I: it shadows libc++'s own headers and breaks
@@ -340,6 +342,7 @@ def get_extensions():
         if _keep_include(inc)
     ]
     include_dirs.append("src")  # For pipeline headers
+
     # Likewise drop a system SDK lib root on macOS (curl): -L against a mismatched
     # SDK's usr/lib can pick the wrong libcurl stub. System libs come via -isysroot.
     def _keep_lib(lib):
@@ -392,6 +395,7 @@ def get_extensions():
         and os.environ.get("TURBOLOADER_ENABLE_METAL", "1") == "1"
     ):
         extra_sources.append("src/metal/metal_transforms.mm")
+        extra_sources.append("src/metal/metal_decode.mm")  # hybrid GPU JPEG decoder
         extra_macros.append(("TURBOLOADER_METAL", "1"))
 
     # Experimental CUDA / nvJPEG GPU decode path. UNVALIDATED in this repo's CI — there is
@@ -405,7 +409,10 @@ def get_extensions():
         _cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
         include_dirs.append(os.path.join(_cuda_home, "include"))
         library_dirs.append(os.path.join(_cuda_home, "lib64"))
+        # nvJPEG decode path + the CUDA transform kernels (cuda_transforms.cu, compiled by
+        # nvcc in build_ext and linked as an extra object). Both UNVALIDATED here.
         extra_macros.append(("HAVE_NVJPEG", "1"))
+        extra_macros.append(("TURBOLOADER_CUDA_TRANSFORMS", "1"))
         extra_libs += ["nvjpeg", "cudart"]
 
     return [
@@ -477,6 +484,33 @@ class BuildExt(build_ext):
         # by file extension.
         if system == "darwin" and ".mm" not in self.compiler.src_extensions:
             self.compiler.src_extensions.append(".mm")
+
+        # Compile the CUDA transform kernels with nvcc and link the object. UNVALIDATED —
+        # built only when TURBOLOADER_ENABLE_CUDA=1 on a machine with nvcc (distutils can't
+        # build .cu). See docs/GPU_ACCELERATION.md.
+        if os.environ.get("TURBOLOADER_ENABLE_CUDA", "0") == "1":
+            import subprocess
+
+            cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
+            nvcc = os.path.join(cuda_home, "bin", "nvcc")
+            os.makedirs(self.build_temp, exist_ok=True)
+            obj = os.path.join(self.build_temp, "cuda_transforms.o")
+            cmd = [
+                nvcc,
+                "-c",
+                "src/cuda/cuda_transforms.cu",
+                "-o",
+                obj,
+                "-std=c++17",
+                "-O3",
+                "-Xcompiler",
+                "-fPIC",
+                "-DTURBOLOADER_CUDA_TRANSFORMS=1",
+            ]
+            print("[turboloader] compiling CUDA:", " ".join(cmd))
+            subprocess.check_call(cmd)
+            for ext in self.extensions:
+                ext.extra_objects = list(ext.extra_objects) + [obj]
 
         # On macOS, strip problematic flags from Python's embedded compiler configuration
         # python.org Python embeds CFLAGS/CPPFLAGS that can interfere with libc++ headers

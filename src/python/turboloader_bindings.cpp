@@ -1167,11 +1167,134 @@ PYBIND11_MODULE(_turboloader, m) {
         py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
         "Fused GPU RandomResizedCrop+hflip+normalize. crops:(N,4) x,y,w,h in src px; "
         "flips:(N,) 0/1 -> (N,3,dst_h,dst_w) CHW float32.");
+    m.def(
+        "metal_train_transform",
+        [](py::list images, py::array_t<float, py::array::c_style | py::array::forcecast> crops,
+           py::array_t<int32_t, py::array::c_style | py::array::forcecast> flips,
+           py::array_t<float, py::array::c_style | py::array::forcecast> jitter, int dst_h,
+           int dst_w, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> py::array_t<float> {
+            const size_t N = images.size();
+            if (N == 0) throw std::runtime_error("metal_train_transform: empty image list");
+            if (crops.ndim() != 2 || (size_t)crops.shape(0) != N || crops.shape(1) != 4)
+                throw std::runtime_error("crops must have shape (N, 4)");
+            if (flips.ndim() != 1 || (size_t)flips.shape(0) != N)
+                throw std::runtime_error("flips must have shape (N,)");
+            if (jitter.ndim() != 2 || (size_t)jitter.shape(0) != N || jitter.shape(1) != 3)
+                throw std::runtime_error("jitter must be (N, 3): brightness, contrast, saturation");
+            std::vector<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>> holds;
+            std::vector<turboloader::metal::ImageRef> refs;
+            std::vector<turboloader::metal::CropParams> cps;
+            std::vector<turboloader::metal::JitterParams> jps;
+            holds.reserve(N);
+            refs.reserve(N);
+            cps.reserve(N);
+            jps.reserve(N);
+            auto cr = crops.unchecked<2>();
+            auto fl = flips.unchecked<1>();
+            auto jt = jitter.unchecked<2>();
+            for (size_t i = 0; i < N; i++) {
+                auto arr = images[i]
+                               .cast<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>>();
+                if (arr.ndim() != 3 || arr.shape(2) != 3)
+                    throw std::runtime_error("each image must be HxWx3 uint8 (RGB)");
+                refs.push_back({arr.data(), (int)arr.shape(1), (int)arr.shape(0)});
+                cps.push_back({cr(i, 0), cr(i, 1), cr(i, 2), cr(i, 3), (int)fl(i)});
+                jps.push_back({jt(i, 0), jt(i, 1), jt(i, 2)});
+                holds.push_back(std::move(arr));
+            }
+            auto out = py::array_t<float>({(py::ssize_t)N, (py::ssize_t)3, (py::ssize_t)dst_h,
+                                           (py::ssize_t)dst_w});
+            bool ok;
+            {
+                py::gil_scoped_release rel;
+                ok = turboloader::metal::train_transform_batch(refs, cps, jps, dst_h, dst_w,
+                                                               mean.data(), std_.data(),
+                                                               out.mutable_data());
+            }
+            if (!ok) throw std::runtime_error("Metal train_transform_batch failed");
+            return out;
+        },
+        py::arg("images"), py::arg("crops"), py::arg("flips"), py::arg("jitter"),
+        py::arg("dst_h"), py::arg("dst_w"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "Fused GPU train pipeline: crop+resize+hflip+colorjitter+normalize. crops:(N,4); "
+        "flips:(N,); jitter:(N,3) brightness,contrast,saturation -> (N,3,dst_h,dst_w) float32.");
+    m.def(
+        "metal_decode_jpeg",
+        [](py::bytes data) -> py::array_t<uint8_t> {
+            std::string buf = data;
+            std::vector<uint8_t> out;
+            int w = 0, h = 0;
+            bool ok;
+            {
+                py::gil_scoped_release rel;
+                ok = turboloader::metal::decode_jpeg(reinterpret_cast<const uint8_t*>(buf.data()),
+                                                     buf.size(), out, w, h);
+            }
+            if (!ok)
+                throw std::runtime_error(
+                    "metal_decode_jpeg: unsupported/invalid JPEG (fall back to decode_jpeg)");
+            auto arr = py::array_t<uint8_t>({(py::ssize_t)h, (py::ssize_t)w, (py::ssize_t)3});
+            std::memcpy(arr.mutable_data(), out.data(), out.size());
+            return arr;
+        },
+        py::arg("data"),
+        "Hybrid GPU JPEG decode (Apple GPU IDCT) -> HxWx3 uint8 RGB. CPU Huffman + GPU "
+        "dequant/IDCT + CPU upsample/colorconvert. Raises on unsupported JPEG.");
 #else
     m.def("metal_available", []() { return false; },
           "True if the Metal GPU transform path is available. Not compiled in this build.");
     m.def("metal_device_name", []() { return std::string(); },
           "Name of the Metal GPU device. Not compiled in this build.");
+#endif
+
+#ifdef TURBOLOADER_CUDA_TRANSFORMS
+    // NVIDIA CUDA transform path — a faithful port of the validated Metal kernels. Built
+    // only with TURBOLOADER_ENABLE_CUDA=1 + nvcc. UNVALIDATED (no NVIDIA GPU on dev/CI).
+    m.def("cuda_available", []() { return turboloader::cuda::available(); },
+          "True if the CUDA transform path is compiled in AND a CUDA device is present.");
+    m.def("cuda_device_name", []() { return std::string(turboloader::cuda::device_name()); },
+          "Name of the CUDA device, or '' if unavailable.");
+    m.def(
+        "cuda_resize_normalize",
+        [](py::list images, int dst_h, int dst_w, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> py::array_t<float> {
+            const size_t N = images.size();
+            if (N == 0) throw std::runtime_error("cuda_resize_normalize: empty image list");
+            std::vector<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>> holds;
+            std::vector<turboloader::cuda::ImageRef> refs;
+            holds.reserve(N);
+            refs.reserve(N);
+            for (auto item : images) {
+                auto arr =
+                    item.cast<py::array_t<uint8_t, py::array::c_style | py::array::forcecast>>();
+                if (arr.ndim() != 3 || arr.shape(2) != 3)
+                    throw std::runtime_error("each image must be HxWx3 uint8 (RGB)");
+                refs.push_back({arr.data(), (int)arr.shape(1), (int)arr.shape(0)});
+                holds.push_back(std::move(arr));
+            }
+            auto out = py::array_t<float>({(py::ssize_t)N, (py::ssize_t)3, (py::ssize_t)dst_h,
+                                           (py::ssize_t)dst_w});
+            bool ok;
+            {
+                py::gil_scoped_release rel;
+                ok = turboloader::cuda::resize_normalize_batch(refs, dst_h, dst_w, mean.data(),
+                                                               std_.data(), out.mutable_data());
+            }
+            if (!ok) throw std::runtime_error("CUDA resize_normalize_batch failed");
+            return out;
+        },
+        py::arg("images"), py::arg("dst_h"), py::arg("dst_w"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "CUDA resize+normalize (mirror of metal_resize_normalize). UNVALIDATED.");
+#else
+    m.def("cuda_available", []() { return false; },
+          "True if the CUDA transform path is available. Not compiled in this build.");
+    m.def("cuda_device_name", []() { return std::string(); },
+          "Name of the CUDA device. Not compiled in this build.");
 #endif
 
     m.def("features", []() {

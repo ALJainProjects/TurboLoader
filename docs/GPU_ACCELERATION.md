@@ -13,10 +13,24 @@ import turboloader as t
 t.metal_available()        # True on a macOS arm64 build with a Metal device
 t.metal_device_name()      # e.g. 'Apple M4 Max'
 
-# list of HWC uint8 RGB images -> (N, 3, dst_h, dst_w) CHW float32
-out = t.metal_resize_normalize(imgs, 160, 160,
-                               mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+# --- transforms (list of HWC uint8 RGB images -> (N, 3, dst_h, dst_w) CHW float32) ---
+t.metal_resize_normalize(imgs, 160, 160, mean=(...), std=(...))             # eval
+t.metal_crop_resize_normalize(imgs, crops, flips, 160, 160)                 # RandomResizedCrop+flip
+t.metal_train_transform(imgs, crops, flips, jitter, 160, 160)              # + color jitter, ONE pass
+#   crops:(N,4) x,y,w,h src px | flips:(N,) 0/1 | jitter:(N,3) brightness,contrast,saturation
+
+# --- hybrid GPU JPEG decode (CPU Huffman -> GPU IDCT -> CPU upsample/colorconvert) ---
+rgb = t.metal_decode_jpeg(open('x.jpg','rb').read())   # HxWx3 uint8
+
+# --- end-to-end GPU loader (parallel CPU decode + Metal transforms) ---
+for batch in t.GpuImageLoader(paths, batch_size=64, image_size=160, train_aug=True):
+    ...   # (N,3,160,160) float32
 ```
+
+The fused `metal_train_transform` runs the whole ImageNet train pipeline
+(RandomResizedCrop + horizontal flip + brightness/contrast/saturation jitter + normalize)
+in a **single** GPU pass; `metal_decode_jpeg` is the hybrid decoder whose GPU IDCT is
+proven bit-exact vs libjpeg (see `experiments/metal/`).
 
 - **Validated:** bit-accurate vs the CPU bilinear (max err ~7e-5); see `experiments/metal/`.
 - **Why it helps:** the GPU transform is ~free (≈3 µs vs ≈67 µs CPU decode), so offloading

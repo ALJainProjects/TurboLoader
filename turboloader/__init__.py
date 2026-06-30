@@ -2159,9 +2159,34 @@ try:
 
         __all__ += ["metal_available", "metal_device_name"]
         try:
-            from _turboloader import metal_resize_normalize, metal_crop_resize_normalize
+            from _turboloader import (
+                metal_resize_normalize,
+                metal_crop_resize_normalize,
+                metal_train_transform,
+                metal_decode_jpeg,
+            )
 
-            __all__ += ["metal_resize_normalize", "metal_crop_resize_normalize"]
+            __all__ += [
+                "metal_resize_normalize",
+                "metal_crop_resize_normalize",
+                "metal_train_transform",
+                "metal_decode_jpeg",
+            ]
+        except ImportError:
+            pass
+    except Exception:
+        pass
+
+    # CUDA transform path (NVIDIA; UNVALIDATED). cuda_available()/cuda_device_name() exist
+    # in every build (False/"" when not compiled in); cuda_resize_normalize only when built.
+    try:
+        from _turboloader import cuda_available, cuda_device_name
+
+        __all__ += ["cuda_available", "cuda_device_name"]
+        try:
+            from _turboloader import cuda_resize_normalize
+
+            __all__ += ["cuda_resize_normalize"]
         except ImportError:
             pass
     except Exception:

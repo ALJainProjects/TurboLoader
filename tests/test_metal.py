@@ -180,3 +180,55 @@ def test_gpu_image_loader_train_aug_reproducible(tmp_path):
     dl.set_epoch(0)
     b = np.concatenate([b.ravel()[:20] for b in dl])
     assert np.allclose(a, b)  # same epoch -> identical aug
+
+
+@pytest.mark.skipif(not hasattr(tl, "metal_decode_jpeg"), reason="metal_decode_jpeg not in build")
+def test_metal_decode_jpeg_close_to_cpu(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    # A realistic (smooth) image: random noise is JPEG's worst case for the chroma-upsample
+    # method difference and isn't representative. The GPU IDCT itself is bit-exact (proven
+    # in experiments/metal/); this checks the integrated path matches the CPU decode.
+    yy, xx = np.mgrid[0:120, 0:160]
+    img = np.stack([(yy * 2) % 256, (xx * 1.5) % 256, ((xx + yy)) % 256], axis=-1).astype(np.uint8)
+    p = tmp_path / "x.jpg"
+    Image.fromarray(img).save(p, format="JPEG", quality=92)
+    data = open(p, "rb").read()
+    gpu = tl.metal_decode_jpeg(data)
+    cpu = tl.decode_jpeg(data)
+    assert gpu.shape == cpu.shape == (120, 160, 3)
+    assert np.abs(gpu.astype(int) - cpu.astype(int)).mean() < 2
+
+
+@pytest.mark.skipif(
+    not hasattr(tl, "metal_train_transform"), reason="metal_train_transform not in build"
+)
+def test_train_transform_identity_jitter_matches_crop():
+    rng = np.random.default_rng(12)
+    imgs = [rng.integers(0, 255, (160, 200, 3), dtype=np.uint8) for _ in range(3)]
+    crops = np.array([[10, 8, 120, 120], [0, 0, 160, 160], [20, 20, 100, 100]], np.float32)
+    flips = np.array([0, 1, 0], np.int32)
+    jitter_id = np.ones((3, 3), np.float32)  # brightness=contrast=saturation=1 -> no change
+    a = tl.metal_train_transform(imgs, crops, flips, jitter_id, 96, 96)
+    b = tl.metal_crop_resize_normalize(imgs, crops, flips, 96, 96)
+    assert np.abs(a - b).max() < 1e-4
+
+
+@pytest.mark.skipif(
+    not hasattr(tl, "metal_train_transform"), reason="metal_train_transform not in build"
+)
+def test_train_transform_jitter_changes_output():
+    rng = np.random.default_rng(13)
+    imgs = [rng.integers(0, 255, (160, 160, 3), dtype=np.uint8)]
+    crops = np.array([[0, 0, 160, 160]], np.float32)
+    flips = np.array([0], np.int32)
+    base = tl.metal_train_transform(imgs, crops, flips, np.ones((1, 3), np.float32), 64, 64)
+    bright = tl.metal_train_transform(
+        imgs, crops, flips, np.array([[1.5, 1.0, 1.0]], np.float32), 64, 64
+    )
+    assert np.abs(base - bright).mean() > 0.01  # brightness changes the output
+
+
+@pytest.mark.skipif(not hasattr(tl, "cuda_available"), reason="cuda bindings not in build")
+def test_cuda_available_is_false_here():
+    # CUDA is not compiled in the default build; the binding must report honestly.
+    assert tl.cuda_available() is False
