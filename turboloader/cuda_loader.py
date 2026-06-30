@@ -90,12 +90,19 @@ class CudaImageLoader:
         def _load(i):
             return decode(_read(i))
 
-        with ThreadPoolExecutor(max_workers=self.num_workers) as ex:
+        if fused is not None:
+            # Fused path: the C++ op decodes the whole batch on the GPU, so Python only
+            # reads bytes. Read SERIALLY — a ThreadPoolExecutor over 64 tiny (page-cached)
+            # reads costs ~16 ms of future/GIL overhead vs ~0.6 ms serial.
             for start in range(0, end, bs):
                 batch_idx = idx[start : start + bs]
-                if fused is not None:
-                    jpegs = list(ex.map(_read, batch_idx))  # raw bytes; parallel file I/O
-                    yield fused(jpegs, dh, dw, mean=self.mean, std=self.std)
-                else:
+                jpegs = [_read(i) for i in batch_idx]
+                yield fused(jpegs, dh, dw, mean=self.mean, std=self.std)
+        else:
+            # v1 path: decode per image; the thread pool parallelizes the GIL-releasing
+            # nvJPEG/libjpeg decode calls.
+            with ThreadPoolExecutor(max_workers=self.num_workers) as ex:
+                for start in range(0, end, bs):
+                    batch_idx = idx[start : start + bs]
                     imgs = list(ex.map(_load, batch_idx))
                     yield self._t.cuda_resize_normalize(imgs, dh, dw, mean=self.mean, std=self.std)
