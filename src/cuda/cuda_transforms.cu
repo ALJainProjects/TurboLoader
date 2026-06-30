@@ -197,15 +197,12 @@ static void nvjpeg_init() {
     g_nvjpeg_ready = true;
 }
 
-bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
-                                   const std::vector<size_t>& sizes, int dst_h, int dst_w,
-                                   const float mean[3], const float std_[3], float* out) {
-    if (!available() || jpegs.empty() || jpegs.size() != sizes.size() || dst_h <= 0 || dst_w <= 0)
-        return false;
-    nvjpeg_init();
-    if (!g_nvjpeg_ready) return false;
-    std::lock_guard<std::mutex> lk(g_pool_mutex);
-
+// Core fused decode+transform into g_out_pool (device, N*3*dst_h*dst_w float32). Caller
+// must hold g_pool_mutex and have called nvjpeg_init(). No D2H — output stays on the GPU.
+static bool fused_into_pool(const std::vector<const uint8_t*>& jpegs,
+                            const std::vector<size_t>& sizes, int dst_h, int dst_w,
+                            const float mean[3], const float std_[3]) {
+    if (jpegs.empty() || jpegs.size() != sizes.size() || dst_h <= 0 || dst_w <= 0) return false;
     const int N = (int)jpegs.size();
     const size_t per_out = (size_t)3 * dst_h * dst_w;
 
@@ -281,14 +278,45 @@ bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
         fprintf(stderr, "[turboloader cuda] fused pipeline: %s\n", cudaGetErrorString(err));
         return false;
     }
-    cudaMemcpy(out, g_out_pool, out_bytes, cudaMemcpyDeviceToHost);
+    return true;  // result in g_out_pool; no D2H
+}
+
+// CPU output: fused work + one D2H of the result to host `out`.
+bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
+                                   const std::vector<size_t>& sizes, int dst_h, int dst_w,
+                                   const float mean[3], const float std_[3], float* out) {
+    if (!available()) return false;
+    nvjpeg_init();
+    if (!g_nvjpeg_ready) return false;
+    std::lock_guard<std::mutex> lk(g_pool_mutex);
+    if (!fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std)) return false;
+    const size_t bytes = (size_t)jpegs.size() * 3 * dst_h * dst_w * sizeof(float);
+    cudaMemcpy(out, g_out_pool, bytes, cudaMemcpyDeviceToHost);
     return true;
+}
+
+// GPU output: fused work, return the device pointer of the result (valid until the next
+// fused call — consume before the next batch, like DALI). Returns 0 on error.
+uintptr_t decode_resize_normalize_batch_gpu(const std::vector<const uint8_t*>& jpegs,
+                                            const std::vector<size_t>& sizes, int dst_h, int dst_w,
+                                            const float mean[3], const float std_[3]) {
+    if (!available()) return 0;
+    nvjpeg_init();
+    if (!g_nvjpeg_ready) return 0;
+    std::lock_guard<std::mutex> lk(g_pool_mutex);
+    if (!fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std)) return 0;
+    return reinterpret_cast<uintptr_t>(g_out_pool);
 }
 #else
 bool decode_resize_normalize_batch(const std::vector<const uint8_t*>&,
                                    const std::vector<size_t>&, int, int, const float[3],
                                    const float[3], float*) {
     return false;  // built without nvJPEG
+}
+uintptr_t decode_resize_normalize_batch_gpu(const std::vector<const uint8_t*>&,
+                                            const std::vector<size_t>&, int, int, const float[3],
+                                            const float[3]) {
+    return 0;  // built without nvJPEG
 }
 #endif
 

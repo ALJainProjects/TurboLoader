@@ -56,5 +56,13 @@ bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
                                    const std::vector<size_t>& sizes, int dst_h, int dst_w,
                                    const float mean[3], const float std_[3], float* out);
 
+// Same fused pipeline but GPU-RESIDENT output: returns the device pointer of the result
+// (N*3*dst_h*dst_w float32), valid until the next fused call (consume before the next
+// batch, like DALI). Returns 0 on error / if not built with nvJPEG. Lets the consumer keep
+// the batch on the GPU (zero-copy into a torch CUDA tensor) — no final D2H.
+uintptr_t decode_resize_normalize_batch_gpu(const std::vector<const uint8_t*>& jpegs,
+                                            const std::vector<size_t>& sizes, int dst_h, int dst_w,
+                                            const float mean[3], const float std_[3]);
+
 }  // namespace cuda
 }  // namespace turboloader

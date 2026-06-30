@@ -1351,6 +1351,38 @@ PYBIND11_MODULE(_turboloader, m) {
         py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
         "Fused GPU-resident pipeline: nvJPEG decode (straight to device) + resize+normalize "
         "in place + one D2H. jpegs: list of JPEG bytes -> (N,3,dst_h,dst_w) CHW float32.");
+    m.def(
+        "cuda_decode_resize_normalize_gpu",
+        [](py::list jpegs, int dst_h, int dst_w, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> uintptr_t {
+            const size_t N = jpegs.size();
+            if (N == 0) throw std::runtime_error("cuda_decode_resize_normalize_gpu: empty list");
+            std::vector<std::string> holds;
+            std::vector<const uint8_t*> ptrs;
+            std::vector<size_t> sizes;
+            holds.reserve(N);
+            ptrs.reserve(N);
+            sizes.reserve(N);
+            for (auto item : jpegs) {
+                holds.push_back(item.cast<std::string>());
+                ptrs.push_back(reinterpret_cast<const uint8_t*>(holds.back().data()));
+                sizes.push_back(holds.back().size());
+            }
+            uintptr_t ptr;
+            {
+                py::gil_scoped_release rel;
+                ptr = turboloader::cuda::decode_resize_normalize_batch_gpu(
+                    ptrs, sizes, dst_h, dst_w, mean.data(), std_.data());
+            }
+            if (!ptr) throw std::runtime_error("cuda_decode_resize_normalize_gpu failed");
+            return ptr;
+        },
+        py::arg("jpegs"), py::arg("dst_h"), py::arg("dst_w"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "GPU-RESIDENT fused pipeline: returns the CUDA DEVICE pointer (int) of the "
+        "(N,3,dst_h,dst_w) float32 result (valid until the next call). Wrap zero-copy via "
+        "__cuda_array_interface__ — no D2H.");
 #endif
 #else
     m.def("cuda_available", []() { return false; },

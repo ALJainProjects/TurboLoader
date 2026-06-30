@@ -18,6 +18,20 @@ import numpy as np
 __all__ = ["CudaImageLoader"]
 
 
+class _CudaArray:
+    """Wraps a CUDA device pointer as a ``__cuda_array_interface__`` array so torch/cupy can
+    adopt it zero-copy (``torch.as_tensor(x, device='cuda')``). Valid until the loader yields
+    the next batch (the device pool is reused), exactly like a DALI pipeline output."""
+
+    def __init__(self, ptr, shape):
+        self.__cuda_array_interface__ = {
+            "data": (int(ptr), False),
+            "shape": tuple(shape),
+            "typestr": "<f4",
+            "version": 3,
+        }
+
+
 class CudaImageLoader:
     """Parallel decode (nvJPEG or CPU) + cuda_resize_normalize image loader.
 
@@ -40,6 +54,7 @@ class CudaImageLoader:
         seed=42,
         drop_last=False,
         decode="gpu",
+        gpu_output=False,
     ):
         import turboloader as t
 
@@ -51,6 +66,8 @@ class CudaImageLoader:
         self.decode_mode = "nvjpeg" if gpu_decode else "cpu"
         # Prefer the fused GPU-resident decode+transform op when available (decode="gpu").
         self._fused = decode == "gpu" and hasattr(t, "cuda_decode_resize_normalize")
+        # gpu_output=True yields a __cuda_array_interface__ batch kept on the GPU (no D2H).
+        self._gpu_output = bool(gpu_output) and hasattr(t, "cuda_decode_resize_normalize_gpu")
         self.paths = list(paths)
         self.batch_size = int(batch_size)
         self.image_size = image_size if isinstance(image_size, tuple) else (image_size, image_size)
@@ -90,6 +107,9 @@ class CudaImageLoader:
         def _load(i):
             return decode(_read(i))
 
+        gpu_out = (
+            getattr(self._t, "cuda_decode_resize_normalize_gpu", None) if self._gpu_output else None
+        )
         if fused is not None:
             # Fused path: the C++ op decodes the whole batch on the GPU, so Python only
             # reads bytes. Read SERIALLY — a ThreadPoolExecutor over 64 tiny (page-cached)
@@ -97,7 +117,13 @@ class CudaImageLoader:
             for start in range(0, end, bs):
                 batch_idx = idx[start : start + bs]
                 jpegs = [_read(i) for i in batch_idx]
-                yield fused(jpegs, dh, dw, mean=self.mean, std=self.std)
+                if gpu_out is not None:
+                    # GPU-resident output: no D2H; wrap the device pointer (consume before
+                    # the next batch — the device pool is reused).
+                    ptr = gpu_out(jpegs, dh, dw, mean=self.mean, std=self.std)
+                    yield _CudaArray(ptr, (len(jpegs), 3, dh, dw))
+                else:
+                    yield fused(jpegs, dh, dw, mean=self.mean, std=self.std)
         else:
             # v1 path: decode per image; the thread pool parallelizes the GIL-releasing
             # nvJPEG/libjpeg decode calls.
