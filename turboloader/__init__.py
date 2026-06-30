@@ -171,6 +171,8 @@ try:
         InterpolationMode,
         PaddingMode,
         TensorFormat,
+        # Batched file reader (GIL-released parallel I/O)
+        read_files,
     )
 
     def version():
@@ -195,6 +197,7 @@ try:
         "Loader",
         "version",
         "features",
+        "read_files",
         "__version__",
         # TBL v2
         "TblReaderV2",
