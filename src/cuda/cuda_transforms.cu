@@ -11,6 +11,12 @@
 #ifdef HAVE_NVJPEG
 #include <nvjpeg.h>
 #endif
+#ifdef HAVE_NVIMGCODEC
+#include <nvimgcodec.h>
+#include <dlfcn.h>
+#include <atomic>
+#include "../core/parallel_for.hpp"  // GIL-free thread pool for the per-image setup fan-out
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -460,10 +466,6 @@ uintptr_t resize_normalize_device_batch(const std::vector<uintptr_t>&, const std
 // decode's device work — no cross-stream sync).
 // ===========================================================================================
 #ifdef HAVE_NVIMGCODEC
-#include <nvimgcodec.h>
-#include <dlfcn.h>
-#include <atomic>
-#include "../core/parallel_for.hpp"  // GIL-free thread pool for the per-image setup fan-out
 
 namespace {
 
