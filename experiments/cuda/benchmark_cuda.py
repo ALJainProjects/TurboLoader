@@ -1,7 +1,5 @@
-"""CUDA loader head-to-head on the 3090: TurboLoader vs PyTorch vs DALI.
-Real consumption (force materialization), warmup + median of timed epochs. Honest note:
-TurboLoader-CUDA returns CPU numpy (D2H copy); DALI returns GPU tensors (ideal for GPU
-training). That output-location difference is real and called out."""
+"""CUDA loader head-to-head on the 3090: TurboLoader (CPU-out + GPU-out) vs PyTorch vs DALI.
+Real consumption (force materialization), warmup + median of timed epochs."""
 import glob, sys, time
 import numpy as np
 
@@ -25,19 +23,26 @@ def timeit(make_iter, epochs=3, warmup=1):
 
 results = {}
 
-# TurboLoader CUDA (nvJPEG decode + cuda transform -> CPU numpy)
 try:
     import turboloader as t
     def tbl():
         for b in t.CudaImageLoader(paths, batch_size=BS, image_size=SZ, num_workers=NW,
                                    mean=MEAN, std=STD, decode="gpu"):
             float(b.sum()); yield b.shape[0]
-    results["TurboLoader-CUDA (nvjpeg->cpu)"] = timeit(tbl)
-    print("TurboLoader-CUDA done")
+    results["TurboLoader-CUDA (->cpu numpy)"] = timeit(tbl); print("TurboLoader-CPU done")
 except Exception as e:
-    print("TurboLoader failed:", repr(e)[:200])
+    print("TurboLoader-CPU failed:", repr(e)[:200])
 
-# PyTorch DataLoader (PIL CPU decode + torchvision)
+try:
+    import turboloader as t, torch
+    def tblg():
+        for arr in t.CudaImageLoader(paths, batch_size=BS, image_size=SZ, num_workers=NW,
+                                     mean=MEAN, std=STD, decode="gpu", gpu_output=True):
+            x = torch.as_tensor(arr, device="cuda"); float(x.sum()); yield x.shape[0]
+    results["TurboLoader-CUDA (gpu-resident)"] = timeit(tblg); print("TurboLoader-GPU done")
+except Exception as e:
+    print("TurboLoader-GPU failed:", repr(e)[:200])
+
 try:
     import torch
     from torch.utils.data import DataLoader, Dataset
@@ -50,12 +55,10 @@ try:
     def pt():
         for x, _ in DataLoader(DS(), batch_size=BS, num_workers=NW, shuffle=False):
             float(x.sum()); yield x.shape[0]
-    results["PyTorch DataLoader (PIL cpu)"] = timeit(pt)
-    print("PyTorch done")
+    results["PyTorch DataLoader (PIL cpu)"] = timeit(pt); print("PyTorch done")
 except Exception as e:
     print("PyTorch failed:", repr(e)[:200])
 
-# DALI (GPU decode + resize + normalize -> GPU tensor)
 try:
     from nvidia.dali import pipeline_def, fn, types
     from nvidia.dali.plugin.pytorch import DALIGenericIterator
@@ -72,10 +75,16 @@ try:
         it = DALIGenericIterator([p], ["x", "y"], size=len(paths), auto_reset=True)
         for d in it:
             x = d[0]["x"]; float(x.sum()); yield x.shape[0]
-    results["DALI (gpu decode->gpu)"] = timeit(dali)
-    print("DALI done")
+    results["DALI (gpu decode->gpu)"] = timeit(dali); print("DALI done")
 except Exception as e:
     print("DALI failed:", repr(e)[:300])
+
+# FFCV (only if installed; needs a .beton conversion done separately)
+try:
+    import ffcv  # noqa
+    print("(FFCV installed — add .beton benchmark separately)")
+except Exception:
+    pass
 
 print("\n=== RESULTS (img/s, higher = better) ===")
 for k, v in sorted(results.items(), key=lambda kv: -kv[1]):
