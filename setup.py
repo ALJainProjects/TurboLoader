@@ -409,11 +409,20 @@ def get_extensions():
         _cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
         include_dirs.append(os.path.join(_cuda_home, "include"))
         library_dirs.append(os.path.join(_cuda_home, "lib64"))
-        # nvJPEG decode path + the CUDA transform kernels (cuda_transforms.cu, compiled by
-        # nvcc in build_ext and linked as an extra object). Both UNVALIDATED here.
-        extra_macros.append(("HAVE_NVJPEG", "1"))
+        # The CUDA transform kernels (cuda_transforms.cu, compiled by nvcc in build_ext)
+        # need only cudart.
         extra_macros.append(("TURBOLOADER_CUDA_TRANSFORMS", "1"))
-        extra_libs += ["nvjpeg", "cudart"]
+        extra_libs += ["cudart"]
+        # nvJPEG decode is SEPARATE: the standard CUDA nvJPEG lib+header isn't everywhere
+        # (e.g. Jetson ships only the tegra multimedia variant — no nvjpeg.h). Opt in with
+        # TURBOLOADER_ENABLE_NVJPEG=1 only where the real nvJPEG is installed.
+        if os.environ.get("TURBOLOADER_ENABLE_NVJPEG", "0") == "1":
+            extra_macros.append(("HAVE_NVJPEG", "1"))
+            extra_libs += ["nvjpeg"]
+        # Extra lib dir for non-standard CUDA library locations (e.g. Jetson's tegra dir).
+        _cuda_lib = os.environ.get("TURBOLOADER_CUDA_LIB")
+        if _cuda_lib:
+            library_dirs.append(_cuda_lib)
 
     return [
         Extension(
