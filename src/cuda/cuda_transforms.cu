@@ -17,6 +17,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -236,8 +237,12 @@ bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
         g_out_cap = out_bytes;
     }
     if (N != g_batched_max) {  // re-init on ANY batch-size change (e.g. a ragged last batch)
-        if (nvjpegDecodeBatchedInitialize(g_nvjpeg, g_batched_state, N, 1, NVJPEG_OUTPUT_RGBI) !=
-            NVJPEG_STATUS_SUCCESS)
+        // max_cpu_threads for the host-side Huffman decode — single-threaded was the
+        // bottleneck (DALI parallelizes this). Use the hardware concurrency.
+        int cpu_threads = (int)std::thread::hardware_concurrency();
+        if (cpu_threads < 1) cpu_threads = 8;
+        if (nvjpegDecodeBatchedInitialize(g_nvjpeg, g_batched_state, N, cpu_threads,
+                                          NVJPEG_OUTPUT_RGBI) != NVJPEG_STATUS_SUCCESS)
             return false;
         g_batched_max = N;
     }
