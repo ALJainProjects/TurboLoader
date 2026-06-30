@@ -133,8 +133,7 @@ class CudaImageLoader:
             dec = self._nvimgcodec
             xform = self._t.cuda_resize_normalize_from_device
 
-            def _nvimg_batch(bidx):
-                imgs = dec.decode([_read(i) for i in bidx])  # held alive across the transform
+            def _transform(imgs):  # imgs held alive across the (synchronous) transform
                 cai = [im.__cuda_array_interface__ for im in imgs]
                 ptr = xform(
                     [c["data"][0] for c in cai], [c["shape"][1] for c in cai],
@@ -143,27 +142,30 @@ class CudaImageLoader:
                 return _CudaArray(ptr, (len(imgs), 3, dh, dw))
 
             if self._prefetch > 0:
-                q = queue.Queue(maxsize=self._prefetch)
+                # A reader thread reads file bytes ahead into a bounded queue while THIS thread
+                # does the GPU decode+transform — overlapping disk I/O with compute (the read is
+                # ~0.6 ms/batch, otherwise serialized in front of the ~3.6 ms decode+transform).
+                bytes_q = queue.Queue(maxsize=self._prefetch)
                 sentinel = object()
 
-                def _producer():
+                def _reader():
                     try:
                         for start in range(0, end, bs):
-                            q.put(_nvimg_batch(idx[start : start + bs]))
+                            bytes_q.put([_read(i) for i in idx[start : start + bs]])
                     finally:
-                        q.put(sentinel)
+                        bytes_q.put(sentinel)
 
-                th = threading.Thread(target=_producer, daemon=True)
+                th = threading.Thread(target=_reader, daemon=True)
                 th.start()
                 while True:
-                    item = q.get()
-                    if item is sentinel:
+                    jpegs = bytes_q.get()
+                    if jpegs is sentinel:
                         break
-                    yield item
+                    yield _transform(dec.decode(jpegs))
                 th.join(timeout=0.5)
             else:
                 for start in range(0, end, bs):
-                    yield _nvimg_batch(idx[start : start + bs])
+                    yield _transform(dec.decode([_read(i) for i in idx[start : start + bs]]))
             return
 
         gpu_out = (
