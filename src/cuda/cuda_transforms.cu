@@ -318,10 +318,11 @@ static float* fused_into_pool(const std::vector<const uint8_t*>& jpegs,
         }
         g_out_cap[g_out_idx] = out_bytes;
     }
-    // Decode the batch into the decode pool. Prefer the pipelined (decoupled) API which
-    // overlaps host Huffman with device IDCT (DALI-style); fall back to nvjpegDecodeBatched.
-    if (g_pipe_ready &&
-        std::getenv("TURBOLOADER_NVJPEG_BATCHED") == nullptr) {
+    // Decode the batch into the decode pool. Default: nvjpegDecodeBatched (fastest in
+    // practice). The decoupled/pipelined API (opt-in via TURBOLOADER_NVJPEG_PIPELINED) does
+    // host/device overlap but its per-image call overhead makes it ~10x slower here — DALI's
+    // win is a far more optimized pipeline, not the naive split.
+    if (g_pipe_ready && std::getenv("TURBOLOADER_NVJPEG_PIPELINED") != nullptr) {
         if (!pipelined_decode(jpegs, sizes, ws, hs, off, g_decode_pool)) return nullptr;
     } else {
         if (N != g_batched_max) {  // re-init on ANY batch-size change (e.g. a ragged last batch)
