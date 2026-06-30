@@ -24,7 +24,7 @@ TurboLoader is a high-performance data loading library for machine learning work
 - **Framework Integration** - Seamless support for PyTorch, TensorFlow, and JAX
 - **Memory-Mapped I/O** - Zero-copy file access for improved throughput
 - **Lock-Free Queues** - Concurrent data structures for efficient multi-threading
-- **GPU JPEG Decoding** - Optional NVIDIA nvJPEG support for accelerated decoding
+- **GPU image loaders** - `CudaImageLoader` (NVIDIA nvImageCodec — **beats DALI** on an RTX 3090, see below) and `GpuImageLoader` (Apple Metal): end-to-end GPU decode + resize + normalize, GPU-resident output. See [GPU acceleration](docs/GPU_ACCELERATION.md)
 
 ---
 
@@ -333,6 +333,26 @@ For **large source images**, the default path also wins: on 768×768 JPEGs resiz
 160 it runs ~15,000 img/s — faster than even an expertly-tuned `tf.data` pipeline using
 manual `decode_jpeg(ratio=...)` (~14,400) — because it picks the libjpeg-turbo DCT
 scaled-decode factor automatically (you don't have to know to set `ratio`).
+
+### GPU loaders (NVIDIA & Apple)
+
+On **NVIDIA**, `CudaImageLoader(decode="nvimgcodec")` runs the whole decode + resize + normalize
++ batch in GIL-released C++ via **nvImageCodec** (the codec DALI uses), with K independent decode
+slots overlapping batches (multi-batch-in-flight). On an **RTX 3090** (Imagenette-160, batch 64,
+real consumption, interleaved rounds to control for drift):
+
+| Loader | img/s (median) |
+|---|---:|
+| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **~28,500** |
+| NVIDIA **DALI** (`num_threads=8`, best-tuned) | ~25,500 |
+| FFCV (fixed `.beton`, GPU) | ~13,800 |
+| PyTorch `DataLoader` (PIL, CPU) | ~5,400 |
+
+**+12% over DALI** (TurboLoader's median above DALI's max), output bijectively verified correct.
+On **Apple Silicon**, `GpuImageLoader` offloads resize+normalize (and a hybrid GPU JPEG decode)
+to Metal — where neither DALI nor FFCV runs at all. CUDA is a build-from-source path (not in the
+PyPI wheels); see [GPU acceleration](docs/GPU_ACCELERATION.md) for flags, usage, and the full
+write-up (`experiments/cuda/RESULTS.md`).
 
 ### Implementation notes
 - **Direct-batch path** (`src/pipeline/direct_batch_loader.hpp`): the default fast path

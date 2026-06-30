@@ -44,54 +44,102 @@ proven bit-exact vs libjpeg (see `experiments/metal/`).
 - **Roadmap:** GPU-resident output (hand back an MPS tensor with no copy-out) for zero-copy
   Apple-Silicon PyTorch training. Not done yet.
 
-## CUDA — transforms VALIDATED on a Jetson Orin; nvJPEG decode still pending
+## CUDA (NVIDIA) — VALIDATED end-to-end; **beats DALI** on a 3090
 
-The CUDA transform path is **real**: the kernels (a faithful port of the bit-exact Metal
-math) were compiled with nvcc (CUDA 11.4, aarch64) and run on an actual **Jetson Orin**
-GPU — `cuda_resize_normalize` matches the numpy bilinear reference to **3.2e-05** (bit-exact,
-same as Metal). It still ships nowhere by default (off-CUDA `cuda_available()` is `False`);
-it builds with the flags below.
+The CUDA path is real and validated on actual hardware (two Jetson AGX Orins + an RTX 3090).
+The transform kernels are a faithful port of the bit-exact Metal math: `cuda_resize_normalize`
+matches the numpy bilinear reference to **3.2e-05**. On top of that, the end-to-end image loader
+(`CudaImageLoader`) reaches **DALI-class throughput — and edges past DALI** on a 3090. It builds
+from source with the flags below (it does **not** ship in the PyPI wheels — those are portable
+CPU/Metal; CUDA needs a toolkit + GPU at build time).
 
-The **nvJPEG decode** path (`cuda_decode_jpeg`) is the one still unproven — Jetson ships
-only a *tegra* `libnvjpeg` (no `nvjpeg.h`, different API), so it's gated behind a separate
-`TURBOLOADER_ENABLE_NVJPEG=1` and needs a box with the **standard** CUDA nvJPEG (e.g. a
-desktop/server with the full CUDA toolkit).
+### The fast path: in-C++ nvImageCodec, multi-batch-in-flight
 
-Enable on a real CUDA box (needs `nvcc` + the CUDA toolkit; use gcc 10+ for C++20):
+```python
+import turboloader as t, torch, glob
+paths = glob.glob("imagenette2-160/train/*/*.JPEG")
 
-```bash
-# CUDA transforms only (validated on Jetson Orin / CUDA 11.4):
-CC=gcc-10 CXX=g++-10 CUDA_HOME=/usr/local/cuda TURBOLOADER_ENABLE_CUDA=1 \
-  pip install -e . --no-build-isolation
-
-# + nvJPEG decode, on a box with the STANDARD CUDA nvJPEG (not Jetson tegra):
-#   add TURBOLOADER_ENABLE_NVJPEG=1
-# Jetson: nvJPEG/other CUDA libs in a non-standard dir? add TURBOLOADER_CUDA_LIB=<dir>
+ld = t.CudaImageLoader(paths, batch_size=64, image_size=160,
+                       decode="nvimgcodec",   # NVIDIA nvImageCodec (what DALI uses)
+                       nvimgcodec_slots=3,     # K async decode slots — default 3
+                       drop_last=True)
+for batch in ld:                              # GPU-resident, yielded as-completed
+    x = torch.as_tensor(batch, device="cuda") # (64,3,160,160) float32, zero-copy
+    train_step(x)
 ```
 
-This:
-- compiles **`src/cuda/cuda_transforms.cu`** with `nvcc` (the transform kernels — a
-  line-for-line port of the bit-exact Metal `resize_normalize` / `crop_resize_normalize`),
-  defining `TURBOLOADER_CUDA_TRANSFORMS` and linking `cudart`;
-- with `TURBOLOADER_ENABLE_NVJPEG=1`, also defines `HAVE_NVJPEG` and links `nvjpeg`,
-  activating the **nvJPEG full-GPU decoder** (`src/decode/nvjpeg_decoder.hpp`).
+`decode="nvimgcodec"` runs the **whole** read → decode → resize → normalize → batch in
+GIL-released C++. **nvImageCodec** (NVIDIA's modern codec library, what DALI moved to) decodes
+each JPEG straight into a device buffer; the resize/normalize kernel reads it in place on the
+same CUDA stream. With `nvimgcodec_slots=K`, K **independent** slots (each its own decoder +
+stream + buffers + output ring) run on K worker threads, so one batch's host Huffman-decode
+overlaps another's GPU work — the multi-batch-in-flight that DALI's `num_threads` /
+`prefetch_queue_depth` buys. Each slot still synchronizes its own stream before returning, so
+every batch pointer is fully ready (**no async-handoff race** — concurrency comes from the K
+slots, not from skipping the sync). Batches are yielded **as completed** (out of index order
+when K>1 — correct for training, which sees every batch per epoch regardless of order). nvJPEG
+is `dlopen`'d at runtime; nvImageCodec too — TurboLoader links neither, so the build just needs
+the header.
 
-Then these become available (CUDA analogues of the Metal API):
+### Benchmark (RTX 3090, Imagenette-160, batch 64, real consumption, interleaved)
 
+| Loader | img/s (median) |
+|---|---:|
+| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **~28,500** |
+| NVIDIA **DALI** (`num_threads=8`, prefetch 3 — best-tuned) | ~25,500 |
+| NVIDIA DALI (`num_threads=12`) | ~25,400 |
+| FFCV (fixed `.beton`, GPU) | ~13,800 |
+| PyTorch `DataLoader` (PIL, CPU) | ~5,400 |
+
+Interleaved sampling (each loader timed adjacently every round, so the host's run-to-run drift
+hits all equally): TurboLoader median **28,527** (min 25,676 / max 29,394) vs DALI median
+**25,479** (max 26,743) — **+12%**, TurboLoader's median above DALI's max. The journey:
+**9.2k → 14.5k → 22.4k → 28.5k** (nvJPEG → Python nvImageCodec → single-slot C++ → K-slot async).
+See `experiments/cuda/RESULTS.md`.
+
+**Correctness.** (1) vs the libjpeg-turbo + kernel path: correlation **0.99986**, max|diff| 0.095
+— not bit-exact (JPEG IDCT + chroma upsampling are implementation-defined, so any two decoders
+differ; DALI/FFCV differ the same way) but numerically equivalent. (2) The K-slot async pipeline
+vs the single-slot synced path: a **bijective** harness (96 batches, 3 concurrent slots, slow
+consumer stressing the output ring) — every async batch matched a distinct reference batch
+**exactly, 96/96**, no corruption, no ring-overwrite duplication.
+
+### Build (on a real CUDA box; needs `nvcc` + toolkit, gcc 10+ for C++20)
+
+```bash
+pip install nvidia-nvimgcodec-cu12        # the nvImageCodec runtime + header
+
+CUDA_HOME=/usr/local/cuda \
+TURBOLOADER_ENABLE_CUDA=1 \               # transform kernels (cuda_transforms.cu) + cudart
+TURBOLOADER_ENABLE_NVJPEG=1 \             # nvJPEG decoder (decode="gpu")
+TURBOLOADER_ENABLE_NVIMGCODEC=1 \         # nvImageCodec pipeline (decode="nvimgcodec")
+TURBOLOADER_CUDA_ARCH=native \            # required on CUDA 13+; or sm_86 (3090), sm_87 (Orin)
+  pip install -e . --no-build-isolation
+```
+
+- `TURBOLOADER_ENABLE_NVIMGCODEC=1` **auto-discovers** the `nvidia-nvimgcodec-cu12` header from
+  the installed wheel — set `TURBOLOADER_NVIMGCODEC_INCLUDE=<dir>` only to override.
+- Jetson / non-standard CUDA layout: `TURBOLOADER_CUDA_INCLUDE=<dir>` (headers) and
+  `TURBOLOADER_CUDA_LIB=<dir>` (libs). On Jetson, nvJPEG is the tegra variant — leave
+  `TURBOLOADER_ENABLE_NVJPEG` off there.
+
+### Decode backends (`CudaImageLoader(decode=...)`), fastest first
+- `"nvimgcodec"` — in-C++ nvImageCodec, K async slots. **Fastest (~28.5k, beats DALI).** Falls
+  back to a Python `nvimgcodec.Decoder` path (~14.5k) if the C++ pipeline isn't compiled in.
+- `"gpu"` — nvJPEG batched HW-hybrid decode + fused resize/normalize (~9.2k).
+- `"cpu"` — libjpeg-turbo decode + GPU transform.
+
+### Lower-level CUDA API (analogues of the Metal API)
 ```python
 turboloader.cuda_available(), turboloader.cuda_device_name()
 turboloader.cuda_resize_normalize(imgs, dst_h, dst_w, mean, std)   # mirror of metal_*
 turboloader.cuda_decode_jpeg(jpeg_bytes)                            # nvJPEG full-GPU decode
+turboloader.cuda_nvimgcodec_init(lib, ext, device_id, num_slots)   # init the slot pipeline
+turboloader.cuda_nvimgcodec_decode_resize_normalize(jpegs, h, w, mean, std, slot)  # one batch
 ```
 
-### Validation checklist (on the GPU box)
-1. `pip install` with the flags above; fix any nvcc/include issues (expect some).
-2. `assert turboloader.cuda_available()` and check `cuda_device_name()`.
-3. **Correctness:** `cuda_resize_normalize` should match `metal_resize_normalize` /
-   numpy bit-close (same kernel math); `cuda_decode_jpeg` should match a CPU `decode_jpeg`
-   the way `metal_decode_jpeg` does (~1–2 levels, JPEG-lossy range).
-4. **Then** run the real FFCV / NVIDIA DALI comparison there — their home turf — to see how
-   TurboLoader's CUDA path stacks up (DALI's GPU decode may well win; that's worth knowing).
-
-Note: the older `__global__` kernels in `gpu_pipeline_integration.hpp` (`TURBOLOADER_HAS_CUDA`)
-are a separate, still-unwired path; this flag uses the clean `cuda_transforms.cu` instead.
+Caveats: measured on one RTX 3090 (GPU-hybrid JPEG decode, no hardware JPEG unit) at 160px — a
+GPU with a hardware JPEG decoder, or different sizes, could shift the balance. `nvimgcodec_slots`
+trades GPU memory (~K× the input/output buffers) for throughput; 3 is a good default on a 24 GB
+card. The older `__global__` kernels in `gpu_pipeline_integration.hpp` are a separate unwired
+path; this build uses the clean `cuda_transforms.cu`.

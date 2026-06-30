@@ -5,6 +5,39 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.29.0] - unreleased
+
+CUDA image loader that **beats NVIDIA DALI** on a 3090, via an in-C++ nvImageCodec pipeline.
+
+### Added
+- **`CudaImageLoader(decode="nvimgcodec")`** — end-to-end NVIDIA GPU loader built on
+  **nvImageCodec** (the modern codec DALI uses). The whole read → decode → resize → normalize →
+  batch runs in **GIL-released C++**; output is GPU-resident (`__cuda_array_interface__`).
+- **Multi-batch-in-flight (`nvimgcodec_slots=K`, default 3)** — K independent decode slots (each
+  its own decoder + CUDA stream + device buffers + output ring) on K worker threads overlap one
+  batch's host Huffman-decode with another's GPU work. Each slot syncs its own stream before
+  returning (no async-handoff race); batches are yielded as-completed (out of order when K>1).
+  On an RTX 3090 (Imagenette-160, batch 64, interleaved): **~28,500 img/s — +12% over DALI's
+  best-tuned config (~25,500)**, ahead of FFCV (~13,800). See `experiments/cuda/RESULTS.md`.
+  Correctness: corr 0.99986 vs the libjpeg-turbo path; the K-slot pipeline validated bijectively
+  exact (96/96 batches) vs the single-slot synced path.
+- **In-C++ nvImageCodec bindings** — `cuda_nvimgcodec_init`, `cuda_nvimgcodec_num_slots`,
+  `cuda_nvimgcodec_decode_resize_normalize`. nvImageCodec is `dlopen`'d at runtime (no link
+  dependency); the build only needs its header.
+- **`cuda_resize_normalize_from_device`** — transform already-decoded device images (e.g. the
+  Python `nvimgcodec.Decoder` output) in place; zero extra copies.
+- **`read_files`** — batched file reader with the GIL released (parallel I/O via the thread
+  pool), so a Python loader overlaps disk reads with GPU work.
+- Build flag **`TURBOLOADER_ENABLE_NVIMGCODEC=1`** (with `TURBOLOADER_ENABLE_CUDA=1`) compiles
+  the nvImageCodec pipeline; the `nvidia-nvimgcodec-cu12` header is **auto-discovered** from the
+  installed wheel (override with `TURBOLOADER_NVIMGCODEC_INCLUDE`). CUDA remains a
+  build-from-source path — not shipped in the portable PyPI wheels.
+
+### Validated
+- The CUDA path is now validated **end-to-end on real hardware** (two Jetson AGX Orins + an
+  RTX 3090): transforms bit-exact (3.2e-05); nvJPEG and nvImageCodec decode working; the
+  nvImageCodec loader beating DALI. (Was an "UNVALIDATED scaffold" in 2.28.0.)
+
 ## [2.28.0] - 2026-06-29
 
 GPU acceleration on Apple Silicon (Metal), plus a gated CUDA scaffold.

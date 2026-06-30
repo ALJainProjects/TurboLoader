@@ -171,14 +171,29 @@ pip install "turboloader[torch]"
 The core loader, SIMD transforms, and the NumPy / TensorFlow-HWC output paths
 work without PyTorch installed.
 
-### GPU JPEG decode (NVIDIA nvJPEG) — future work
+### GPU image loader (NVIDIA CUDA) — build from source
 
-> **Not available in the published wheels.** GPU/nvJPEG JPEG decoding is **not
-> compiled** into TurboLoader today — `turboloader.features()` reports it as
-> unavailable. The fast decode path is CPU-based libjpeg-turbo with SIMD
-> (NEON / AVX2 / AVX-512) and automatic DCT scaled decode for large images.
-> GPU-accelerated decode is tracked as potential future work; please follow the
-> repository for updates rather than installing CUDA expecting it to be detected.
+> **Not in the published wheels** (they are portable CPU/Metal; CUDA needs a toolkit + GPU at
+> build time). Built from source on a CUDA box, `CudaImageLoader(decode="nvimgcodec")` is an
+> end-to-end GPU loader on **nvImageCodec** that **beats DALI** on a 3090 (~28.5k vs ~25.5k
+> img/s). Build with `nvcc` + the CUDA toolkit (gcc 10+ for C++20):
+
+```bash
+pip install nvidia-nvimgcodec-cu12      # nvImageCodec runtime + header (auto-discovered)
+
+CUDA_HOME=/usr/local/cuda \
+TURBOLOADER_ENABLE_CUDA=1 \             # transform kernels + cudart
+TURBOLOADER_ENABLE_NVJPEG=1 \          # nvJPEG decoder (decode="gpu")
+TURBOLOADER_ENABLE_NVIMGCODEC=1 \      # nvImageCodec pipeline (decode="nvimgcodec")
+TURBOLOADER_CUDA_ARCH=native \         # required on CUDA 13+; or sm_86 (3090) / sm_87 (Orin)
+  pip install -e . --no-build-isolation
+```
+
+> `turboloader.cuda_available()` then returns `True`. The header for
+> `TURBOLOADER_ENABLE_NVIMGCODEC` is auto-discovered from the installed `nvidia-nvimgcodec-cu12`
+> wheel (override with `TURBOLOADER_NVIMGCODEC_INCLUDE`). The CPU decode path remains
+> libjpeg-turbo + SIMD (NEON / AVX2 / AVX-512) with automatic DCT scaled decode. See
+> [GPU acceleration](GPU_ACCELERATION.md) for the full guide and benchmarks.
 
 ### Cloud / specialized storage (source-only / optional)
 

@@ -16,6 +16,7 @@ TurboLoader is a C++20 data-loading library for ML featuring:
 
 - **Native C++20 implementation** - GIL released during processing
 - **FFCV / tf.data-style direct-batch loader** - one parallel pass decodes, resizes, and normalizes straight into the output batch buffer, with automatic libjpeg-turbo DCT scaled decode for large images
+- **GPU image loaders** - `CudaImageLoader` (NVIDIA nvImageCodec — **beats DALI** on a 3090, ~28.5k vs ~25.5k img/s) and `GpuImageLoader` (Apple Metal); end-to-end GPU decode + resize + normalize. See [GPU acceleration](GPU_ACCELERATION.md). CUDA is build-from-source
 - **Multi-modality** - images in WebDataset TAR, LLM token streams via `TokenDataLoader`, and generic `(N, ...)` arrays via `ArrayDataLoader`
 - **TBL v2 Binary Format** - LZ4 compression, streaming writer, CRC integrity checks
 - **Cached Dimensions** - Width/height in index for fast filtering without decoding

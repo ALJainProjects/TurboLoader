@@ -99,21 +99,33 @@ See the [Benchmark Setup Guide](../benchmark_setup.md) for:
 - Dataset preparation (Imagenette-160)
 - Measurement technique (real consumption, warmup + median of timed epochs)
 
-## Why no FFCV / NVIDIA DALI numbers (yet)
+## NVIDIA GPU: vs DALI and FFCV (RTX 3090)
 
-These are the most relevant high-performance comparisons, but they can't be measured
-fairly on the hardware these numbers were collected on (Apple Silicon CPU):
+The high-performance GPU comparison, run on its home turf (Linux + RTX 3090). TurboLoader's
+`CudaImageLoader(decode="nvimgcodec")` runs the whole decode + resize + normalize + batch in
+GIL-released C++ via **nvImageCodec** (the codec DALI uses), with K independent decode slots
+overlapping batches. Imagenette-160, batch 64, real consumption, **interleaved** rounds (each
+loader timed adjacently per round, so the host's run-to-run drift hits all equally):
 
-- **NVIDIA DALI** is CUDA-only — there is no Apple Silicon / CPU-only build. A fair
-  comparison needs a Linux + NVIDIA GPU box. Note that DALI's **GPU** JPEG decode could
-  well *out-throughput* TurboLoader's CPU pipeline — that's a result worth having, not
-  one to fear.
-- **FFCV** is Linux/x86-oriented and its wheel does not build on macOS arm64; it also
-  uses its own `.beton` format (a conversion step).
+| Loader | img/s (median) |
+|---|---:|
+| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **~28,500** |
+| NVIDIA **DALI** (`num_threads=8`, prefetch 3 — best-tuned) | ~25,500 |
+| NVIDIA DALI (`num_threads=12`) | ~25,400 |
+| FFCV (fixed `.beton`, GPU) | ~13,800 |
+| PyTorch `DataLoader` (PIL, CPU) | ~5,400 |
 
-So the honest statement is: TurboLoader is **measured faster than PyTorch DataLoader and
-tf.data on CPU** (above), and FFCV/DALI are a deliberately open comparison — they belong
-on Linux + GPU and will be added when run there.
+TurboLoader's median (28,527) sits **above DALI's max** (26,743) — a clean **+12%** over DALI's
+best-tuned config. Output is bijectively verified correct against the single-slot synced path
+(96/96 batches exact) and correlates 0.99986 with the libjpeg-turbo path. The journey was
+**9.2k → 14.5k → 22.4k → 28.5k** img/s (nvJPEG → Python nvImageCodec → single-slot C++ → K-slot
+async multi-stream). CUDA is a build-from-source path (not in the PyPI wheels); see
+[GPU acceleration](../GPU_ACCELERATION.md) and `experiments/cuda/RESULTS.md`. Caveat: one RTX
+3090 (GPU-hybrid JPEG decode) at 160px — a hardware-JPEG GPU or other sizes could shift it.
+
+So the honest statement: TurboLoader is **measured faster than PyTorch and tf.data on CPU**
+(above) **and faster than DALI and FFCV on an NVIDIA GPU** — while running the same unified API
+on the CPU and on Apple Metal, where neither DALI nor FFCV runs at all.
 
 ## Reproducing Results
 

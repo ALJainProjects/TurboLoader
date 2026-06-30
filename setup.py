@@ -241,6 +241,29 @@ def find_openmp():
         }
 
 
+def _nvimgcodec_include():
+    """Resolve the nvImageCodec C header directory for the CUDA build.
+
+    Order: explicit TURBOLOADER_NVIMGCODEC_INCLUDE, else auto-discover the installed
+    ``nvidia-nvimgcodec-cu12`` wheel's ``include/`` (so TURBOLOADER_ENABLE_NVIMGCODEC=1
+    "just works" when the wheel is present). Returns None if no nvimgcodec.h is found.
+    """
+    explicit = os.environ.get("TURBOLOADER_NVIMGCODEC_INCLUDE")
+    if explicit:
+        return explicit
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("nvidia.nvimgcodec")
+        if spec and spec.submodule_search_locations:
+            inc = os.path.join(list(spec.submodule_search_locations)[0], "include")
+            if os.path.isfile(os.path.join(inc, "nvimgcodec.h")):
+                return inc
+    except Exception:
+        pass
+    return None
+
+
 def get_extensions():
     """Build extension modules - only called when actually building wheels"""
     print("Detecting dependencies...")
@@ -425,9 +448,15 @@ def get_extensions():
         if os.environ.get("TURBOLOADER_ENABLE_NVIMGCODEC", "0") == "1":
             extra_macros.append(("HAVE_NVIMGCODEC", "1"))
             extra_libs += ["dl"]
-            _nvinc = os.environ.get("TURBOLOADER_NVIMGCODEC_INCLUDE")
+            _nvinc = _nvimgcodec_include()
             if _nvinc:
                 include_dirs.append(_nvinc)
+            else:
+                print(
+                    "[turboloader] WARNING: TURBOLOADER_ENABLE_NVIMGCODEC=1 but nvimgcodec.h was "
+                    "not found. Run `pip install nvidia-nvimgcodec-cu12` or set "
+                    "TURBOLOADER_NVIMGCODEC_INCLUDE to its include/ dir."
+                )
         # Extra lib dir for non-standard CUDA library locations (e.g. Jetson's tegra dir).
         _cuda_lib = os.environ.get("TURBOLOADER_CUDA_LIB")
         if _cuda_lib:
@@ -541,7 +570,7 @@ class BuildExt(build_ext):
             # nvImageCodec pipeline in the .cu needs its header + the HAVE_NVIMGCODEC macro.
             if os.environ.get("TURBOLOADER_ENABLE_NVIMGCODEC", "0") == "1":
                 cmd += ["-DHAVE_NVIMGCODEC=1"]
-                _nvinc = os.environ.get("TURBOLOADER_NVIMGCODEC_INCLUDE")
+                _nvinc = _nvimgcodec_include()
                 if _nvinc:
                     cmd += ["-I", _nvinc]
             print("[turboloader] compiling CUDA:", " ".join(cmd))
