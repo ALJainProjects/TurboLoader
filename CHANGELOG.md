@@ -5,6 +5,36 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.28.0] - 2026-06-29
+
+GPU acceleration on Apple Silicon (Metal), plus a gated CUDA scaffold.
+
+### Added
+- **Metal GPU transforms (macOS arm64)** — validated bit-exact vs CPU on an M4 Max:
+  - `metal_resize_normalize` — GPU bilinear resize + normalize.
+  - `metal_crop_resize_normalize` — fused RandomResizedCrop + horizontal flip + normalize.
+  - `metal_train_transform` — the **full ImageNet train pipeline** (crop + resize + flip +
+    brightness/contrast/saturation jitter + normalize) in a **single** GPU pass.
+- **`metal_decode_jpeg`** — a **hybrid GPU JPEG decoder** (a first for Apple GPUs): CPU
+  (libjpeg) does parse + Huffman entropy decode; the GPU does dequant + 8×8 IDCT; CPU does
+  upsample + color-convert. The GPU IDCT is proven bit-exact vs libjpeg (`experiments/metal/`).
+- **`decode_jpeg`** — CPU JPEG decode primitive (libjpeg-turbo, releases the GIL).
+- **`GpuImageLoader`** — end-to-end loader: parallel CPU decode + Metal transforms
+  (eval + `train_aug`). ~3.9× the CPU transform on Imagenette in the same loader.
+- **CUDA scaffold (gated, UNVALIDATED)** — `cuda_resize_normalize` etc. plus
+  `src/cuda/cuda_transforms.cu`, a faithful port of the proven Metal kernels, built with
+  `TURBOLOADER_ENABLE_CUDA=1` + nvcc. There is no NVIDIA GPU on dev/CI, so it is not
+  validated and ships nowhere by default; `cuda_available()` returns `False` honestly.
+- `docs/GPU_ACCELERATION.md` documenting all of the above (and what is/ isn't proven).
+
+### Changed
+- `features()` now reports `metal_gpu_transforms`, `gpu_transforms` (CUDA kernels), and
+  `nvjpeg_decode` separately instead of one vague flag.
+
+### Notes
+- Linux/Intel wheels are byte-for-byte unaffected — the Metal path compiles only on
+  macOS arm64; everything degrades to honest `*_available() == False` elsewhere.
+
 ## [2.27.0] - 2026-06-28
 
 ### Added
