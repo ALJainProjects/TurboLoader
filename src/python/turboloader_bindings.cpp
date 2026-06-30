@@ -37,6 +37,7 @@
 #endif
 #include <thread>
 #include <chrono>
+#include <fstream>
 
 // Single source of truth for the version: setup.py passes -DTURBOLOADER_VERSION
 // at build time so the native module can never drift from the package version.
@@ -849,6 +850,34 @@ PYBIND11_MODULE(_turboloader, m) {
               "    output = transform.apply(image)\n\n"
               "Documentation:\n"
               "    https://github.com/ALJainProjects/TurboLoader/tree/main/docs";
+
+    // Batched file reader: reads many files into memory with the GIL RELEASED (parallel I/O via
+    // the thread pool), then returns a list of bytes. Lets a Python loader overlap disk reads
+    // with GPU work — Python's per-file open()/read() otherwise holds the GIL and serializes in
+    // front of decode. Returns b"" for any file that fails to open.
+    m.def(
+        "read_files",
+        [](const std::vector<std::string>& paths) {
+            std::vector<std::string> bufs(paths.size());
+            {
+                py::gil_scoped_release rel;
+                turboloader::parallel_for(paths.size(), [&](size_t i) {
+                    std::ifstream f(paths[i], std::ios::binary | std::ios::ate);
+                    if (!f) return;
+                    std::streamsize n = f.tellg();
+                    if (n <= 0) return;
+                    bufs[i].resize(static_cast<size_t>(n));
+                    f.seekg(0);
+                    f.read(&bufs[i][0], n);
+                });
+            }
+            py::list out;
+            for (auto& b : bufs) out.append(py::bytes(b));
+            return out;
+        },
+        py::arg("paths"),
+        "Read many files into a list of bytes with the GIL released (parallel I/O via the thread "
+        "pool). For loaders that overlap disk reads with GPU decode. b'' for files that fail.");
 
     // DirectBatchLoader: FFCV/tf.data-style single-pass batched decode. Each batch is
     // decoded+resized+normalized directly into the output buffer by the thread pool —
