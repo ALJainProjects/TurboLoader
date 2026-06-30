@@ -523,6 +523,12 @@ static float* g_nv_out_pool[NV_OUT_RING] = {nullptr};
 static size_t g_nv_out_cap[NV_OUT_RING] = {0};
 static int g_nv_out_idx = 0;
 
+// DEDICATED thread pool for the per-image setup fan-out. The GLOBAL pool is single-caller
+// (shared body_/cursor_/remaining_ state) and the loader's reader thread already drives it via
+// read_files; running the setup loop on it concurrently corrupts that state -> crash. A private
+// pool used only by the (serialized) decode thread keeps each pool single-caller.
+static turboloader::ThreadPool* g_nv_pool = nullptr;
+
 template <typename T>
 static bool load_sym(void* h, T& fn, const char* name) {
     fn = reinterpret_cast<T>(dlsym(h, name));
@@ -576,6 +582,11 @@ bool nvimgcodec_pipeline_init(const char* lib_path, const char* ext_path, int de
         return false;
     }
     if (cudaStreamCreate(&g_nv_stream) != cudaSuccess) return false;
+    if (!g_nv_pool) {
+        unsigned hc = std::thread::hardware_concurrency();
+        if (hc < 2) hc = 2;
+        g_nv_pool = new turboloader::ThreadPool(hc - 1);  // + the decode thread == hc
+    }
     g_nv_ready = true;
     return true;
 }
@@ -605,7 +616,7 @@ uintptr_t nvimgcodec_decode_resize_normalize(const std::vector<const uint8_t*>& 
     // is the host-side work DALI parallelizes across num_threads. The batched decode and the
     // resize kernel stay single-call on g_nv_stream.
     std::atomic<bool> ok{true};
-    turboloader::parallel_for(N, [&](size_t ii) {
+    g_nv_pool->parallel_for(N, [&](size_t ii) {
         const int i = (int)ii;
         if (!ok.load(std::memory_order_relaxed)) return;
         // Reuse the handle if non-null (nvImageCodec rebinds it to the new source).
