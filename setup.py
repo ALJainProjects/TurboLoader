@@ -516,6 +516,12 @@ class BuildExt(build_ext):
                 "-fPIC",
                 "-DTURBOLOADER_CUDA_TRANSFORMS=1",
             ]
+            # Target GPU arch: set TURBOLOADER_CUDA_ARCH (e.g. "native", "sm_86", "sm_87").
+            # Required on CUDA 13+, whose default may not emit an image the GPU can run
+            # ("no kernel image available for execution on the device").
+            _arch = os.environ.get("TURBOLOADER_CUDA_ARCH")
+            if _arch:
+                cmd += ["-arch", _arch]
             print("[turboloader] compiling CUDA:", " ".join(cmd))
             subprocess.check_call(cmd)
             for ext in self.extensions:

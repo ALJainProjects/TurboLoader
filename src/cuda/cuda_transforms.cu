@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -117,8 +118,10 @@ bool resize_normalize_batch(const std::vector<ImageRef>& imgs, int dst_h, int ds
     for (size_t i = 0; i < N; i++)
         resize_normalize_kernel<<<grid, block>>>(d_src + off[i], d_dst + i * per_out, imgs[i].w,
                                                  imgs[i].h, dst_w, dst_h, m, isd);
-    cudaDeviceSynchronize();
-    bool ok = cudaGetLastError() == cudaSuccess;
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err == cudaSuccess) err = cudaGetLastError();
+    bool ok = (err == cudaSuccess);
+    if (!ok) fprintf(stderr, "[turboloader cuda] kernel error: %s\n", cudaGetErrorString(err));
     if (ok) cudaMemcpy(out, d_dst, N * per_out * sizeof(float), cudaMemcpyDeviceToHost);
     cudaFree(d_src);
     cudaFree(d_dst);
@@ -148,8 +151,10 @@ bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
                                                       imgs[i].w, imgs[i].h, dst_w, dst_h, crop,
                                                       crops[i].flip, m, isd);
     }
-    cudaDeviceSynchronize();
-    bool ok = cudaGetLastError() == cudaSuccess;
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err == cudaSuccess) err = cudaGetLastError();
+    bool ok = (err == cudaSuccess);
+    if (!ok) fprintf(stderr, "[turboloader cuda] kernel error: %s\n", cudaGetErrorString(err));
     if (ok) cudaMemcpy(out, d_dst, N * per_out * sizeof(float), cudaMemcpyDeviceToHost);
     cudaFree(d_src);
     cudaFree(d_dst);
