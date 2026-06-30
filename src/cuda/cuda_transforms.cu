@@ -176,8 +176,12 @@ static cudaStream_t g_stream = nullptr;
 static bool g_nvjpeg_ready = false;
 static uint8_t* g_decode_pool = nullptr;
 static size_t g_decode_cap = 0;
-static float* g_out_pool = nullptr;
-static size_t g_out_cap = 0;
+// Ring of output pools so a prefetched batch's result doesn't clobber the one still being
+// consumed (each call returns a different slot; up to OUT_RING-1 batches stay valid).
+static const int OUT_RING = 4;
+static float* g_out_pool[OUT_RING] = {nullptr};
+static size_t g_out_cap[OUT_RING] = {0};
+static int g_out_idx = 0;
 static int g_batched_max = 0;
 static std::mutex g_pool_mutex;
 
@@ -197,12 +201,13 @@ static void nvjpeg_init() {
     g_nvjpeg_ready = true;
 }
 
-// Core fused decode+transform into g_out_pool (device, N*3*dst_h*dst_w float32). Caller
-// must hold g_pool_mutex and have called nvjpeg_init(). No D2H — output stays on the GPU.
-static bool fused_into_pool(const std::vector<const uint8_t*>& jpegs,
-                            const std::vector<size_t>& sizes, int dst_h, int dst_w,
-                            const float mean[3], const float std_[3]) {
-    if (jpegs.empty() || jpegs.size() != sizes.size() || dst_h <= 0 || dst_w <= 0) return false;
+// Core fused decode+transform into a ring output slot (device, N*3*dst_h*dst_w float32).
+// Caller must hold g_pool_mutex and have called nvjpeg_init(). Returns the device pointer of
+// the slot used (no D2H), or nullptr on error.
+static float* fused_into_pool(const std::vector<const uint8_t*>& jpegs,
+                              const std::vector<size_t>& sizes, int dst_h, int dst_w,
+                              const float mean[3], const float std_[3]) {
+    if (jpegs.empty() || jpegs.size() != sizes.size() || dst_h <= 0 || dst_w <= 0) return nullptr;
     const int N = (int)jpegs.size();
     const size_t per_out = (size_t)3 * dst_h * dst_w;
 
@@ -215,29 +220,30 @@ static bool fused_into_pool(const std::vector<const uint8_t*>& jpegs,
         int w[NVJPEG_MAX_COMPONENT], h[NVJPEG_MAX_COMPONENT];
         if (nvjpegGetImageInfo(g_nvjpeg, jpegs[i], sizes[i], &nc, &ss, w, h) !=
             NVJPEG_STATUS_SUCCESS)
-            return false;
+            return nullptr;
         ws[i] = w[0];
         hs[i] = h[0];
         off[i + 1] = off[i] + (size_t)ws[i] * hs[i] * 3;
     }
 
-    // Grow the persistent pools if needed (never shrink — reused next batch).
+    // Grow the (transient) decode pool + the current ring output slot as needed.
     if (off[N] > g_decode_cap) {
         if (g_decode_pool) cudaFree(g_decode_pool);
         if (cudaMalloc(&g_decode_pool, off[N]) != cudaSuccess) {
             g_decode_cap = 0;
-            return false;
+            return nullptr;
         }
         g_decode_cap = off[N];
     }
     const size_t out_bytes = (size_t)N * per_out * sizeof(float);
-    if (out_bytes > g_out_cap) {
-        if (g_out_pool) cudaFree(g_out_pool);
-        if (cudaMalloc(&g_out_pool, out_bytes) != cudaSuccess) {
-            g_out_cap = 0;
-            return false;
+    float*& outp = g_out_pool[g_out_idx];
+    if (out_bytes > g_out_cap[g_out_idx]) {
+        if (outp) cudaFree(outp);
+        if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
+            g_out_cap[g_out_idx] = 0;
+            return nullptr;
         }
-        g_out_cap = out_bytes;
+        g_out_cap[g_out_idx] = out_bytes;
     }
     if (N != g_batched_max) {  // re-init on ANY batch-size change (e.g. a ragged last batch)
         // max_cpu_threads for the host-side Huffman decode — single-threaded was the
@@ -246,7 +252,7 @@ static bool fused_into_pool(const std::vector<const uint8_t*>& jpegs,
         if (cpu_threads < 1) cpu_threads = 8;
         if (nvjpegDecodeBatchedInitialize(g_nvjpeg, g_batched_state, N, cpu_threads,
                                           NVJPEG_OUTPUT_RGBI) != NVJPEG_STATUS_SUCCESS)
-            return false;
+            return nullptr;
         g_batched_max = N;
     }
 
@@ -262,7 +268,7 @@ static bool fused_into_pool(const std::vector<const uint8_t*>& jpegs,
     }
     if (nvjpegDecodeBatched(g_nvjpeg, g_batched_state, jpegs.data(), sizes.data(), imgs.data(),
                             g_stream) != NVJPEG_STATUS_SUCCESS)
-        return false;
+        return nullptr;
 
     // Transform reads the decode pool in place (no host round-trip).
     float3 m = make_float3(mean[0], mean[1], mean[2]);
@@ -270,15 +276,16 @@ static bool fused_into_pool(const std::vector<const uint8_t*>& jpegs,
     dim3 block(16, 16), grid((dst_w + 15) / 16, (dst_h + 15) / 16);
     for (int i = 0; i < N; i++)
         resize_normalize_kernel<<<grid, block, 0, g_stream>>>(
-            g_decode_pool + off[i], g_out_pool + (size_t)i * per_out, ws[i], hs[i], dst_w, dst_h,
-            m, isd);
+            g_decode_pool + off[i], outp + (size_t)i * per_out, ws[i], hs[i], dst_w, dst_h, m,
+            isd);
     cudaError_t err = cudaStreamSynchronize(g_stream);
     if (err == cudaSuccess) err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "[turboloader cuda] fused pipeline: %s\n", cudaGetErrorString(err));
-        return false;
+        return nullptr;
     }
-    return true;  // result in g_out_pool; no D2H
+    g_out_idx = (g_out_idx + 1) % OUT_RING;  // next batch uses a different ring slot
+    return outp;  // device result; no D2H
 }
 
 // CPU output: fused work + one D2H of the result to host `out`.
@@ -289,9 +296,10 @@ bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
     nvjpeg_init();
     if (!g_nvjpeg_ready) return false;
     std::lock_guard<std::mutex> lk(g_pool_mutex);
-    if (!fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std_)) return false;
+    float* outp = fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std_);
+    if (!outp) return false;
     const size_t bytes = (size_t)jpegs.size() * 3 * dst_h * dst_w * sizeof(float);
-    cudaMemcpy(out, g_out_pool, bytes, cudaMemcpyDeviceToHost);
+    cudaMemcpy(out, outp, bytes, cudaMemcpyDeviceToHost);
     return true;
 }
 
@@ -304,8 +312,8 @@ uintptr_t decode_resize_normalize_batch_gpu(const std::vector<const uint8_t*>& j
     nvjpeg_init();
     if (!g_nvjpeg_ready) return 0;
     std::lock_guard<std::mutex> lk(g_pool_mutex);
-    if (!fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std_)) return 0;
-    return reinterpret_cast<uintptr_t>(g_out_pool);
+    float* outp = fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std_);
+    return outp ? reinterpret_cast<uintptr_t>(outp) : 0;
 }
 #else
 bool decode_resize_normalize_batch(const std::vector<const uint8_t*>&,

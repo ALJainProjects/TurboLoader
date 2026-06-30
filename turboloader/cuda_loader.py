@@ -11,6 +11,8 @@ separately. Requires a CUDA build (``turboloader.cuda_available()``).
 """
 from __future__ import annotations
 
+import queue
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -55,6 +57,7 @@ class CudaImageLoader:
         drop_last=False,
         decode="gpu",
         gpu_output=False,
+        prefetch=0,
     ):
         import turboloader as t
 
@@ -68,6 +71,9 @@ class CudaImageLoader:
         self._fused = decode == "gpu" and hasattr(t, "cuda_decode_resize_normalize")
         # gpu_output=True yields a __cuda_array_interface__ batch kept on the GPU (no D2H).
         self._gpu_output = bool(gpu_output) and hasattr(t, "cuda_decode_resize_normalize_gpu")
+        # Async prefetch depth (background thread decodes ahead). Capped at 2 to stay within
+        # the C++ output ring (OUT_RING=4: producing + queued + consuming slots).
+        self._prefetch = max(0, min(int(prefetch), 2))
         self.paths = list(paths)
         self.batch_size = int(batch_size)
         self.image_size = image_size if isinstance(image_size, tuple) else (image_size, image_size)
@@ -110,7 +116,32 @@ class CudaImageLoader:
         gpu_out = (
             getattr(self._t, "cuda_decode_resize_normalize_gpu", None) if self._gpu_output else None
         )
-        if fused is not None:
+        if gpu_out is not None and self._prefetch > 0:
+            # Async prefetch: a background thread decodes batches ahead into a bounded queue
+            # (depth fits the C++ output ring), overlapping decode with the consumer's work.
+            starts = list(range(0, end, bs))
+            q = queue.Queue(maxsize=self._prefetch)
+            sentinel = object()
+
+            def _producer():
+                try:
+                    for start in starts:
+                        bidx = idx[start : start + bs]
+                        jpegs = [_read(i) for i in bidx]
+                        ptr = gpu_out(jpegs, dh, dw, mean=self.mean, std=self.std)
+                        q.put(_CudaArray(ptr, (len(jpegs), 3, dh, dw)))
+                finally:
+                    q.put(sentinel)
+
+            th = threading.Thread(target=_producer, daemon=True)
+            th.start()
+            while True:
+                item = q.get()
+                if item is sentinel:
+                    break
+                yield item
+            th.join(timeout=0.5)
+        elif fused is not None:
             # Fused path: the C++ op decodes the whole batch on the GPU, so Python only
             # reads bytes. Read SERIALLY — a ThreadPoolExecutor over 64 tiny (page-cached)
             # reads costs ~16 ms of future/GIL overhead vs ~0.6 ms serial.
