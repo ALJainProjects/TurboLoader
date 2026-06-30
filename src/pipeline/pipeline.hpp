@@ -487,7 +487,7 @@ private:
                         jpeg_data.size(),
                         gpu_result)) {
                         // Successful GPU decode
-                        usample.image_data = std::move(gpu_result.rgb_data);
+                        usample.image_data = std::move(gpu_result.data);
                         usample.width = gpu_result.width;
                         usample.height = gpu_result.height;
                         usample.channels = gpu_result.channels;
