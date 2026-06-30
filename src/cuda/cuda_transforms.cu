@@ -392,6 +392,46 @@ uintptr_t decode_resize_normalize_batch_gpu(const std::vector<const uint8_t*>& j
     float* outp = fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std_);
     return outp ? reinterpret_cast<uintptr_t>(outp) : 0;
 }
+
+uintptr_t resize_normalize_device_batch(const std::vector<uintptr_t>& d_imgs,
+                                        const std::vector<int>& ws, const std::vector<int>& hs,
+                                        int dst_h, int dst_w, const float mean[3],
+                                        const float std_[3]) {
+    if (!available() || d_imgs.empty() || d_imgs.size() != ws.size() ||
+        d_imgs.size() != hs.size() || dst_h <= 0 || dst_w <= 0)
+        return 0;
+    nvjpeg_init();  // ensures g_stream exists
+    if (!g_nvjpeg_ready) return 0;
+    std::lock_guard<std::mutex> lk(g_pool_mutex);
+    const int N = (int)d_imgs.size();
+    const size_t per_out = (size_t)3 * dst_h * dst_w;
+    float*& outp = g_out_pool[g_out_idx];
+    const size_t out_bytes = (size_t)N * per_out * sizeof(float);
+    if (out_bytes > g_out_cap[g_out_idx]) {
+        if (outp) cudaFree(outp);
+        if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
+            g_out_cap[g_out_idx] = 0;
+            return 0;
+        }
+        g_out_cap[g_out_idx] = out_bytes;
+    }
+    float3 m = make_float3(mean[0], mean[1], mean[2]);
+    float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
+    dim3 block(16, 16), grid((dst_w + 15) / 16, (dst_h + 15) / 16);
+    for (int i = 0; i < N; i++)  // transform reads the external device images in place
+        resize_normalize_kernel<<<grid, block, 0, g_stream>>>(
+            reinterpret_cast<const uint8_t*>(d_imgs[i]), outp + (size_t)i * per_out, ws[i], hs[i],
+            dst_w, dst_h, m, isd);
+    cudaError_t err = cudaStreamSynchronize(g_stream);
+    if (err == cudaSuccess) err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[turboloader cuda] device transform: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    float* result = outp;
+    g_out_idx = (g_out_idx + 1) % OUT_RING;
+    return reinterpret_cast<uintptr_t>(result);
+}
 #else
 bool decode_resize_normalize_batch(const std::vector<const uint8_t*>&,
                                    const std::vector<size_t>&, int, int, const float[3],
@@ -401,6 +441,11 @@ bool decode_resize_normalize_batch(const std::vector<const uint8_t*>&,
 uintptr_t decode_resize_normalize_batch_gpu(const std::vector<const uint8_t*>&,
                                             const std::vector<size_t>&, int, int, const float[3],
                                             const float[3]) {
+    return 0;  // built without nvJPEG
+}
+uintptr_t resize_normalize_device_batch(const std::vector<uintptr_t>&, const std::vector<int>&,
+                                        const std::vector<int>&, int, int, const float[3],
+                                        const float[3]) {
     return 0;  // built without nvJPEG
 }
 #endif

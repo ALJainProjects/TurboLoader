@@ -64,5 +64,14 @@ uintptr_t decode_resize_normalize_batch_gpu(const std::vector<const uint8_t*>& j
                                             const std::vector<size_t>& sizes, int dst_h, int dst_w,
                                             const float mean[3], const float std_[3]);
 
+// Transform-only, GPU-resident: the inputs are ALREADY-decoded device images (e.g. from
+// nvImageCodec) given as device pointers + dims. Runs resize+normalize in place and returns
+// the device pointer of the (N,3,dst_h,dst_w) float32 result (valid until the next call).
+// Lets a fast external decoder (nvImageCodec) feed our transform with zero extra copies.
+uintptr_t resize_normalize_device_batch(const std::vector<uintptr_t>& d_imgs,
+                                        const std::vector<int>& ws, const std::vector<int>& hs,
+                                        int dst_h, int dst_w, const float mean[3],
+                                        const float std_[3]);
+
 }  // namespace cuda
 }  // namespace turboloader

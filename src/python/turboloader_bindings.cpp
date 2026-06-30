@@ -1383,6 +1383,25 @@ PYBIND11_MODULE(_turboloader, m) {
         "GPU-RESIDENT fused pipeline: returns the CUDA DEVICE pointer (int) of the "
         "(N,3,dst_h,dst_w) float32 result (valid until the next call). Wrap zero-copy via "
         "__cuda_array_interface__ — no D2H.");
+    m.def(
+        "cuda_resize_normalize_from_device",
+        [](std::vector<uintptr_t> ptrs, std::vector<int> ws, std::vector<int> hs, int dst_h,
+           int dst_w, std::array<float, 3> mean, std::array<float, 3> std_) -> uintptr_t {
+            uintptr_t out;
+            {
+                py::gil_scoped_release rel;
+                out = turboloader::cuda::resize_normalize_device_batch(
+                    ptrs, ws, hs, dst_h, dst_w, mean.data(), std_.data());
+            }
+            if (!out) throw std::runtime_error("cuda_resize_normalize_from_device failed");
+            return out;
+        },
+        py::arg("ptrs"), py::arg("ws"), py::arg("hs"), py::arg("dst_h"), py::arg("dst_w"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "Transform ALREADY-DECODED device images (e.g. nvImageCodec output) given as device "
+        "pointers (ptrs) + dims (ws,hs): resize+normalize -> device pointer of (N,3,dst_h,dst_w) "
+        "float32. Wrap via __cuda_array_interface__. Zero extra copies.");
 #endif
 #else
     m.def("cuda_available", []() { return false; },

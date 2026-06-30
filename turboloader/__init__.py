@@ -2194,12 +2194,14 @@ try:
                 cuda_decode_jpeg,
                 cuda_decode_resize_normalize,
                 cuda_decode_resize_normalize_gpu,
+                cuda_resize_normalize_from_device,
             )
 
             __all__ += [
                 "cuda_decode_jpeg",
                 "cuda_decode_resize_normalize",
                 "cuda_decode_resize_normalize_gpu",
+                "cuda_resize_normalize_from_device",
             ]
         except ImportError:
             pass
