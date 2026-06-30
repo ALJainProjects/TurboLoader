@@ -289,7 +289,7 @@ bool decode_resize_normalize_batch(const std::vector<const uint8_t*>& jpegs,
     nvjpeg_init();
     if (!g_nvjpeg_ready) return false;
     std::lock_guard<std::mutex> lk(g_pool_mutex);
-    if (!fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std)) return false;
+    if (!fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std_)) return false;
     const size_t bytes = (size_t)jpegs.size() * 3 * dst_h * dst_w * sizeof(float);
     cudaMemcpy(out, g_out_pool, bytes, cudaMemcpyDeviceToHost);
     return true;
@@ -304,7 +304,7 @@ uintptr_t decode_resize_normalize_batch_gpu(const std::vector<const uint8_t*>& j
     nvjpeg_init();
     if (!g_nvjpeg_ready) return 0;
     std::lock_guard<std::mutex> lk(g_pool_mutex);
-    if (!fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std)) return 0;
+    if (!fused_into_pool(jpegs, sizes, dst_h, dst_w, mean, std_)) return 0;
     return reinterpret_cast<uintptr_t>(g_out_pool);
 }
 #else
