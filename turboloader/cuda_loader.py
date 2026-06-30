@@ -5,11 +5,14 @@ float32 batches (GPU-resident via ``__cuda_array_interface__``). Lets TurboLoade
 fairly against DALI/FFCV on NVIDIA hardware.
 
 Decode backends, fastest first:
-- ``decode="nvimgcodec"``: NVIDIA nvImageCodec GPU decode -> our resize/normalize kernel reads
-  its device images in place (zero copies). ~14.5k img/s end-to-end on a 3090 (~17.7k with the
-  bytes already in RAM) — beats FFCV, ~72% of DALI. A 3-stage pipeline (reader thread || GPU
-  decode+transform thread || consumer) plus a GIL-released C++ ``read_files`` overlap disk I/O
-  with GPU work. Needs the ``nvidia-nvimgcodec-cu12`` wheel.
+- ``decode="nvimgcodec"``: NVIDIA nvImageCodec GPU decode (what DALI uses). Prefers the in-C++
+  pipeline — the WHOLE read->decode->resize->normalize->batch runs in one GIL-released C++ call
+  (``cuda_nvimgcodec_decode_resize_normalize``), so Python only wraps the device pointer.
+  **~22.4k img/s end-to-end on a 3090** — DALI-class (matches/beats DALI at <=4 threads, ~84% of
+  DALI's 8-thread best), far ahead of FFCV (~13.8k). A 3-stage pipeline (reader || C++
+  decode+transform || consumer) keeps the GIL released throughout. Falls back to the Python
+  ``nvimgcodec.Decoder`` + ``cuda_resize_normalize_from_device`` (~14.5k) if the C++ pipeline
+  isn't built in. Needs the ``nvidia-nvimgcodec-cu12`` wheel.
 - ``decode="gpu"``: nvJPEG batched HW-hybrid decode + fused GPU resize/normalize. ~9.2k img/s.
 - ``decode="cpu"``: libjpeg-turbo decode + GPU transform.
 
