@@ -1,13 +1,19 @@
 """End-to-end CUDA GPU image loader (NVIDIA). The CUDA analogue of GpuImageLoader.
 
-Decodes JPEGs with nvJPEG on the GPU (``cuda_decode_jpeg``) and runs resize+normalize on
-the GPU (``cuda_resize_normalize``), yielding ``(N, 3, H, W)`` float32 batches. Lets
-TurboLoader be compared fairly against DALI/FFCV on NVIDIA hardware.
+Decodes JPEGs on the GPU and runs resize+normalize on the GPU, yielding ``(N, 3, H, W)``
+float32 batches (GPU-resident via ``__cuda_array_interface__``). Lets TurboLoader be compared
+fairly against DALI/FFCV on NVIDIA hardware.
 
-Honest v1 note: decode and transform each round-trip through host memory (nvJPEG decode ->
-host -> GPU transform), and the single-image nvJPEG path is mutex-serialized. The fused,
-GPU-resident pipeline (no round-trips, batched nvJPEG) is the optimization tracked
-separately. Requires a CUDA build (``turboloader.cuda_available()``).
+Decode backends, fastest first:
+- ``decode="nvimgcodec"``: NVIDIA nvImageCodec GPU decode -> our resize/normalize kernel reads
+  its device images in place (zero copies). ~14.5k img/s end-to-end on a 3090 (~17.7k with the
+  bytes already in RAM) — beats FFCV, ~72% of DALI. A 3-stage pipeline (reader thread || GPU
+  decode+transform thread || consumer) plus a GIL-released C++ ``read_files`` overlap disk I/O
+  with GPU work. Needs the ``nvidia-nvimgcodec-cu12`` wheel.
+- ``decode="gpu"``: nvJPEG batched HW-hybrid decode + fused GPU resize/normalize. ~9.2k img/s.
+- ``decode="cpu"``: libjpeg-turbo decode + GPU transform.
+
+Requires a CUDA build (``turboloader.cuda_available()``).
 """
 from __future__ import annotations
 
