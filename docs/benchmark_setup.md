@@ -3,10 +3,12 @@
 This guide explains how to set up the data loading frameworks used in TurboLoader's
 honest, measured comparison: **PyTorch `DataLoader`** and **TensorFlow `tf.data`**.
 
-> **Scope note:** FFCV and NVIDIA DALI head-to-head comparisons are future work and
-> have **not** been measured yet. They are intentionally omitted here so the setup
-> guide only covers frameworks whose numbers we actually report. There is no GPU /
-> nvJPEG path in the shipped wheel.
+> **Scope note:** this CPU-side setup guide covers **PyTorch `DataLoader`** and
+> **TensorFlow `tf.data`**. The NVIDIA-GPU head-to-head (TurboLoader's nvImageCodec
+> `CudaImageLoader` vs **DALI** and **FFCV**) has now been measured on an RTX 3090 —
+> TurboLoader wins (~28.5k vs DALI's ~25.5k) — see `docs/benchmarks/index.md`,
+> `docs/GPU_ACCELERATION.md`, and `experiments/cuda/RESULTS.md`. The GPU/CUDA path is
+> build-from-source (not in the shipped portable wheels).
 
 ## Table of Contents
 
