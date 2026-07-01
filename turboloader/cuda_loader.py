@@ -20,6 +20,7 @@ Decode backends, fastest first:
 
 Requires a CUDA build (``turboloader.cuda_available()``).
 """
+
 from __future__ import annotations
 
 import queue
@@ -51,9 +52,11 @@ class CudaImageLoader:
     Args:
         paths: image file paths.
         batch_size, image_size, num_workers, shuffle, mean, std, seed, drop_last: as usual.
-        decode: "nvimgcodec" (NVIDIA nvImageCodec, fastest — ~17.7k img/s on a 3090, needs the
-            `nvidia-nvimgcodec-cu12` wheel), "gpu" (nvJPEG, default) or "cpu" (libjpeg-turbo).
-            "nvimgcodec" yields GPU-resident `__cuda_array_interface__` batches.
+        decode: "nvimgcodec" (NVIDIA nvImageCodec — fastest, ~28.5k img/s on a 3090, beats DALI;
+            needs the `nvidia-nvimgcodec-cu12` wheel), "gpu" (nvJPEG, default) or "cpu"
+            (libjpeg-turbo). "nvimgcodec" yields GPU-resident `__cuda_array_interface__` batches.
+        nvimgcodec_slots: concurrent nvImageCodec decode slots for decode="nvimgcodec" (default
+            3, capped at 3). More slots overlap more batches — higher throughput, more GPU memory.
     """
 
     def __init__(
@@ -117,7 +120,11 @@ class CudaImageLoader:
                         -1,
                         want_slots,
                     )
-                    ns = t.cuda_nvimgcodec_num_slots() if hasattr(t, "cuda_nvimgcodec_num_slots") else 0
+                    ns = (
+                        t.cuda_nvimgcodec_num_slots()
+                        if hasattr(t, "cuda_nvimgcodec_num_slots")
+                        else 0
+                    )
                     if ns >= 1:
                         self._nv_cpp = True
                         self._nv_slots = min(want_slots, ns)
@@ -245,8 +252,13 @@ class CudaImageLoader:
                 imgs = dec.decode(jpegs)
                 cai = [im.__cuda_array_interface__ for im in imgs]
                 ptr = xform(
-                    [c["data"][0] for c in cai], [c["shape"][1] for c in cai],
-                    [c["shape"][0] for c in cai], dh, dw, mean=self.mean, std=self.std,
+                    [c["data"][0] for c in cai],
+                    [c["shape"][1] for c in cai],
+                    [c["shape"][0] for c in cai],
+                    dh,
+                    dw,
+                    mean=self.mean,
+                    std=self.std,
                 )
                 return _CudaArray(ptr, (len(imgs), 3, dh, dw))
 
