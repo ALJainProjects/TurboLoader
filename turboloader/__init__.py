@@ -2247,11 +2247,11 @@ try:
     except Exception:
         pass
 
-    # CUDA end-to-end image loader (NVIDIA): nvJPEG decode + cuda_resize_normalize.
+    # CUDA end-to-end image loaders (NVIDIA): on-the-fly (nvImageCodec/nvJPEG) + GPU-resident.
     try:
-        from turboloader.cuda_loader import CudaImageLoader
+        from turboloader.cuda_loader import CudaImageLoader, CudaResidentLoader
 
-        __all__ += ["CudaImageLoader"]
+        __all__ += ["CudaImageLoader", "CudaResidentLoader"]
     except Exception:
         pass
 
