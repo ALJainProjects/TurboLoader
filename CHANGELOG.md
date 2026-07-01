@@ -17,8 +17,12 @@ CUDA image loader that **beats NVIDIA DALI** on a 3090, via an in-C++ nvImageCod
   its own decoder + CUDA stream + device buffers + output ring) on K worker threads overlap one
   batch's host Huffman-decode with another's GPU work. Each slot syncs its own stream before
   returning (no async-handoff race); batches are yielded as-completed (out of order when K>1).
-  On an RTX 3090 (Imagenette-160, batch 64, interleaved): **~28,500 img/s — +12% over DALI's
-  best-tuned config (~25,500)**, ahead of FFCV (~13,800). See `experiments/cuda/RESULTS.md`.
+  On an RTX 3090 (Imagenette-160, batch 64, interleaved) it is the fastest **on-the-fly** loader
+  (reads a JPEG folder, decodes every epoch): **+12% over DALI's best-tuned config** in the
+  cleanest run (~28.5k vs ~25.5k, ≥ DALI in every run). FFCV is faster (~2.6× with a JPEG `.beton`,
+  ~5.9× raw) but requires an offline conversion to its pre-resized `.beton` and does no per-epoch
+  decode/resize — a different category; TurboLoader does not beat FFCV. The host drifts ~40%
+  run-to-run, so only within-run relative numbers hold. See `experiments/cuda/RESULTS.md`.
   Correctness: corr 0.99986 vs the libjpeg-turbo path; the K-slot pipeline validated bijectively
   exact (96/96 batches) vs the single-slot synced path.
 - **In-C++ nvImageCodec bindings** — `cuda_nvimgcodec_init`, `cuda_nvimgcodec_num_slots`,

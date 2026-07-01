@@ -83,19 +83,27 @@ the header.
 
 ### Benchmark (RTX 3090, Imagenette-160, batch 64, real consumption, interleaved)
 
-| Loader | img/s (median) |
-|---|---:|
-| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **~28,500** |
-| NVIDIA **DALI** (`num_threads=8`, prefetch 3 — best-tuned) | ~25,500 |
-| NVIDIA DALI (`num_threads=12`) | ~25,400 |
-| FFCV (fixed `.beton`, GPU) | ~13,800 |
-| PyTorch `DataLoader` (PIL, CPU) | ~5,400 |
+Compared **interleaved** (each loader timed adjacently every round) because the WSL/3090 host
+drifts ~40% run-to-run (CPU-side, not the GPU) — only within-run relative numbers are reliable.
 
-Interleaved sampling (each loader timed adjacently every round, so the host's run-to-run drift
-hits all equally): TurboLoader median **28,527** (min 25,676 / max 29,394) vs DALI median
-**25,479** (max 26,743) — **+12%**, TurboLoader's median above DALI's max. The journey:
-**9.2k → 14.5k → 22.4k → 28.5k** (nvJPEG → Python nvImageCodec → single-slot C++ → K-slot async).
-See `experiments/cuda/RESULTS.md`.
+**On-the-fly loaders** (read a JPEG folder, decode+resize+normalize every epoch):
+
+| Loader | vs TurboLoader |
+|---|---:|
+| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **1.0× (fastest)** |
+| NVIDIA **DALI** (`num_threads=8/12`, best-tuned) | ~0.9× |
+| PyTorch `DataLoader` (PIL, CPU) | ~0.25× |
+
+Cleanest run (FFCV-free 2-way): TurboLoader median **28,527** (min 25,676) vs DALI **25,479**
+(max 26,743) — **+12%**, TurboLoader's median above DALI's max; TurboLoader is ≥ DALI in every
+run (+6–28% by host load). Journey: **9.2k → 14.5k → 22.4k → 28.5k** (nvJPEG → Python nvImageCodec
+→ single-slot C++ → K-slot async).
+
+**FFCV is faster than both — but it's not on-the-fly.** It needs a one-time offline conversion to
+its `.beton` format (here pre-resized to 160), then never decodes/resizes on the fly:
+**FFCV with a JPEG `.beton` ≈ 2.6× TurboLoader; with a raw `.beton` ≈ 5.9×** (the raw form does no
+decode at all — just mmap-load + GPU normalize). It trades preprocessing + disk + format lock-in
+for per-epoch speed. TurboLoader beats DALI, not FFCV. See `experiments/cuda/RESULTS.md`.
 
 **Correctness.** (1) vs the libjpeg-turbo + kernel path: correlation **0.99986**, max|diff| 0.095
 — not bit-exact (JPEG IDCT + chroma upsampling are implementation-defined, so any two decoders

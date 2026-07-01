@@ -1,31 +1,46 @@
 # CUDA loader benchmark (RTX 3090, CUDA 13.3)
 
 Imagenette 160px, batch 64, real consumption (every batch adopted into a CUDA tensor and
-summed), median of timed epochs. All loaders read JPEGs from disk (page cache warm). DALL/TBL
-numbers below are from the SAME process, back-to-back, on the same 9,408-image set.
+summed), median of timed epochs. Loaders are compared INTERLEAVED (each timed adjacently every
+round) because this WSL/3090 host drifts ~40% run-to-run (CPU/host-side, not the GPU — GPU sits
+at 67 C, no thermal throttle). **Only within-run relative comparisons are trustworthy; absolute
+img/s are not stable across sessions.**
 
-## Final standings (img/s, higher = better)
-Headline numbers are from an INTERLEAVED head-to-head (each loader sampled adjacently every rep,
-8 reps, so the WSL box's run-to-run drift hits all equally — the fair way to compare on a noisy
-shared host). TurboLoader's median sits above DALI's max.
+## Two categories — on-the-fly vs pre-processed
 
-| Loader | img/s (median) | notes |
+**On-the-fly loaders** (read a JPEG folder, decode + resize + normalize *every epoch* — no
+preprocessing):
+
+| Loader | relative | notes |
 |---|---:|---|
-| **TurboLoader-CUDA** (`decode="nvimgcodec"`, 3 async slots) | **~28,500** | **K-slot multi-stream in-C++ pipeline — beats DALI** |
-| DALI (`num_threads=8`, prefetch 3) | ~25,500 | NVIDIA flagship, best-tuned config |
-| DALI (`num_threads=12`, prefetch 4) | ~25,400 | |
-| TurboLoader-CUDA (`nvimgcodec`, 1 slot) | ~22–25k | single GIL-released C++ call, sync per batch |
-| DALI (`num_threads=4`, prefetch 2) | ~21,200 | |
-| FFCV (fixed .beton, gpu) | ~13,800 | numba/turbojpeg CPU decode + GPU transform |
-| TurboLoader-CUDA (`decode="gpu"`, nvJPEG) | ~9,200 | nvJPEG batched HW-hybrid decode |
-| PyTorch DataLoader (PIL, CPU) | ~5,400 | CPU decode + transform |
+| **TurboLoader-CUDA** (`decode="nvimgcodec"`, 3 async slots) | **fastest on-the-fly** | K-slot multi-stream in-C++ pipeline |
+| NVIDIA DALI (`num_threads=8/12`, best-tuned) | ~0.9–0.95× TBL | GPU decode + resize |
+| TurboLoader-CUDA (`decode="gpu"`, nvJPEG) | ~0.4× TBL | nvJPEG batched HW-hybrid |
+| PyTorch DataLoader (PIL, CPU) | ~0.25× TBL | CPU decode + transform |
 
-Interleaved run: TBL slots=3 median **28,527** (min 25,676 / max 29,394) vs DALI nt=8 median
-**25,479** (min 23,962 / max 26,743) — **+12%**, TBL's median above DALI's max. TBL slots=3 uses
-3 decoders x ~5 host threads = ~15 threads; DALI nt=12 uses 12 — comparable budget, TBL wins both.
+Cleanest measurement (FFCV-free 2-way interleaved, least contention): **TBL slots=3 median
+28,527** (min 25,676) vs **DALI nt=8 median 25,479** (max 26,743) — **+12%, TBL median above DALI
+max**. In noisier runs with more loaders in-process the margin shrinks to ~+6% (overlapping
+ranges); TurboLoader is consistently **≥ DALI**, by ~6–28% depending on host load. TBL slots=3 =
+3 decoders × ~5 host threads ≈ 15; DALI nt=12 = 12 — comparable budget, TBL wins both.
 
-**TurboLoader-CUDA matches DALI** — it beats DALI's 4-thread config (22.4k vs 21.2k) and reaches
-**~84% of DALI's 8-thread best** (26.7k). Up from ~46% of DALI with nvJPEG.
+**Pre-processed loader (FFCV)** — requires a one-time offline conversion to its `.beton` format
+(here pre-resized to 160×160), so it does **less per-epoch work** than the on-the-fly loaders:
+
+| FFCV mode | img/s (median) | vs TBL | what it does per epoch |
+|---|---:|---:|---|
+| FFCV, **raw** `.beton` (797 MB) | ~80,000 | ~5.9× | mmap load + GPU normalize — **no decode, no resize** |
+| FFCV, **JPEG** `.beton` (143 MB) | ~35,000 | ~2.6× | CPU-decode tiny pre-resized JPEGs + normalize — **no resize** |
+
+**FFCV is substantially faster than TurboLoader and DALI.** It trades a one-time preprocessing
+step + a format lock-in + (for raw) 5× the disk for per-epoch speed, and never re-decodes/resizes.
+TurboLoader does **not** beat FFCV; it beats DALI among loaders that read a JPEG folder directly.
+
+> **Correction:** an earlier version of this file claimed "FFCV ~13,800, TurboLoader ahead." That
+> was wrong — a doubly-flawed measurement: the FFCV `Loader` was recreated every epoch (worker-
+> spawn + pipeline-JIT overhead dominated 3 short epochs) *and* the `.beton` stored raw uint8 (so
+> FFCV wasn't even decoding). Reused-loader, steady-state, with both raw and JPEG `.beton`s, FFCV
+> is 35k–80k — well ahead of TurboLoader.
 
 ## The journey: 9.2k -> 14.5k -> 22.4k -> 28.5k
 1. **nvImageCodec, the breakthrough.** DALI's speed was never its kernels — it was the decoder.
@@ -75,13 +90,17 @@ Interleaved run: TBL slots=3 median **28,527** (min 25,676 / max 29,394) vs DALI
   came instead from parallelizing across BATCHES (K slots), not within a batch.
 
 ## Honest verdict
-With the K-slot async multi-stream in-C++ nvImageCodec pipeline, **TurboLoader-CUDA beats DALI on
-NVIDIA** — ~28.5k vs ~25.5k img/s (+12%, interleaved, TBL median above DALI max), output
-bijectively verified correct. Far ahead of FFCV (~13.8k) and PyTorch (~5.4k). And it runs the
+With the K-slot async multi-stream in-C++ nvImageCodec pipeline, **TurboLoader-CUDA beats NVIDIA
+DALI among on-the-fly loaders** — the ones that read a JPEG folder and decode+resize every epoch
+(+12% in the cleanest interleaved run, TBL median above DALI max; ≥ DALI in every run), output
+bijectively verified correct — and far ahead of PyTorch (~5.4×). It does **not** beat **FFCV**:
+FFCV is ~2.6× (JPEG `.beton`) to ~5.9× (raw `.beton`) faster, because it front-loads decode/resize
+into a one-time offline conversion and never repeats them per epoch — a different trade-off (fast
+epochs at the cost of a preprocessing step, disk, and format lock-in). TurboLoader also runs the
 *same* unified loader API on the CPU and on Apple Metal, where neither DALI nor FFCV runs at all.
-Caveat: measured on one RTX 3090 (GPU-hybrid JPEG decode) at 160px; a GPU with a hardware JPEG
-unit, or different image sizes, could shift the balance — but at parity of host-thread budget
-TurboLoader is at least DALI-class and here ahead.
+Caveats: one RTX 3090 (GPU-hybrid JPEG decode) at 160px; the host drifts ~40% run-to-run so only
+within-run relative numbers hold; a GPU with a hardware JPEG unit or different sizes could shift
+the DALI margin.
 
 ## Reproduce
 ```python

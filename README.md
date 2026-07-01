@@ -338,20 +338,24 @@ scaled-decode factor automatically (you don't have to know to set `ratio`).
 
 On **NVIDIA**, `CudaImageLoader(decode="nvimgcodec")` runs the whole decode + resize + normalize
 + batch in GIL-released C++ via **nvImageCodec** (the codec DALI uses), with K independent decode
-slots overlapping batches (multi-batch-in-flight). On an **RTX 3090** (Imagenette-160, batch 64,
-real consumption, interleaved rounds to control for drift):
+slots overlapping batches (multi-batch-in-flight). Among **on-the-fly** loaders (read a JPEG
+folder, decode+resize every epoch) on an **RTX 3090** (Imagenette-160, batch 64, real consumption,
+interleaved rounds to control for ~40% host drift):
 
-| Loader | img/s (median) |
+| On-the-fly loader | vs TurboLoader |
 |---|---:|
-| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **~28,500** |
-| NVIDIA **DALI** (`num_threads=8`, best-tuned) | ~25,500 |
-| FFCV (fixed `.beton`, GPU) | ~13,800 |
-| PyTorch `DataLoader` (PIL, CPU) | ~5,400 |
+| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **1.0× (fastest)** |
+| NVIDIA **DALI** (`num_threads=8`, best-tuned) | ~0.9× (TurboLoader **+12%** cleanest run) |
+| PyTorch `DataLoader` (PIL, CPU) | ~0.25× |
 
-**+12% over DALI** (TurboLoader's median above DALI's max), output bijectively verified correct.
-On **Apple Silicon**, `GpuImageLoader` offloads resize+normalize (and a hybrid GPU JPEG decode)
-to Metal — where neither DALI nor FFCV runs at all. CUDA is a build-from-source path (not in the
-PyPI wheels); see [GPU acceleration](docs/GPU_ACCELERATION.md) for flags, usage, and the full
+**TurboLoader beats DALI** (median above DALI's max in the cleanest run), output bijectively
+verified correct. **FFCV is faster than both** (~2.6× TurboLoader with a JPEG `.beton`, ~5.9× with
+raw) — but it requires converting the dataset to its `.beton` format offline first (pre-resize +
+repack), front-loading the decode/resize that TurboLoader/DALI do every epoch; it's a different
+category, not on-the-fly. On **Apple Silicon**, `GpuImageLoader` offloads resize+normalize (and a
+hybrid GPU JPEG decode) to Metal — where neither DALI nor FFCV runs at all. CUDA is a
+build-from-source path (not in the PyPI wheels); see [GPU acceleration](docs/GPU_ACCELERATION.md)
+for flags, usage, and the full
 write-up (`experiments/cuda/RESULTS.md`).
 
 ### Implementation notes

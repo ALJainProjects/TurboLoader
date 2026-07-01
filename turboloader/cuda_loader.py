@@ -9,9 +9,11 @@ Decode backends, fastest first:
   pipeline — the WHOLE read->decode->resize->normalize->batch runs in GIL-released C++ calls, so
   Python only wraps device pointers. With ``nvimgcodec_slots=K`` (default 3), K independent decode
   slots (each own decoder + CUDA stream + buffers) run on K worker threads, overlapping one
-  batch's host decode with another's GPU work (DALI-style multi-batch-in-flight). **~28.5k img/s
-  on a 3090 — beats DALI (~25.5k, +12%, interleaved) and FFCV (~13.8k)**, output bijectively
-  verified correct. Each slot syncs its own stream before returning (no async-handoff race);
+  batch's host decode with another's GPU work (DALI-style multi-batch-in-flight). Fastest
+  **on-the-fly** loader on a 3090 (reads a JPEG folder, decodes every epoch): **beats DALI**
+  (+12% in the cleanest interleaved run, ~28.5k vs ~25.5k). (FFCV is faster but needs an offline
+  `.beton` conversion — pre-resized, no per-epoch decode/resize — a different category.) Output
+  bijectively verified correct. Each slot syncs its own stream before returning (no async-handoff race);
   batches are yielded AS COMPLETED (out of index order with K>1 — correct for training). Falls
   back to the Python ``nvimgcodec.Decoder`` (~14.5k) if the C++ pipeline isn't built in. Needs the
   ``nvidia-nvimgcodec-cu12`` wheel.
