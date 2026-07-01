@@ -102,14 +102,57 @@ Caveats: one RTX 3090 (GPU-hybrid JPEG decode) at 160px; the host drifts ~40% ru
 within-run relative numbers hold; a GPU with a hardware JPEG unit or different sizes could shift
 the DALI margin.
 
+## Beating FFCV at its own (pre-processed) game — GPU-resident
+
+FFCV's speed comes from an offline `.beton`: pre-resized, decode-once. TurboLoader can do the same
+trade — and go further by keeping the pre-processed data **on the GPU**. `CudaResidentLoader`
+decodes+resizes the dataset to uint8 once, uploads it to the GPU, then normalizes per epoch with a
+**single-launch custom kernel** (`normalize_nhwc_to_nchw`, `cuda_normalize_resident`) and **zero
+per-epoch H2D**. Isolated (each loader alone — the real single-loader-feeds-training case):
+
+| Loader (pre-processed) | img/s | vs FFCV-raw |
+|---|---:|---:|
+| **TurboLoader `CudaResidentLoader`** (GPU-resident uint8, custom kernel) | **~280,000** | **3.5×** |
+| FFCV, raw `.beton` (mmap + H2D per epoch) | ~79,000 | 1.0× |
+| FFCV, JPEG `.beton` | ~35,000 | 0.44× |
+
+Correctness of the kernel: max|diff| **4e-07** vs the numpy reference (bit-exact bar FP rounding).
+**TurboLoader beats FFCV ~3.5× for datasets that fit in VRAM** (uint8: `N*H*W*3` bytes —
+Imagenette-160 = 727 MB; a 24 GB card holds ~33 M such images / most fine-tuning + per-GPU shards).
+
+Two honest limits:
+1. **Interleaving is invalid here.** Interleaved with FFCV, `CudaResidentLoader` measures ~47k —
+   but that's contamination: FFCV's 8–16 persistent worker *processes* starve the GPU-resident
+   loader's light Python loop for CPU. Isolated (one loader at a time = real use) is the fair
+   measure; there it's ~280k. (Interleaving was right for TBL-vs-DALI — like in-process footprints.)
+2. **Streaming (dataset > VRAM) is still FFCV's.** A naive per-batch H2D streaming path measured
+   ~40k — *below* FFCV-raw's 79k. Beating FFCV for datasets that don't fit needs a multi-stream
+   async-H2D loader (the same K-slot pattern as the nvImageCodec path, applied to H2D) — not yet
+   built. GPU Direct Storage (NVMe→GPU DMA) would be the ideal streaming answer but isn't available
+   under WSL2.
+
+### Amortized (including FFCV's conversion)
+FFCV's `.beton` conversion for Imagenette (9,469 imgs, 8 workers) is only **~1.6 s**. Break-even
+vs on-the-fly TurboLoader ≈ **1.6 / (t_onthefly − t_ffcv)/epoch ≈ 3 epochs**. So amortization does
+**not** save on-the-fly loaders: past ~3 epochs FFCV wins total wall-clock too. The way to beat
+FFCV is per-epoch throughput — which `CudaResidentLoader` does (fits-in-VRAM), by also
+pre-processing (a comparably cheap one-time step) and then caching on the GPU.
+
 ## Reproduce
 ```python
 import turboloader as t, torch, glob
 paths = glob.glob("imagenette2-160/train/*/*.JPEG")
+
+# On-the-fly (any dataset size, no preprocessing): beats DALI
 ld = t.CudaImageLoader(paths, batch_size=64, image_size=160,
                        decode="nvimgcodec", nvimgcodec_slots=3, drop_last=True)  # K async slots
 for batch in ld:                                   # GPU-resident, yielded as-completed
     x = torch.as_tensor(batch, device="cuda")      # (64,3,160,160) float32, zero-copy
+
+# Pre-processed, fits-in-VRAM (~280k img/s, beats FFCV ~3.5x): decode+upload once, normalize on GPU
+rld = t.CudaResidentLoader(paths, image_size=160, batch_size=64, shuffle=True, drop_last=True)
+for batch in rld:
+    x = torch.as_tensor(batch, device="cuda")      # (64,3,160,160) float32, zero H2D per epoch
 ```
 Build: `TURBOLOADER_ENABLE_CUDA=1 TURBOLOADER_ENABLE_NVJPEG=1 TURBOLOADER_ENABLE_NVIMGCODEC=1
 TURBOLOADER_NVIMGCODEC_INCLUDE=<wheel>/nvidia/nvimgcodec/include TURBOLOADER_CUDA_ARCH=native pip
