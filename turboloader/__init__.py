@@ -2257,11 +2257,15 @@ try:
     except Exception:
         pass
 
-    # CUDA end-to-end image loaders (NVIDIA): on-the-fly (nvImageCodec/nvJPEG) + GPU-resident.
+    # CUDA end-to-end image loaders (NVIDIA): on-the-fly (nvImageCodec/nvJPEG), GPU-resident, stream.
     try:
-        from turboloader.cuda_loader import CudaImageLoader, CudaResidentLoader
+        from turboloader.cuda_loader import (
+            CudaImageLoader,
+            CudaResidentLoader,
+            CudaStreamLoader,
+        )
 
-        __all__ += ["CudaImageLoader", "CudaResidentLoader"]
+        __all__ += ["CudaImageLoader", "CudaResidentLoader", "CudaStreamLoader"]
     except Exception:
         pass
 

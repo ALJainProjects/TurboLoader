@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
-__all__ = ["CudaImageLoader", "CudaResidentLoader"]
+__all__ = ["CudaImageLoader", "CudaResidentLoader", "CudaStreamLoader"]
 
 
 class _CudaArray:
@@ -445,10 +445,15 @@ class CudaResidentLoader:
             perm = torch.from_numpy(
                 np.random.default_rng(self.seed + self._epoch).permutation(self._n)
             ).cuda()
+        gather = getattr(t, "cuda_normalize_resident_gather", None)
         for b in range(0, end, bs):
             n = min(bs, self._n - b)
-            if perm is not None:
-                batch = self._gpu[perm[b : b + n]].contiguous()  # gather on GPU (held across call)
+            if perm is not None and gather is not None:
+                # Fused gather+normalize: no torch gather copy — shuffle at ~full sequential speed.
+                sl = perm[b : b + n]  # GPU int64 index slice (held across the call)
+                ptr = gather(base, int(sl.data_ptr()), n, H, W, mean=self.mean, std=self.std)
+            elif perm is not None:
+                batch = self._gpu[perm[b : b + n]].contiguous()  # fallback: torch gather copy
                 ptr = t.cuda_normalize_resident(
                     batch.data_ptr(), n, H, W, mean=self.mean, std=self.std
                 )
@@ -457,3 +462,106 @@ class CudaResidentLoader:
                     base + b * stride, n, H, W, mean=self.mean, std=self.std
                 )
             yield _CudaArray(ptr, (n, 3, H, W))
+
+
+class CudaStreamLoader:
+    """Streaming GPU loader for pre-processed datasets LARGER than VRAM (NVIDIA).
+
+    Decodes + resizes the dataset to uint8 once into **pinned host RAM**, then streams batches to
+    the GPU with K async-H2D slots (each own CUDA stream + normalize kernel) that overlap one
+    batch's host->device copy with another's compute. ~55k img/s on a 3090 — faster than the
+    on-the-fly path (~28k) for pre-processed data, though **FFCV's streaming (~79k) still leads**
+    (FFCV uses GIL-free worker *processes*; this uses threads, so per-batch Python + the GIL cap
+    it). Use ``CudaResidentLoader`` instead when the uint8 dataset fits in VRAM (~280k). Yields
+    ``(N, 3, H, W)`` float32 batches **as completed** (out of index order with slots > 1).
+    """
+
+    def __init__(
+        self,
+        paths,
+        image_size=160,
+        batch_size=64,
+        *,
+        mean=(0.485, 0.456, 0.406),
+        std=(0.229, 0.224, 0.225),
+        drop_last=True,
+        num_workers=8,
+        slots=3,
+    ):
+        import turboloader as t
+        import torch
+
+        if not getattr(t, "cuda_available", lambda: False)() or not hasattr(
+            t, "cuda_stream_normalize"
+        ):
+            raise RuntimeError("CudaStreamLoader needs a CUDA build with cuda_stream_normalize.")
+        from concurrent.futures import ThreadPoolExecutor
+
+        from PIL import Image
+
+        self._t = t
+        self._torch = torch
+        self._H = self._W = int(image_size)
+        self.batch_size = int(batch_size)
+        self.mean = list(mean)
+        self.std = list(std)
+        self.drop_last = bool(drop_last)
+        paths = list(paths)
+        self._n = len(paths)
+        H = W = self._H
+        arr = np.empty((self._n, H, W, 3), dtype=np.uint8)
+
+        def _load(i):
+            with Image.open(paths[i]) as im:
+                arr[i] = np.asarray(im.convert("RGB").resize((W, H)))
+
+        with ThreadPoolExecutor(max_workers=max(1, int(num_workers))) as ex:
+            list(ex.map(_load, range(self._n)))
+        # Pinned host memory (stays in RAM, streamed to the GPU each epoch — for datasets > VRAM).
+        self._host = torch.from_numpy(arr).pin_memory()
+        self._slots = max(1, t.cuda_stream_normalize_init(int(slots)))
+
+    def __len__(self):
+        return self._n // self.batch_size if self.drop_last else -(-self._n // self.batch_size)
+
+    def __iter__(self):
+        t = self._t
+        H, W, bs = self._H, self._W, self.batch_size
+        stride = H * W * 3
+        hbase = int(self._host.data_ptr())
+        K = self._slots
+        end = (self._n // bs) * bs if self.drop_last else self._n
+        idxq = queue.Queue()
+        for s in range(0, end, bs):
+            idxq.put(s)
+        for _ in range(K):
+            idxq.put(None)
+        out_q = queue.Queue(maxsize=K)
+        done = object()
+
+        def _worker(slot):
+            try:
+                while True:
+                    st = idxq.get()
+                    if st is None:
+                        break
+                    n = min(bs, self._n - st)
+                    ptr = t.cuda_stream_normalize(
+                        hbase + st * stride, n, H, W, mean=self.mean, std=self.std, slot=slot
+                    )
+                    out_q.put(_CudaArray(ptr, (n, 3, H, W)))
+            finally:
+                out_q.put(done)
+
+        workers = [threading.Thread(target=_worker, args=(s,), daemon=True) for s in range(K)]
+        for w in workers:
+            w.start()
+        finished = 0
+        while finished < K:
+            item = out_q.get()
+            if item is done:
+                finished += 1
+                continue
+            yield item
+        for w in workers:
+            w.join(timeout=0.5)

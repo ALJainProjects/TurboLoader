@@ -300,7 +300,7 @@ struct StreamSlot {
     cudaStream_t stream = nullptr;
     uint8_t* d_in = nullptr;  // device uint8 scratch (the batch, after H2D)
     size_t in_cap = 0;
-    static const int SRING = 4;
+    static const int SRING = 8;  // >= loader out_q depth + producing + consuming (per slot)
     float* out_pool[SRING] = {nullptr};
     size_t out_cap[SRING] = {0};
     int out_idx = 0;
