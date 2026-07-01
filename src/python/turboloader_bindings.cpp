@@ -1342,6 +1342,49 @@ PYBIND11_MODULE(_turboloader, m) {
         "src_dev, N images of H*W, contiguous) -> device pointer (int) of (N,3,H,W) float32, in "
         "ONE kernel launch — no resize, no H2D. For a GPU-resident pre-processed dataset. Wrap "
         "zero-copy via __cuda_array_interface__.");
+    m.def(
+        "cuda_normalize_resident_gather",
+        [](uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> uintptr_t {
+            uintptr_t out;
+            {
+                py::gil_scoped_release rel;
+                out = turboloader::cuda::normalize_resident_gather_batch(src_dev, sel_dev, N, H, W,
+                                                                        mean.data(), std_.data());
+            }
+            if (!out) throw std::runtime_error("cuda_normalize_resident_gather failed");
+            return out;
+        },
+        py::arg("src_dev"), py::arg("sel_dev"), py::arg("N"), py::arg("H"), py::arg("W"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "Like cuda_normalize_resident but output image n gathers from source image sel_dev[n] "
+        "(device int64 index array) — fused shuffle+normalize, no separate gather copy.");
+    m.def(
+        "cuda_stream_normalize_init",
+        [](int num_slots) { return turboloader::cuda::stream_normalize_init(num_slots); },
+        py::arg("num_slots") = 3,
+        "Create num_slots async-H2D streaming slots (own stream + scratch + ring each). Returns "
+        "the number created. For a pre-resized uint8 dataset in host RAM (larger than VRAM).");
+    m.def(
+        "cuda_stream_normalize",
+        [](uintptr_t host_src, int N, int H, int W, std::array<float, 3> mean,
+           std::array<float, 3> std_, int slot) -> uintptr_t {
+            uintptr_t out;
+            {
+                py::gil_scoped_release rel;
+                out = turboloader::cuda::stream_normalize_batch(host_src, N, H, W, mean.data(),
+                                                                std_.data(), slot);
+            }
+            if (!out) throw std::runtime_error("cuda_stream_normalize failed");
+            return out;
+        },
+        py::arg("host_src"), py::arg("N"), py::arg("H"), py::arg("W"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f}, py::arg("slot") = 0,
+        "Streaming per-batch on `slot`: async H2D of the pre-resized uint8 batch at host pointer "
+        "host_src (best pinned) + normalize -> device pointer (int) of (N,3,H,W) float32. K slots "
+        "on K threads overlap H2D with compute. Each slot single-thread-at-a-time.");
 #ifdef HAVE_NVJPEG
     // nvJPEG full-GPU JPEG decode (the CUDA analogue of metal_decode_jpeg; nvJPEG decodes
     // entirely on the GPU, vs Metal's hybrid CPU-Huffman+GPU-IDCT). UNVALIDATED.

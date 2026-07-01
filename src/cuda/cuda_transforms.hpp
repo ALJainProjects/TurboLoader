@@ -50,6 +50,21 @@ bool resize_normalize_batch(const std::vector<ImageRef>& imgs, int dst_h, int ds
 uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const float mean[3],
                                    const float std_[3]);
 
+// Same, but output image n gathers from source image sel_dev[n] (device int64 index array) —
+// a fused shuffle+normalize so a GPU-resident loader shuffles without a separate gather copy.
+uintptr_t normalize_resident_gather_batch(uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W,
+                                          const float mean[3], const float std_[3]);
+
+// Streaming (dataset in host RAM, larger than VRAM): create `num_slots` async-H2D slots (each own
+// stream + device scratch + output ring). Returns the number created (0 if CUDA unavailable).
+int stream_normalize_init(int num_slots);
+
+// Streaming per-batch on `slot`: async H2D of the pre-resized uint8 batch at host pointer
+// `host_src` (best pinned), then normalize -> device pointer of the (N,3,H,W) float32 result.
+// K slots on K threads overlap one batch's H2D with another's kernel. Returns 0 on error.
+uintptr_t stream_normalize_batch(uintptr_t host_src, int N, int H, int W, const float mean[3],
+                                 const float std_[3], int slot);
+
 // Fused crop + resize + (optional) hflip + normalize. Mirrors
 // turboloader::metal::crop_resize_normalize_batch exactly.
 bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,

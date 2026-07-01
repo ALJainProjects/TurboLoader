@@ -2193,9 +2193,19 @@ try:
         except ImportError:
             pass
         try:
-            from _turboloader import cuda_normalize_resident
+            from _turboloader import (
+                cuda_normalize_resident,
+                cuda_normalize_resident_gather,
+                cuda_stream_normalize,
+                cuda_stream_normalize_init,
+            )
 
-            __all__ += ["cuda_normalize_resident"]
+            __all__ += [
+                "cuda_normalize_resident",
+                "cuda_normalize_resident_gather",
+                "cuda_stream_normalize",
+                "cuda_stream_normalize_init",
+            ]
         except ImportError:
             pass
         try:

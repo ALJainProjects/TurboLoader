@@ -112,6 +112,25 @@ __global__ void normalize_nhwc_to_nchw_kernel(const uint8_t* src, float* dst, in
     dst[idx] = (v / 255.0f - m) * isd;                            // NCHW out (idx == n*3HW+c*HW+y*W+x)
 }
 
+// Same, but output image n gathers from source image `sel[n]` (a device int64 index array) —
+// fuses a shuffle/gather into the normalize so a GPU-resident loader can shuffle without a
+// separate gather copy.
+__global__ void normalize_gather_kernel(const uint8_t* src, const long long* sel, float* dst,
+                                        int N, int H, int W, float3 mean, float3 invstd) {
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    const long total = (long)N * 3 * H * W;
+    if (idx >= total) return;
+    const int x = (int)(idx % W);
+    const int y = (int)((idx / W) % H);
+    const int c = (int)((idx / ((long)W * H)) % 3);
+    const long n = idx / ((long)W * H * 3);
+    const long s = (long)sel[n];  // source image this output row pulls from
+    const float m = (c == 0) ? mean.x : (c == 1) ? mean.y : mean.z;
+    const float isd = (c == 0) ? invstd.x : (c == 1) ? invstd.y : invstd.z;
+    const uint8_t v = src[(s * H * W + (long)y * W + x) * 3 + c];
+    dst[idx] = (v / 255.0f - m) * isd;
+}
+
 }  // namespace
 
 namespace turboloader {
@@ -232,6 +251,122 @@ uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const
     }
     float* result = outp;
     g_rn_idx = (g_rn_idx + 1) % RN_RING;
+    return reinterpret_cast<uintptr_t>(result);
+}
+
+// GPU-resident normalize with a fused gather: output image n pulls from source image sel[n]
+// (device int64 index array). Lets CudaResidentLoader shuffle at full speed (no torch gather).
+uintptr_t normalize_resident_gather_batch(uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W,
+                                          const float mean[3], const float std_[3]) {
+    if (!available() || !src_dev || !sel_dev || N <= 0 || H <= 0 || W <= 0) return 0;
+    std::lock_guard<std::mutex> lk(g_rn_mutex);
+    if (!g_rn_stream && cudaStreamCreate(&g_rn_stream) != cudaSuccess) return 0;
+    const size_t per = (size_t)3 * H * W;
+    const size_t out_bytes = (size_t)N * per * sizeof(float);
+    float*& outp = g_rn_pool[g_rn_idx];
+    if (out_bytes > g_rn_cap[g_rn_idx]) {
+        if (outp) cudaFree(outp);
+        if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
+            g_rn_cap[g_rn_idx] = 0;
+            return 0;
+        }
+        g_rn_cap[g_rn_idx] = out_bytes;
+    }
+    const float3 m = make_float3(mean[0], mean[1], mean[2]);
+    const float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
+    const long total = (long)N * 3 * H * W;
+    const int block = 256;
+    const long grid = (total + block - 1) / block;
+    normalize_gather_kernel<<<(unsigned)grid, block, 0, g_rn_stream>>>(
+        reinterpret_cast<const uint8_t*>(src_dev), reinterpret_cast<const long long*>(sel_dev),
+        outp, N, H, W, m, isd);
+    cudaError_t err = cudaStreamSynchronize(g_rn_stream);
+    if (err == cudaSuccess) err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[turboloader cuda] resident gather: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    float* result = outp;
+    g_rn_idx = (g_rn_idx + 1) % RN_RING;
+    return reinterpret_cast<uintptr_t>(result);
+}
+
+// ---- Streaming: K-slot async H2D + normalize (dataset in host RAM, larger than VRAM) ----
+// Each slot has its own CUDA stream + device scratch input + output ring; K slots on K threads
+// overlap one batch's H2D with another's kernel — the K-slot pattern applied to the H2D copy,
+// to beat a streaming loader (FFCV raw) whose per-batch H2D would otherwise serialize.
+namespace {
+struct StreamSlot {
+    cudaStream_t stream = nullptr;
+    uint8_t* d_in = nullptr;  // device uint8 scratch (the batch, after H2D)
+    size_t in_cap = 0;
+    static const int SRING = 4;
+    float* out_pool[SRING] = {nullptr};
+    size_t out_cap[SRING] = {0};
+    int out_idx = 0;
+    std::mutex mu;
+};
+static std::vector<std::unique_ptr<StreamSlot>> g_sm_slots;
+static std::mutex g_sm_init_mutex;
+}  // namespace
+
+int stream_normalize_init(int num_slots) {
+    std::lock_guard<std::mutex> lk(g_sm_init_mutex);
+    if (!available()) return 0;
+    if (num_slots < 1) num_slots = 1;
+    while ((int)g_sm_slots.size() < num_slots) {
+        auto s = std::make_unique<StreamSlot>();
+        if (cudaStreamCreate(&s->stream) != cudaSuccess) break;
+        g_sm_slots.push_back(std::move(s));
+    }
+    return (int)g_sm_slots.size();
+}
+
+uintptr_t stream_normalize_batch(uintptr_t host_src, int N, int H, int W, const float mean[3],
+                                 const float std_[3], int slot) {
+    if (!available() || !host_src || slot < 0 || slot >= (int)g_sm_slots.size() || N <= 0 ||
+        H <= 0 || W <= 0)
+        return 0;
+    StreamSlot& S = *g_sm_slots[slot];
+    std::lock_guard<std::mutex> lk(S.mu);
+    const size_t in_bytes = (size_t)N * H * W * 3;
+    if (in_bytes > S.in_cap) {
+        if (S.d_in) cudaFree(S.d_in);
+        if (cudaMalloc(&S.d_in, in_bytes) != cudaSuccess) {
+            S.in_cap = 0;
+            return 0;
+        }
+        S.in_cap = in_bytes;
+    }
+    if (cudaMemcpyAsync(S.d_in, reinterpret_cast<const void*>(host_src), in_bytes,
+                        cudaMemcpyHostToDevice, S.stream) != cudaSuccess)
+        return 0;
+    const size_t per = (size_t)3 * H * W;
+    const size_t out_bytes = (size_t)N * per * sizeof(float);
+    float*& outp = S.out_pool[S.out_idx];
+    if (out_bytes > S.out_cap[S.out_idx]) {
+        if (outp) cudaFree(outp);
+        if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
+            S.out_cap[S.out_idx] = 0;
+            return 0;
+        }
+        S.out_cap[S.out_idx] = out_bytes;
+    }
+    const float3 m = make_float3(mean[0], mean[1], mean[2]);
+    const float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
+    const long total = (long)N * 3 * H * W;
+    const int block = 256;
+    const long grid = (total + block - 1) / block;
+    normalize_nhwc_to_nchw_kernel<<<(unsigned)grid, block, 0, S.stream>>>(S.d_in, outp, N, H, W, m,
+                                                                          isd);
+    cudaError_t err = cudaStreamSynchronize(S.stream);
+    if (err == cudaSuccess) err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[turboloader cuda] stream normalize: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    float* result = outp;
+    S.out_idx = (S.out_idx + 1) % StreamSlot::SRING;
     return reinterpret_cast<uintptr_t>(result);
 }
 
