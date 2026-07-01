@@ -5,7 +5,35 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.29.0] - unreleased
+## [2.30.0] - unreleased
+
+Pre-processed CUDA loaders that **beat FFCV for fits-in-VRAM datasets**, plus a corrected FFCV
+comparison. (The v2.29.0 docs claimed "beats FFCV" for the on-the-fly path — that was a flawed
+measurement; corrected here.)
+
+### Added
+- **`CudaResidentLoader`** — GPU-resident pre-processed loader. Decodes+resizes the dataset to
+  uint8 once, uploads it to the GPU, then normalizes per epoch via a **custom single-launch
+  kernel** (`normalize_nhwc_to_nchw` / `cuda_normalize_resident`) with **zero per-epoch H2D**.
+  **~280k img/s on a 3090** (isolated) — **~3.5× FFCV-raw (~79k)**, ~20× DALI. Shuffle runs at
+  **~257k** via a **fused gather+normalize kernel** (`cuda_normalize_resident_gather`, no torch
+  gather copy). Needs the uint8 dataset to fit in VRAM (`N*H*W*3` bytes; Imagenette-160 = 727 MB).
+  Kernel correctness 4e-07 vs the numpy reference.
+- **`CudaStreamLoader`** — streaming loader for pre-processed datasets **larger than VRAM**:
+  pinned host uint8 + K async-H2D slots (`cuda_stream_normalize` / `cuda_stream_normalize_init`)
+  overlap H2D with compute. ~55k img/s — faster than on-the-fly (~28k), but **FFCV streaming
+  (~79k) still leads** (FFCV uses GIL-free worker processes; this uses threads). Honest.
+
+### Changed / Fixed
+- **Corrected the FFCV comparison.** Reused-loader, steady-state, with both raw and JPEG `.beton`s,
+  FFCV is ~35k (JPEG) to ~79k (raw) — **faster** than TurboLoader's on-the-fly path (not slower).
+  TurboLoader beats **DALI** among on-the-fly loaders and beats **FFCV** for fits-in-VRAM
+  (`CudaResidentLoader`); it does not beat FFCV for on-the-fly or for streaming > VRAM. Docs
+  (`README`, `docs/`, `experiments/cuda/RESULTS.md`) updated throughout; benchmarks noted the
+  host's ~40% run-to-run drift (only within-run relative numbers are trustworthy) and why
+  interleaving is invalid across very different loader footprints.
+
+## [2.29.0] - 2026-06-30
 
 CUDA image loader that **beats NVIDIA DALI** on a 3090, via an in-C++ nvImageCodec pipeline.
 

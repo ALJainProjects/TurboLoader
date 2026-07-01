@@ -119,17 +119,23 @@ per-epoch H2D**. Isolated (each loader alone — the real single-loader-feeds-tr
 Correctness of the kernel: max|diff| **4e-07** vs the numpy reference (bit-exact bar FP rounding).
 **TurboLoader beats FFCV ~3.5× for datasets that fit in VRAM** (uint8: `N*H*W*3` bytes —
 Imagenette-160 = 727 MB; a 24 GB card holds ~33 M such images / most fine-tuning + per-GPU shards).
+`CudaResidentLoader` **shuffles at full speed** too — a fused gather+normalize kernel
+(`cuda_normalize_resident_gather`, output n reads `src[perm[n]]`) does shuffled epochs at
+**~257k img/s** (vs ~31k with a torch gather copy), gather output correct to 4e-07.
 
 Two honest limits:
 1. **Interleaving is invalid here.** Interleaved with FFCV, `CudaResidentLoader` measures ~47k —
    but that's contamination: FFCV's 8–16 persistent worker *processes* starve the GPU-resident
    loader's light Python loop for CPU. Isolated (one loader at a time = real use) is the fair
    measure; there it's ~280k. (Interleaving was right for TBL-vs-DALI — like in-process footprints.)
-2. **Streaming (dataset > VRAM) is still FFCV's.** A naive per-batch H2D streaming path measured
-   ~40k — *below* FFCV-raw's 79k. Beating FFCV for datasets that don't fit needs a multi-stream
-   async-H2D loader (the same K-slot pattern as the nvImageCodec path, applied to H2D) — not yet
-   built. GPU Direct Storage (NVMe→GPU DMA) would be the ideal streaming answer but isn't available
-   under WSL2.
+2. **Streaming (dataset > VRAM) is still FFCV's.** `CudaStreamLoader` (K async-H2D slots: pinned
+   host uint8 → per-slot stream H2D → normalize kernel, K threads) reaches **~55k** — better than
+   the naive single-stream (~40k) and than on-the-fly (~28k), but still **below FFCV-raw's 79k**.
+   More slots don't help (plateaus ~55–58k); the wall is the **GIL**, not PCIe — FFCV uses GIL-free
+   worker *processes* while `CudaStreamLoader` uses threads, so per-batch Python + the GIL cap it.
+   Beating FFCV streaming would need a fully-C++ iteration/prefetch loop (no Python per batch) or
+   multiprocessing with a device-pointer handoff. GPU Direct Storage (NVMe→GPU DMA) would be the
+   ideal streaming answer but isn't available under WSL2.
 
 ### Amortized (including FFCV's conversion)
 FFCV's `.beton` conversion for Imagenette (9,469 imgs, 8 workers) is only **~1.6 s**. Break-even

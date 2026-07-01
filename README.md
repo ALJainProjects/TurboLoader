@@ -349,14 +349,26 @@ interleaved rounds to control for ~40% host drift):
 | PyTorch `DataLoader` (PIL, CPU) | ~0.25× |
 
 **TurboLoader beats DALI** (median above DALI's max in the cleanest run), output bijectively
-verified correct. **FFCV is faster than both** (~2.6× TurboLoader with a JPEG `.beton`, ~5.9× with
-raw) — but it requires converting the dataset to its `.beton` format offline first (pre-resize +
-repack), front-loading the decode/resize that TurboLoader/DALI do every epoch; it's a different
-category, not on-the-fly. On **Apple Silicon**, `GpuImageLoader` offloads resize+normalize (and a
-hybrid GPU JPEG decode) to Metal — where neither DALI nor FFCV runs at all. CUDA is a
-build-from-source path (not in the PyPI wheels); see [GPU acceleration](docs/GPU_ACCELERATION.md)
-for flags, usage, and the full
-write-up (`experiments/cuda/RESULTS.md`).
+verified correct. For **on-the-fly** loading FFCV is faster (~2.6–5.9×) — but it requires an
+offline conversion to its `.beton` format.
+
+**Pre-processed loaders** (decode+resize once, like FFCV's `.beton`) — here TurboLoader turns the
+tables:
+
+| Pre-processed loader | img/s | |
+|---|---:|---|
+| **TurboLoader `CudaResidentLoader`** (fits-in-VRAM: upload uint8 once, GPU-resident) | **~280,000** | **beats FFCV ~3.5×** |
+| FFCV, raw `.beton` (streams mmap→H2D each epoch) | ~79,000 | |
+| TurboLoader `CudaStreamLoader` (streaming, dataset > VRAM) | ~55,000 | FFCV still leads streaming |
+
+`CudaResidentLoader` uses a custom single-launch normalize kernel + fused gather (shuffles at
+~257k). It **beats FFCV ~3.5×** when the pre-processed uint8 dataset fits in VRAM (very common:
+fine-tuning, per-GPU shards, small/medium sets). For datasets larger than VRAM, `CudaStreamLoader`
+(~55k) is faster than on-the-fly but FFCV's streaming (~79k) still leads (FFCV uses GIL-free worker
+processes). On **Apple Silicon**, `GpuImageLoader` offloads resize+normalize (and a hybrid GPU JPEG
+decode) to Metal — where neither DALI nor FFCV runs at all. CUDA is a build-from-source path (not
+in the PyPI wheels); see [GPU acceleration](docs/GPU_ACCELERATION.md) for flags, usage, and the
+full write-up (`experiments/cuda/RESULTS.md`).
 
 ### Implementation notes
 - **Direct-batch path** (`src/pipeline/direct_batch_loader.hpp`): the default fast path

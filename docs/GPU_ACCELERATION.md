@@ -132,10 +132,24 @@ TURBOLOADER_CUDA_ARCH=native \            # required on CUDA 13+; or sm_86 (3090
   `TURBOLOADER_ENABLE_NVJPEG` off there.
 
 ### Decode backends (`CudaImageLoader(decode=...)`), fastest first
-- `"nvimgcodec"` — in-C++ nvImageCodec, K async slots. **Fastest (~28.5k, beats DALI).** Falls
-  back to a Python `nvimgcodec.Decoder` path (~14.5k) if the C++ pipeline isn't compiled in.
+- `"nvimgcodec"` — in-C++ nvImageCodec, K async slots. **Fastest on-the-fly (~28.5k, beats DALI).**
+  Falls back to a Python `nvimgcodec.Decoder` path (~14.5k) if the C++ pipeline isn't compiled in.
 - `"gpu"` — nvJPEG batched HW-hybrid decode + fused resize/normalize (~9.2k).
 - `"cpu"` — libjpeg-turbo decode + GPU transform.
+
+### Pre-processed loaders — beat FFCV for fits-in-VRAM
+Like FFCV's `.beton`, these decode+resize **once**; then TurboLoader keeps the uint8 on the GPU:
+- **`CudaResidentLoader`** — upload the pre-resized uint8 dataset to the GPU once, normalize per
+  epoch with a **custom single-launch kernel** (`cuda_normalize_resident`), **zero per-epoch H2D**.
+  **~280k img/s on a 3090 = ~3.5× FFCV-raw (~79k)**, ~20× DALI; shuffles at ~257k via a fused
+  gather+normalize kernel. Needs the uint8 dataset to fit in VRAM (`N*H*W*3` bytes). Kernel
+  correct to 4e-07.
+- **`CudaStreamLoader`** — for datasets **larger than VRAM**: pinned host uint8 + K async-H2D
+  slots. ~55k img/s — faster than on-the-fly, but **FFCV streaming (~79k) still leads** (FFCV uses
+  GIL-free worker processes; this uses threads). Honest.
+
+So: TurboLoader beats **DALI** on-the-fly and beats **FFCV** for fits-in-VRAM pre-processed data;
+FFCV still leads on-the-fly and streaming-larger-than-VRAM. See `experiments/cuda/RESULTS.md`.
 
 ### Lower-level CUDA API (analogues of the Metal API)
 ```python
