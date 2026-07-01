@@ -42,6 +42,14 @@ struct CropParams {
 bool resize_normalize_batch(const std::vector<ImageRef>& imgs, int dst_h, int dst_w,
                             const float mean[3], const float std_[3], float* out);
 
+// Batched normalize of an ALREADY-DEVICE-RESIDENT, pre-resized NHWC uint8 batch (all N images
+// H*W, contiguous at `src_dev`) -> NCHW float32, in ONE kernel launch. No resize, no H2D. For a
+// pre-processed dataset uploaded to the GPU once (uint8) and normalized per epoch on the GPU.
+// Returns the device pointer of the (N,3,H,W) float32 result (valid until the 4th-next call), or
+// 0 on error / if CUDA is unavailable.
+uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const float mean[3],
+                                   const float std_[3]);
+
 // Fused crop + resize + (optional) hflip + normalize. Mirrors
 // turboloader::metal::crop_resize_normalize_batch exactly.
 bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,

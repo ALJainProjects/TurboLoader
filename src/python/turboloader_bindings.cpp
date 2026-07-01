@@ -1322,6 +1322,26 @@ PYBIND11_MODULE(_turboloader, m) {
         py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
         py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
         "CUDA resize+normalize (mirror of metal_resize_normalize). UNVALIDATED.");
+    m.def(
+        "cuda_normalize_resident",
+        [](uintptr_t src_dev, int N, int H, int W, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> uintptr_t {
+            uintptr_t out;
+            {
+                py::gil_scoped_release rel;
+                out = turboloader::cuda::normalize_resident_batch(src_dev, N, H, W, mean.data(),
+                                                                  std_.data());
+            }
+            if (!out) throw std::runtime_error("cuda_normalize_resident failed");
+            return out;
+        },
+        py::arg("src_dev"), py::arg("N"), py::arg("H"), py::arg("W"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "Normalize an ALREADY-DEVICE-RESIDENT, pre-resized NHWC uint8 batch (device pointer "
+        "src_dev, N images of H*W, contiguous) -> device pointer (int) of (N,3,H,W) float32, in "
+        "ONE kernel launch — no resize, no H2D. For a GPU-resident pre-processed dataset. Wrap "
+        "zero-copy via __cuda_array_interface__.");
 #ifdef HAVE_NVJPEG
     // nvJPEG full-GPU JPEG decode (the CUDA analogue of metal_decode_jpeg; nvJPEG decodes
     // entirely on the GPU, vs Metal's hybrid CPU-Huffman+GPU-IDCT). UNVALIDATED.

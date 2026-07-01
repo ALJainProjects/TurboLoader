@@ -93,6 +93,25 @@ bool pack_to_device(const std::vector<turboloader::cuda::ImageRef>& imgs,
     return true;
 }
 
+// Batched normalize: pre-resized NHWC uint8 (contiguous, all images same H*W) -> NCHW float32
+// normalized, in ONE kernel launch for the whole batch of N images (no per-image kernel, no
+// resize). For a pre-processed, GPU-resident dataset: upload uint8 once, then normalize per
+// epoch on the GPU with zero H2D — the path that beats a pre-processed loader at its own game.
+__global__ void normalize_nhwc_to_nchw_kernel(const uint8_t* src, float* dst, int N, int H, int W,
+                                              float3 mean, float3 invstd) {
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    const long total = (long)N * 3 * H * W;
+    if (idx >= total) return;
+    const int x = (int)(idx % W);
+    const int y = (int)((idx / W) % H);
+    const int c = (int)((idx / ((long)W * H)) % 3);
+    const long n = idx / ((long)W * H * 3);
+    const float m = (c == 0) ? mean.x : (c == 1) ? mean.y : mean.z;
+    const float isd = (c == 0) ? invstd.x : (c == 1) ? invstd.y : invstd.z;
+    const uint8_t v = src[(n * H * W + (long)y * W + x) * 3 + c];  // NHWC in
+    dst[idx] = (v / 255.0f - m) * isd;                            // NCHW out (idx == n*3HW+c*HW+y*W+x)
+}
+
 }  // namespace
 
 namespace turboloader {
@@ -170,6 +189,50 @@ bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
     cudaFree(d_src);
     cudaFree(d_dst);
     return ok;
+}
+
+// Dedicated stream + output ring for the GPU-resident normalize path (independent of the
+// nvJPEG/nvImageCodec paths). Each call returns a different ring slot so prefetched batches stay
+// valid while the consumer reads an earlier one.
+static cudaStream_t g_rn_stream = nullptr;
+static const int RN_RING = 4;
+static float* g_rn_pool[RN_RING] = {nullptr};
+static size_t g_rn_cap[RN_RING] = {0};
+static int g_rn_idx = 0;
+static std::mutex g_rn_mutex;
+
+uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const float mean[3],
+                                   const float std_[3]) {
+    if (!available() || !src_dev || N <= 0 || H <= 0 || W <= 0) return 0;
+    std::lock_guard<std::mutex> lk(g_rn_mutex);
+    if (!g_rn_stream && cudaStreamCreate(&g_rn_stream) != cudaSuccess) return 0;
+    const size_t per = (size_t)3 * H * W;
+    const size_t out_bytes = (size_t)N * per * sizeof(float);
+    float*& outp = g_rn_pool[g_rn_idx];
+    if (out_bytes > g_rn_cap[g_rn_idx]) {
+        if (outp) cudaFree(outp);
+        if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
+            g_rn_cap[g_rn_idx] = 0;
+            return 0;
+        }
+        g_rn_cap[g_rn_idx] = out_bytes;
+    }
+    const float3 m = make_float3(mean[0], mean[1], mean[2]);
+    const float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
+    const long total = (long)N * 3 * H * W;
+    const int block = 256;
+    const long grid = (total + block - 1) / block;
+    normalize_nhwc_to_nchw_kernel<<<(unsigned)grid, block, 0, g_rn_stream>>>(
+        reinterpret_cast<const uint8_t*>(src_dev), outp, N, H, W, m, isd);
+    cudaError_t err = cudaStreamSynchronize(g_rn_stream);
+    if (err == cudaSuccess) err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[turboloader cuda] resident normalize: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    float* result = outp;
+    g_rn_idx = (g_rn_idx + 1) % RN_RING;
+    return reinterpret_cast<uintptr_t>(result);
 }
 
 #ifdef HAVE_NVJPEG

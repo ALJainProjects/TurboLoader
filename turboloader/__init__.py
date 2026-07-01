@@ -2193,6 +2193,12 @@ try:
         except ImportError:
             pass
         try:
+            from _turboloader import cuda_normalize_resident
+
+            __all__ += ["cuda_normalize_resident"]
+        except ImportError:
+            pass
+        try:
             from _turboloader import (
                 cuda_decode_jpeg,
                 cuda_decode_resize_normalize,
