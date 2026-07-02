@@ -144,12 +144,15 @@ Like FFCV's `.beton`, these decode+resize **once**; then TurboLoader keeps the u
   **~280k img/s on a 3090 = ~3.5× FFCV-raw (~79k)**, ~20× DALI; shuffles at ~257k via a fused
   gather+normalize kernel. Needs the uint8 dataset to fit in VRAM (`N*H*W*3` bytes). Kernel
   correct to 4e-07.
-- **`CudaStreamLoader`** — for datasets **larger than VRAM**: pinned host uint8 + K async-H2D
-  slots. ~55k img/s — faster than on-the-fly, but **FFCV streaming (~79k) still leads** (FFCV uses
-  GIL-free worker processes; this uses threads). Honest.
+- **`CudaStreamLoader`** — for datasets **larger than VRAM**: pinned host uint8 streamed via
+  `CudaStreamCore`, a **fully-in-C++** loop (persistent worker pool + async H2D on non-blocking
+  streams + double-buffered prefetch; Python calls `next_batch()` once/batch, GIL released).
+  **~140k img/s = ~1.6× FFCV-raw (~85k)**, near the PCIe H2D ceiling. (The earlier Python-thread
+  version was GIL-capped at ~55k; the C++ core removed that wall.) Correctness bijective 0.0.
 
-So: TurboLoader beats **DALI** on-the-fly and beats **FFCV** for fits-in-VRAM pre-processed data;
-FFCV still leads on-the-fly and streaming-larger-than-VRAM. See `experiments/cuda/RESULTS.md`.
+So: TurboLoader beats **DALI** on-the-fly and beats **FFCV** on pre-processed data — both
+fits-in-VRAM (`CudaResidentLoader`) and streaming > VRAM (`CudaStreamLoader`).
+See `experiments/cuda/RESULTS.md`.
 
 ### Lower-level CUDA API (analogues of the Metal API)
 ```python

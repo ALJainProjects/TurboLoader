@@ -90,14 +90,18 @@ TurboLoader does **not** beat FFCV; it beats DALI among loaders that read a JPEG
   came instead from parallelizing across BATCHES (K slots), not within a batch.
 
 ## Honest verdict
-With the K-slot async multi-stream in-C++ nvImageCodec pipeline, **TurboLoader-CUDA beats NVIDIA
-DALI among on-the-fly loaders** — the ones that read a JPEG folder and decode+resize every epoch
-(+12% in the cleanest interleaved run, TBL median above DALI max; ≥ DALI in every run), output
-bijectively verified correct — and far ahead of PyTorch (~5.4×). It does **not** beat **FFCV**:
-FFCV is ~2.6× (JPEG `.beton`) to ~5.9× (raw `.beton`) faster, because it front-loads decode/resize
-into a one-time offline conversion and never repeats them per epoch — a different trade-off (fast
-epochs at the cost of a preprocessing step, disk, and format lock-in). TurboLoader also runs the
-*same* unified loader API on the CPU and on Apple Metal, where neither DALI nor FFCV runs at all.
+**TurboLoader-CUDA beats both NVIDIA DALI and FFCV, each in its own domain:**
+- **On-the-fly** (read a JPEG folder, decode+resize every epoch): the K-slot in-C++ nvImageCodec
+  pipeline **beats DALI** (+12% cleanest run, ≥ DALI in every run), far ahead of PyTorch (~5.4×).
+  FFCV can't do on-the-fly (it requires an offline `.beton`).
+- **Pre-processed, fits-in-VRAM**: `CudaResidentLoader` (custom kernel, GPU-resident) **beats
+  FFCV ~3.5×** (~280k vs ~79k).
+- **Pre-processed, streaming > VRAM** (FFCV's home turf): `CudaStreamLoader` / `CudaStreamCore`
+  (fully-C++ GIL-free loop) **beats FFCV ~1.5–1.7×** (~140k vs ~85k, near the PCIe ceiling).
+
+All outputs bijectively verified correct (0.0 max|diff| vs reference; nvImageCodec path 0.99986
+vs libjpeg-turbo — decoder variance only). TurboLoader also runs the *same* unified loader API on
+the CPU and on Apple Metal, where neither DALI nor FFCV runs at all.
 Caveats: one RTX 3090 (GPU-hybrid JPEG decode) at 160px; the host drifts ~40% run-to-run so only
 within-run relative numbers hold; a GPU with a hardware JPEG unit or different sizes could shift
 the DALI margin.
@@ -123,19 +127,36 @@ Imagenette-160 = 727 MB; a 24 GB card holds ~33 M such images / most fine-tuning
 (`cuda_normalize_resident_gather`, output n reads `src[perm[n]]`) does shuffled epochs at
 **~257k img/s** (vs ~31k with a torch gather copy), gather output correct to 4e-07.
 
-Two honest limits:
-1. **Interleaving is invalid here.** Interleaved with FFCV, `CudaResidentLoader` measures ~47k —
-   but that's contamination: FFCV's 8–16 persistent worker *processes* starve the GPU-resident
-   loader's light Python loop for CPU. Isolated (one loader at a time = real use) is the fair
-   measure; there it's ~280k. (Interleaving was right for TBL-vs-DALI — like in-process footprints.)
-2. **Streaming (dataset > VRAM) is still FFCV's.** `CudaStreamLoader` (K async-H2D slots: pinned
-   host uint8 → per-slot stream H2D → normalize kernel, K threads) reaches **~55k** — better than
-   the naive single-stream (~40k) and than on-the-fly (~28k), but still **below FFCV-raw's 79k**.
-   More slots don't help (plateaus ~55–58k); the wall is the **GIL**, not PCIe — FFCV uses GIL-free
-   worker *processes* while `CudaStreamLoader` uses threads, so per-batch Python + the GIL cap it.
-   Beating FFCV streaming would need a fully-C++ iteration/prefetch loop (no Python per batch) or
-   multiprocessing with a device-pointer handoff. GPU Direct Storage (NVMe→GPU DMA) would be the
-   ideal streaming answer but isn't available under WSL2.
+## Streaming (dataset > VRAM) — also beats FFCV, via a fully-C++ loop
+
+`CudaStreamLoader` (backed by `CudaStreamCore`) streams a pre-resized uint8 dataset from pinned
+host RAM to the GPU. The **whole iteration runs GIL-free in C++**: a persistent pool of K worker
+threads does async H2D on **non-blocking** streams + the normalize kernel + double-buffered
+prefetch into an output pool; Python calls `next_batch()` once per batch (GIL released while it
+waits). Isolated, same-session:
+
+| Streaming loader | img/s (median) | vs FFCV-raw |
+|---|---:|---:|
+| **TurboLoader `CudaStreamCore`** | **~140,000** | **~1.5–1.7×** |
+| FFCV, raw `.beton` (worker processes) | ~85,000 | 1.0× |
+
+TBL's min sat above FFCV's max in both runs (+20% one session, +68% another — drift moves the
+absolutes, the ordering holds). ~140k is near the PCIe H2D ceiling (~156k for 727 MB/epoch), so
+the C++ loop is essentially transfer-bound — the right place for a streaming loader. Correctness:
+the multi-slot pipeline bijectively matches the reference **0.0 max|diff|** across 1/2/3 slots.
+
+**What changed:** the earlier *Python-thread* streaming loader capped at ~55k — GIL-bound (per-batch
+Python orchestration), not PCIe-bound; more slots didn't help. Moving the entire iteration into
+C++ (`CudaStreamCore`, one `next_batch()` Python call per batch) removed the GIL wall. Two bugs
+found + fixed en route: streams created with `cudaStreamCreate` implicitly serialized with the
+default stream (the consumer's torch ops barriered against all workers → 36k); `cudaStreamNonBlocking`
+fixed it. GPU Direct Storage (NVMe→GPU DMA) would push even higher but isn't available under WSL2.
+
+One measurement note:
+- **Interleaving is invalid for these loaders.** Interleaved with FFCV, the GPU-resident/stream
+  loaders measure low — FFCV's persistent worker *processes* starve their light Python consume loop
+  for CPU. Isolated (one loader at a time = real single-loader-feeds-training use) is the fair
+  measure. (Interleaving was right for TBL-vs-DALI — like in-process footprints.)
 
 ### Amortized (including FFCV's conversion)
 FFCV's `.beton` conversion for Imagenette (9,469 imgs, 8 workers) is only **~1.6 s**. Break-even

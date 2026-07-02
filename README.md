@@ -358,15 +358,18 @@ tables:
 | Pre-processed loader | img/s | |
 |---|---:|---|
 | **TurboLoader `CudaResidentLoader`** (fits-in-VRAM: upload uint8 once, GPU-resident) | **~280,000** | **beats FFCV ~3.5×** |
-| FFCV, raw `.beton` (streams mmap→H2D each epoch) | ~79,000 | |
-| TurboLoader `CudaStreamLoader` (streaming, dataset > VRAM) | ~55,000 | FFCV still leads streaming |
+| **TurboLoader `CudaStreamLoader`** (streaming, dataset > VRAM; fully-C++ loop) | **~140,000** | **beats FFCV ~1.6×** |
+| FFCV, raw `.beton` (streams mmap→H2D each epoch, worker processes) | ~85,000 | |
 
 `CudaResidentLoader` uses a custom single-launch normalize kernel + fused gather (shuffles at
-~257k). It **beats FFCV ~3.5×** when the pre-processed uint8 dataset fits in VRAM (very common:
-fine-tuning, per-GPU shards, small/medium sets). For datasets larger than VRAM, `CudaStreamLoader`
-(~55k) is faster than on-the-fly but FFCV's streaming (~79k) still leads (FFCV uses GIL-free worker
-processes). On **Apple Silicon**, `GpuImageLoader` offloads resize+normalize (and a hybrid GPU JPEG
-decode) to Metal — where neither DALI nor FFCV runs at all. CUDA is a build-from-source path (not
+~257k) and **beats FFCV ~3.5×** when the pre-processed uint8 dataset fits in VRAM (very common:
+fine-tuning, per-GPU shards, small/medium sets). For datasets **larger than VRAM**,
+`CudaStreamLoader` runs the whole iteration GIL-free in C++ (`CudaStreamCore`: worker pool + async
+H2D on non-blocking streams + prefetch) and **beats FFCV's streaming ~1.6×** (~140k vs ~85k, near
+the PCIe transfer ceiling). So TurboLoader beats **DALI** on-the-fly and **FFCV** on pre-processed
+data — both fits-in-VRAM and streaming. On **Apple Silicon**, `GpuImageLoader` offloads
+resize+normalize (and a hybrid GPU JPEG decode) to Metal — where neither DALI nor FFCV runs at
+all. CUDA is a build-from-source path (not
 in the PyPI wheels); see [GPU acceleration](docs/GPU_ACCELERATION.md) for flags, usage, and the
 full write-up (`experiments/cuda/RESULTS.md`).
 

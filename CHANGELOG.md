@@ -5,7 +5,28 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.30.0] - unreleased
+## [2.31.0] - unreleased
+
+Streaming CUDA loader that **beats FFCV for datasets larger than VRAM** — completing the sweep:
+TurboLoader now beats **DALI** on-the-fly and **FFCV** on pre-processed data (both fits-in-VRAM
+and streaming).
+
+### Added
+- **`CudaStreamCore`** — a fully-in-C++ streaming loader: a persistent pool of K worker threads
+  runs the **whole iteration GIL-free** (async H2D on **non-blocking** CUDA streams + the
+  normalize kernel + double-buffered prefetch into an output pool); Python calls `next_batch()`
+  once per batch (GIL released while waiting). `CudaStreamLoader` now uses it.
+  **~140k img/s on a 3090 = ~1.5–1.7× FFCV-raw streaming (~85k)**, near the PCIe H2D ceiling —
+  vs the previous Python-thread version's ~55k (GIL-bound). Correctness: the multi-slot pipeline
+  bijectively matches the reference (0.0 max|diff|, slots 1/2/3). Two bugs fixed en route:
+  worker streams must be `cudaStreamNonBlocking` (default `cudaStreamCreate` streams implicitly
+  serialize with the default stream, so the consumer's torch ops barriered against all workers).
+
+### Changed
+- Docs updated: TurboLoader **beats FFCV on streaming too** (was "FFCV still leads streaming" in
+  2.30.0). `README`, `docs/GPU_ACCELERATION.md`, `experiments/cuda/RESULTS.md`.
+
+## [2.30.0] - 2026-07-01
 
 Pre-processed CUDA loaders that **beat FFCV for fits-in-VRAM datasets**, plus a corrected FFCV
 comparison. (The v2.29.0 docs claimed "beats FFCV" for the on-the-fly path — that was a flawed

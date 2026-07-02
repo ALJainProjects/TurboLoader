@@ -465,15 +465,17 @@ class CudaResidentLoader:
 
 
 class CudaStreamLoader:
-    """Streaming GPU loader for pre-processed datasets LARGER than VRAM (NVIDIA).
+    """Streaming GPU loader for pre-processed datasets LARGER than VRAM (NVIDIA) — beats FFCV.
 
     Decodes + resizes the dataset to uint8 once into **pinned host RAM**, then streams batches to
-    the GPU with K async-H2D slots (each own CUDA stream + normalize kernel) that overlap one
-    batch's host->device copy with another's compute. ~55k img/s on a 3090 — faster than the
-    on-the-fly path (~28k) for pre-processed data, though **FFCV's streaming (~79k) still leads**
-    (FFCV uses GIL-free worker *processes*; this uses threads, so per-batch Python + the GIL cap
-    it). Use ``CudaResidentLoader`` instead when the uint8 dataset fits in VRAM (~280k). Yields
-    ``(N, 3, H, W)`` float32 batches **as completed** (out of index order with slots > 1).
+    the GPU. Backed by ``CudaStreamCore``: a persistent pool of K C++ worker threads runs the
+    **whole iteration GIL-free** (async H2D on non-blocking streams + normalize kernel +
+    double-buffered prefetch); Python calls ``next_batch()`` once per batch. **~140k img/s on a
+    3090 — beats FFCV-raw's streaming (~85k) by ~1.5–1.7×** and is near the PCIe H2D ceiling
+    (FFCV uses worker *processes*; the earlier Python-thread version was GIL-capped at ~55k — the
+    C++ core removes that). Use ``CudaResidentLoader`` instead when the uint8 dataset fits in VRAM
+    (~280k). Yields ``(N, 3, H, W)`` float32 batches **as completed** (out of index order,
+    slots > 1). Falls back to Python worker threads if ``CudaStreamCore`` isn't compiled in.
     """
 
     def __init__(
