@@ -518,15 +518,49 @@ class CudaStreamLoader:
         with ThreadPoolExecutor(max_workers=max(1, int(num_workers))) as ex:
             list(ex.map(_load, range(self._n)))
         # Pinned host memory (stays in RAM, streamed to the GPU each epoch — for datasets > VRAM).
+        # Kept alive as an attribute: the C++ core holds a raw pointer into it.
         self._host = torch.from_numpy(arr).pin_memory()
-        self._slots = max(1, t.cuda_stream_normalize_init(int(slots)))
+        slots = max(1, int(slots))
+        self._core = None
+        if hasattr(t, "CudaStreamCore"):
+            # Fully-in-C++ iteration: the worker pool + async H2D + prefetch run GIL-free; Python
+            # calls next_batch() once per batch. Removes the GIL bottleneck of Python worker threads.
+            self._core = t.CudaStreamCore(
+                int(self._host.data_ptr()),
+                self._n,
+                H,
+                W,
+                self.batch_size,
+                mean=self.mean,
+                std=self.std,
+                num_slots=slots,
+                drop_last=self.drop_last,
+            )
+        else:
+            self._slots = max(1, t.cuda_stream_normalize_init(slots))
 
     def __len__(self):
         return self._n // self.batch_size if self.drop_last else -(-self._n // self.batch_size)
 
     def __iter__(self):
+        H, W = self._H, self._W
+        # Fast path: the in-C++ core runs the whole iteration GIL-free; Python just pops each
+        # ready batch (one call/batch). Batches come AS COMPLETED (out of index order, slots > 1).
+        if self._core is not None:
+            core = self._core
+            core.begin_epoch()
+            while True:
+                r = core.next_batch()
+                if r is None:
+                    break
+                ptr, n = r
+                yield _CudaArray(ptr, (n, 3, H, W))
+            return
+
+        # Fallback (no CudaStreamCore compiled in): Python worker threads calling
+        # cuda_stream_normalize — GIL-limited, kept for older builds.
         t = self._t
-        H, W, bs = self._H, self._W, self.batch_size
+        bs = self.batch_size
         stride = H * W * 3
         hbase = int(self._host.data_ptr())
         K = self._slots

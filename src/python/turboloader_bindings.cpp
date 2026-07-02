@@ -1385,6 +1385,37 @@ PYBIND11_MODULE(_turboloader, m) {
         "Streaming per-batch on `slot`: async H2D of the pre-resized uint8 batch at host pointer "
         "host_src (best pinned) + normalize -> device pointer (int) of (N,3,H,W) float32. K slots "
         "on K threads overlap H2D with compute. Each slot single-thread-at-a-time.");
+    py::class_<turboloader::cuda::CudaStreamCore>(m, "CudaStreamCore")
+        .def(py::init([](uintptr_t host_ptr, int n, int h, int w, int batch,
+                         std::array<float, 3> mean, std::array<float, 3> std_, int num_slots,
+                         bool drop_last) {
+                 return new turboloader::cuda::CudaStreamCore(host_ptr, n, h, w, batch, mean.data(),
+                                                              std_.data(), num_slots, drop_last);
+             }),
+             py::arg("host_ptr"), py::arg("n"), py::arg("h"), py::arg("w"), py::arg("batch"),
+             py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+             py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f}, py::arg("num_slots") = 3,
+             py::arg("drop_last") = true,
+             "Fully-in-C++ streaming loader over a pre-resized uint8 dataset in PINNED host RAM "
+             "(host_ptr, n images of h*w*3 NHWC). K worker threads run the whole iteration GIL-free "
+             "(async H2D + normalize + double-buffered prefetch).")
+        .def("num_batches", &turboloader::cuda::CudaStreamCore::num_batches)
+        .def("begin_epoch", &turboloader::cuda::CudaStreamCore::begin_epoch,
+             "Reset for a new epoch (batches processed in order).")
+        .def(
+            "next_batch",
+            [](turboloader::cuda::CudaStreamCore& self) -> py::object {
+                int n = 0;
+                uintptr_t ptr;
+                {
+                    py::gil_scoped_release rel;  // block GIL-free while the pool produces
+                    ptr = self.next_batch(&n);
+                }
+                if (!ptr) return py::none();
+                return py::make_tuple(ptr, n);  // (device ptr, n images); wrap via __cuda_array_interface__
+            },
+            "Blocking: returns (device_ptr, n) of the next ready (n,3,h,w) float32 batch, or None "
+            "at epoch end. The GIL is released while waiting. Consume before the next call.");
 #ifdef HAVE_NVJPEG
     // nvJPEG full-GPU JPEG decode (the CUDA analogue of metal_decode_jpeg; nvJPEG decodes
     // entirely on the GPU, vs Metal's hybrid CPU-Huffman+GPU-IDCT). UNVALIDATED.

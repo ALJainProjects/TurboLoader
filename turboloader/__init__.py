@@ -2194,6 +2194,7 @@ try:
             pass
         try:
             from _turboloader import (
+                CudaStreamCore,
                 cuda_normalize_resident,
                 cuda_normalize_resident_gather,
                 cuda_stream_normalize,
@@ -2201,6 +2202,7 @@ try:
             )
 
             __all__ += [
+                "CudaStreamCore",
                 "cuda_normalize_resident",
                 "cuda_normalize_resident_gather",
                 "cuda_stream_normalize",

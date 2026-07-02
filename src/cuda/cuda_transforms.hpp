@@ -65,6 +65,27 @@ int stream_normalize_init(int num_slots);
 uintptr_t stream_normalize_batch(uintptr_t host_src, int N, int H, int W, const float mean[3],
                                  const float std_[3], int slot);
 
+// Fully-in-C++ streaming loader for a pre-resized uint8 dataset in PINNED host RAM (larger than
+// VRAM). A persistent pool of K worker threads runs the WHOLE iteration GIL-free: each pulls a
+// batch, async-H2Ds it on its own stream, normalizes into a double-buffered output pool, and
+// hands the ready device pointer to next_batch(). Python calls next_batch() once per batch (the
+// only per-batch Python), so the GIL is not the bottleneck the way K Python worker threads are.
+// PIMPL keeps CUDA/threading types out of this header (included by the non-CUDA bindings build).
+class CudaStreamCore {
+ public:
+    // host_ptr: pinned host uint8 base of the (n, h, w, 3) NHWC dataset. num_slots = worker threads.
+    CudaStreamCore(uintptr_t host_ptr, int n, int h, int w, int batch, const float mean[3],
+                   const float std_[3], int num_slots, bool drop_last);
+    ~CudaStreamCore();
+    int num_batches() const;
+    void begin_epoch();               // reset for a new pass (batches processed in order)
+    uintptr_t next_batch(int* out_n); // blocking; device ptr of next ready (n,3,h,w) f32; 0 at end
+
+ private:
+    struct Impl;
+    Impl* impl_;
+};
+
 // Fused crop + resize + (optional) hflip + normalize. Mirrors
 // turboloader::metal::crop_resize_normalize_batch exactly.
 bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,

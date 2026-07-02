@@ -17,11 +17,13 @@
 #endif
 
 #include <algorithm>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -368,6 +370,161 @@ uintptr_t stream_normalize_batch(uintptr_t host_src, int N, int H, int W, const 
     float* result = outp;
     S.out_idx = (S.out_idx + 1) % StreamSlot::SRING;
     return reinterpret_cast<uintptr_t>(result);
+}
+
+// ---- Fully-in-C++ streaming loader: persistent worker pool + double-buffered output pool ----
+// The whole iteration runs GIL-free: K worker threads each pull a batch, async-H2D it on their
+// own stream, normalize into a free output buffer, and enqueue it; next_batch() pops the next
+// ready buffer for Python. Only one Python call per batch, so the GIL is not the bottleneck.
+struct CudaStreamCore::Impl {
+    const uint8_t* host = nullptr;
+    int N = 0, H = 0, W = 0, batch = 0;
+    float mean[3] = {0, 0, 0}, istd[3] = {0, 0, 0};
+    bool drop_last = true;
+    int K = 1;
+    size_t stride = 0;   // H*W*3 bytes/image
+    size_t out_per = 0;  // 3*H*W floats/image
+    int total = 0;       // batches/epoch
+    int n_bufs = 0;
+
+    std::vector<cudaStream_t> stream;
+    std::vector<uint8_t*> d_in;  // K device uint8 scratch (one per worker)
+    std::vector<float*> buf;     // n_bufs output device buffers
+    std::vector<std::thread> workers;
+
+    std::mutex mu;
+    std::condition_variable cv;
+    std::queue<int> work;                   // batch indices to process
+    std::queue<int> freeb;                  // free output-buffer indices
+    std::queue<std::pair<int, int>> ready;  // (buf_idx, n_images)
+    bool stop = false;
+    int consumed = 0;
+    int prev_buf = -1;
+
+    void worker(int wi) {
+        const float3 m = make_float3(mean[0], mean[1], mean[2]);
+        const float3 isd = make_float3(istd[0], istd[1], istd[2]);
+        for (;;) {
+            int b, bi;
+            {
+                std::unique_lock<std::mutex> lk(mu);
+                cv.wait(lk, [&] { return stop || !work.empty(); });
+                if (stop) return;
+                b = work.front();
+                work.pop();
+            }
+            {
+                std::unique_lock<std::mutex> lk(mu);
+                cv.wait(lk, [&] { return stop || !freeb.empty(); });
+                if (stop) return;
+                bi = freeb.front();
+                freeb.pop();
+            }
+            const int n = std::min(batch, N - b * batch);
+            cudaMemcpyAsync(d_in[wi], host + (size_t)b * batch * stride, (size_t)n * stride,
+                            cudaMemcpyHostToDevice, stream[wi]);
+            const long tot = (long)n * 3 * H * W;
+            const int block = 256;
+            const long grid = (tot + block - 1) / block;
+            normalize_nhwc_to_nchw_kernel<<<(unsigned)grid, block, 0, stream[wi]>>>(d_in[wi], buf[bi],
+                                                                                    n, H, W, m, isd);
+            cudaStreamSynchronize(stream[wi]);
+            {
+                std::lock_guard<std::mutex> lk(mu);
+                ready.push({bi, n});
+            }
+            cv.notify_all();
+        }
+    }
+};
+
+CudaStreamCore::CudaStreamCore(uintptr_t host_ptr, int n, int h, int w, int batch,
+                               const float mean[3], const float std_[3], int num_slots,
+                               bool drop_last) {
+    impl_ = new Impl();
+    Impl& I = *impl_;
+    I.host = reinterpret_cast<const uint8_t*>(host_ptr);
+    I.N = n;
+    I.H = h;
+    I.W = w;
+    I.batch = batch;
+    I.drop_last = drop_last;
+    for (int c = 0; c < 3; c++) {
+        I.mean[c] = mean[c];
+        I.istd[c] = 1.0f / std_[c];
+    }
+    I.K = std::max(1, num_slots);
+    I.stride = (size_t)h * w * 3;
+    I.out_per = (size_t)3 * h * w;
+    I.total = drop_last ? (n / batch) : ((n + batch - 1) / batch);
+    if (!available() || !host_ptr || n <= 0 || batch <= 0) return;  // no workers -> next_batch()=0
+    I.stream.resize(I.K, nullptr);
+    I.d_in.resize(I.K, nullptr);
+    for (int i = 0; i < I.K; i++) {
+        if (cudaStreamCreate(&I.stream[i]) != cudaSuccess) return;
+        if (cudaMalloc(&I.d_in[i], (size_t)batch * I.stride) != cudaSuccess) return;
+    }
+    I.n_bufs = I.K + 4;  // K in flight + a few queued + 1 held by the consumer
+    I.buf.resize(I.n_bufs, nullptr);
+    for (int j = 0; j < I.n_bufs; j++)
+        if (cudaMalloc(&I.buf[j], (size_t)batch * I.out_per * sizeof(float)) != cudaSuccess) return;
+    for (int i = 0; i < I.K; i++) I.workers.emplace_back([&I, i] { I.worker(i); });
+}
+
+CudaStreamCore::~CudaStreamCore() {
+    Impl& I = *impl_;
+    {
+        std::lock_guard<std::mutex> lk(I.mu);
+        I.stop = true;
+    }
+    I.cv.notify_all();
+    for (auto& t : I.workers)
+        if (t.joinable()) t.join();
+    for (auto s : I.stream)
+        if (s) cudaStreamDestroy(s);
+    for (auto p : I.d_in)
+        if (p) cudaFree(p);
+    for (auto p : I.buf)
+        if (p) cudaFree(p);
+    delete impl_;
+}
+
+int CudaStreamCore::num_batches() const { return impl_->total; }
+
+void CudaStreamCore::begin_epoch() {
+    Impl& I = *impl_;
+    if (I.workers.empty()) return;
+    std::lock_guard<std::mutex> lk(I.mu);
+    std::queue<int>().swap(I.work);
+    std::queue<int>().swap(I.ready);
+    std::queue<int>().swap(I.freeb);
+    for (int j = 0; j < I.n_bufs; j++) I.freeb.push(j);
+    for (int b = 0; b < I.total; b++) I.work.push(b);
+    I.consumed = 0;
+    I.prev_buf = -1;
+    I.cv.notify_all();
+}
+
+uintptr_t CudaStreamCore::next_batch(int* out_n) {
+    Impl& I = *impl_;
+    if (I.workers.empty()) return 0;
+    std::unique_lock<std::mutex> lk(I.mu);
+    if (I.prev_buf >= 0) {
+        I.freeb.push(I.prev_buf);
+        I.prev_buf = -1;
+        lk.unlock();
+        I.cv.notify_all();
+        lk.lock();
+    }
+    if (I.consumed >= I.total) return 0;
+    I.cv.wait(lk, [&] { return I.stop || !I.ready.empty(); });
+    if (I.stop || I.ready.empty()) return 0;
+    auto pr = I.ready.front();
+    I.ready.pop();
+    I.consumed++;
+    I.prev_buf = pr.first;
+    if (out_n) *out_n = pr.second;
+    return reinterpret_cast<uintptr_t>(I.buf[pr.first]);
 }
 
 #ifdef HAVE_NVJPEG
