@@ -9,8 +9,8 @@ hand — `setuptools_scm` derives the version from the tag and writes it everywh
 
 ```bash
 git checkout main && git pull
-git tag -a v2.26.0 -m "v2.26.0"     # the tag IS the version
-git push origin v2.26.0
+git tag -a v2.31.0 -m "v2.31.0"     # the tag IS the version
+git push origin v2.31.0
 ```
 
 Pushing a `v*` tag triggers `.github/workflows/build-wheels.yml`, which:

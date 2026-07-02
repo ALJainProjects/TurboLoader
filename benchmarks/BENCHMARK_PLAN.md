@@ -1,11 +1,12 @@
 # TurboLoader Benchmarking Plan
 
-> **Note:** This is the original planning doc; some figures below are pre-measurement estimates
+> **Note:** This is the original planning doc; the figures below are pre-measurement estimates
 > (e.g. "DALI ~10× faster" was a hypothesis, not a result). Actual measured results are in
-> `experiments/cuda/RESULTS.md` and `docs/benchmarks/index.md` — on an RTX 3090, TurboLoader's
-> `CudaImageLoader(decode="nvimgcodec")` measured **~28.5k img/s, +12% over DALI's best-tuned
-> config (~25.5k)** and ahead of FFCV (~13.8k). Treat the estimates here as the plan, not the
-> outcome.
+> `experiments/cuda/RESULTS.md` and `docs/benchmarks/index.md`. On an RTX 3090, TurboLoader
+> **beats DALI on-the-fly** (`CudaImageLoader(decode="nvimgcodec")` ~28.5k vs DALI ~25.5k, +12%)
+> **and beats FFCV on pre-processed data** — `CudaResidentLoader` ~280k (fits-in-VRAM, ~3.5× FFCV)
+> and `CudaStreamLoader` ~140k (streaming > VRAM, ~1.6× FFCV ~85k). Treat the estimates below as
+> the plan, not the outcome.
 
 ## Overview
 

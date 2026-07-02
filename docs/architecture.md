@@ -1,6 +1,6 @@
 # TurboLoader Architecture
 
-This document describes the internal architecture of TurboLoader v2.26.2.
+This document describes the internal architecture of TurboLoader v2.31.0.
 
 ## Overview
 
@@ -393,7 +393,7 @@ turboloader/
 
 ## Version History
 
-### v2.26.x Current Features
+### v2.31.0 Current Features
 
 1. **Direct-batch fast path** ✅
    - FFCV / tf.data-style loader: one parallel pass decodes → resizes → normalizes

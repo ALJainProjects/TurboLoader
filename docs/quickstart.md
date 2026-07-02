@@ -20,7 +20,7 @@ Verify installation:
 
 ```python
 import turboloader
-print(turboloader.__version__)  # Should print "2.26.2" or later
+print(turboloader.__version__)  # Should print "2.31.0" or later
 ```
 
 ---

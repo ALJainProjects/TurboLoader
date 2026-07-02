@@ -236,7 +236,9 @@ See [Architecture Guide](architecture.md) for detailed design.
 
 ## Version History
 
-- **v2.26.2** (Current; v2.26.1 is the latest published on PyPI) - FFCV-style direct-batch loader, multi-modality (`TokenDataLoader`, `ArrayDataLoader`), decoded cache (`cache_decoded=True`), DDP-safe distributed sharding
+- **v2.31.0** (Current) - NVIDIA CUDA GPU loaders (build-from-source): `CudaImageLoader` (nvImageCodec) **beats DALI** on-the-fly; `CudaResidentLoader` **beats FFCV ~3.5×** (fits-in-VRAM); `CudaStreamLoader` **beats FFCV ~1.6×** (streaming > VRAM). See [GPU acceleration](GPU_ACCELERATION.md)
+- **v2.28.0** - Apple Silicon GPU (Metal) transforms + hybrid GPU JPEG decode (`GpuImageLoader`)
+- **v2.26.2** - FFCV-style direct-batch loader, multi-modality (`TokenDataLoader`, `ArrayDataLoader`), decoded cache (`cache_decoded=True`), DDP-safe distributed sharding
 - **v2.7.0** - Decoded Tensor Caching (`cache_decoded=True`), FastDataLoader, MemoryEfficientDataLoader
 - **v2.4.0** - Integrated transform pipeline support in DataLoader
 - **v2.0.0** - Tiered Caching (L1 memory + L2 disk), Smart Batching enabled by default, Pipeline tuning optimizations
@@ -269,7 +271,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {2.26.2},
+  version = {2.31.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```

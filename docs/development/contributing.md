@@ -69,7 +69,7 @@ pytest tests/test_transforms_tensorflow.py -v
   `features()['version']` all resolve to the same value.
 - Releases are published to PyPI via GitHub Trusted Publishing, triggered by pushing a
   version tag. Tagging a release is what cuts the wheels and uploads them.
-- The current version is 2.26.2 (latest published on PyPI is 2.26.1).
+- The current version is 2.31.0 (the tag is the single source of truth via setuptools_scm).
 
 ## Code Style
 
