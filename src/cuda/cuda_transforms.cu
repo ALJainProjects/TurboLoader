@@ -496,7 +496,7 @@ void CudaStreamCore::begin_epoch() {
     if (I.workers.empty()) return;
     std::lock_guard<std::mutex> lk(I.mu);
     std::queue<int>().swap(I.work);
-    std::queue<int>().swap(I.ready);
+    std::queue<std::pair<int, int>>().swap(I.ready);
     std::queue<int>().swap(I.freeb);
     for (int j = 0; j < I.n_bufs; j++) I.freeb.push(j);
     for (int b = 0; b < I.total; b++) I.work.push(b);
