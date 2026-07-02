@@ -461,7 +461,9 @@ CudaStreamCore::CudaStreamCore(uintptr_t host_ptr, int n, int h, int w, int batc
     I.stream.resize(I.K, nullptr);
     I.d_in.resize(I.K, nullptr);
     for (int i = 0; i < I.K; i++) {
-        if (cudaStreamCreate(&I.stream[i]) != cudaSuccess) return;
+        // Non-blocking: worker streams must NOT implicitly serialize with the default (NULL)
+        // stream, or the consumer's torch ops (default stream) would barrier against all workers.
+        if (cudaStreamCreateWithFlags(&I.stream[i], cudaStreamNonBlocking) != cudaSuccess) return;
         if (cudaMalloc(&I.d_in[i], (size_t)batch * I.stride) != cudaSuccess) return;
     }
     I.n_bufs = I.K + 4;  // K in flight + a few queued + 1 held by the consumer
