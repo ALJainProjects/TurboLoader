@@ -264,17 +264,55 @@ try:
                         return (h, w)
         return None
 
+    def _flatten_transforms(transform):
+        """Flatten a transform (single or ComposedTransforms) into a list of steps."""
+        if transform is None:
+            return []
+        if type(transform).__name__ == "ComposedTransforms":
+            try:
+                return list(transform.get_transforms())
+            except Exception:
+                return [transform]  # opaque composition: treated as unsupported below
+        return [transform]
+
+    def _fastpath_analysis(transform, mean=None, std=None):
+        """Analyze a transform pipeline for the fused C++ fast paths.
+
+        Returns ``(supported, mean, std)``:
+
+        - ``supported`` is True iff every step is expressible inside the C++ batch
+          pass (Resize -> the loader's target size; Normalize/ImageNetNormalize ->
+          mean/std). Pipelines containing anything else (flips, crops, color jitter,
+          ...) MUST NOT take the fused path — it cannot apply them, and silently
+          dropping transforms means silently wrong training data.
+        - ``mean``/``std`` come from the last Normalize-like step (via its
+          ``.mean``/``.std`` properties); explicit arguments override.
+        """
+        m, s = [], []
+        supported = True
+        for t in _flatten_transforms(transform):
+            tname = type(t).__name__
+            if tname == "Resize":
+                continue  # expressed via the loader's target (H, W)
+            if tname in ("Normalize", "ImageNetNormalize"):
+                tm = getattr(t, "mean", None)
+                tsd = getattr(t, "std", None)
+                if tm is not None and tsd is not None:
+                    m, s = list(tm), list(tsd)
+                elif tname == "ImageNetNormalize":
+                    m, s = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+                else:
+                    supported = False  # params not extractable -> not expressible
+                continue
+            supported = False  # any other step is not expressible in the fused pass
+        if mean is not None and std is not None:
+            m, s = list(mean), list(std)
+        return supported, m, s
+
     def _normalize_params(transform, mean=None, std=None):
         """Resolve (mean, std) for the C++ normalize from a transform or explicit values."""
-        if mean is not None and std is not None:
-            return list(mean), list(std)
-        if transform is None:
-            return [], []
-        tname = type(transform).__name__
-        if tname == "ImageNetNormalize":
-            return [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
-        # Generic C++ Normalize doesn't expose mean/std; caller may pass them explicitly.
-        return [], []
+        _, m, s = _fastpath_analysis(transform, mean, std)
+        return m, s
 
     def _serve_cache(
         cache_X, cache_indices, batch_size, shuffle, epoch, prefetch, seed=0, drop_last=False
@@ -636,7 +674,13 @@ try:
                     and data_path.split("://", 1)[0]
                     in ("http", "https", "s3", "gs", "gcs", "azure", "az")
                 )
-                if not is_remote:
+                # The fused C++ direct path can only express Resize + Normalize. If the
+                # pipeline contains anything else (flips, crops, jitter, ...), taking it
+                # would SILENTLY DROP those transforms — so route to the worker pipeline,
+                # whose fallback applies the full pipeline per image in Python (slower but
+                # correct).
+                fastpath_ok = _fastpath_analysis(transform)[0]
+                if not is_remote and fastpath_ok:
                     # Default fully-optimized path: FFCV-style single-pass parallel
                     # decode->batch (no worker queue / per-sample copies). Fastest for
                     # local TAR; auto-uses DCT scaled decode for large source images.
@@ -660,6 +704,7 @@ try:
                 else:
                     # Remote sources (http/s3/gs/azure) still use the worker pipeline
                     # (it fetches + streams the archive); DirectBatchLoader is local-only.
+                    # Also used for transform pipelines the fused path can't express.
                     self._impl = FastDataLoader(
                         data_path,
                         batch_size=batch_size,
@@ -962,75 +1007,24 @@ try:
             )
 
         def _extract_normalize_params(self):
-            """Extract mean/std from transform pipeline for C++ fast path.
+            """Extract (mean, std) from the transform pipeline for the C++ fast path.
 
-            Walks the transform pipeline to find Normalize/ImageNetNormalize
-            and extracts their mean/std values. Returns (mean, std) lists
-            or ([], []) if no normalization found.
+            Uses the shared ``_fastpath_analysis`` walker, which reads the
+            ``.mean``/``.std`` properties off Normalize/ImageNetNormalize (including
+            inside ComposedTransforms). MUST stay consistent with
+            ``_can_use_cpp_float32_path`` — historically the gate approved composed
+            pipelines this extractor returned ([], []) for, so the C++ float32 path
+            ran with NO normalization (silently wrong training data).
             """
-            if self._transform is None:
-                return [], []
-
-            # Check if transform is a single Normalize/ImageNetNormalize
-            transform = self._transform
-            transform_type = type(transform).__name__
-
-            if transform_type in ("Normalize", "ImageNetNormalize"):
-                # ImageNet defaults: mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                if transform_type == "ImageNetNormalize":
-                    return [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
-                # For generic Normalize we can't easily extract mean/std from C++ object
-                # Fall back to Python path
-                return [], []
-
-            # Check if transform is a ComposedTransforms pipeline
-            if transform_type == "ComposedTransforms":
-                # Walk the pipeline to check if it's only Resize + Normalize
-                # (the common case for benchmarks)
-                return [], []
-
-            return [], []
+            _, m, s = _fastpath_analysis(self._transform)
+            return m, s
 
         def _can_use_cpp_float32_path(self):
-            """Check if we can use the C++ float32 fast path.
-
-            The C++ path handles: resize (via target_height/width) + normalize.
-            If the transform pipeline contains only these operations (or is None),
-            we can use the fast path.
-            """
-            if self._transform is None:
-                return True
-
-            transform_type = type(self._transform).__name__
-
-            # Single Normalize/ImageNetNormalize - C++ handles this
-            if transform_type in ("Normalize", "ImageNetNormalize"):
-                return True
-
-            # For composed transforms, check if all are Resize + Normalize
-            # (Resize is handled by target_height/target_width params)
-            if transform_type == "ComposedTransforms":
-                try:
-                    transforms = (
-                        self._transform.get_transforms()
-                        if hasattr(self._transform, "get_transforms")
-                        else []
-                    )
-                except:
-                    return False
-
-                # Walk through transforms
-                for t in transforms:
-                    tname = type(t).__name__
-                    if tname == "Resize":
-                        continue  # Handled by C++ target_height/target_width
-                    elif tname in ("Normalize", "ImageNetNormalize"):
-                        continue  # Handled by C++ mean/std params
-                    else:
-                        return False  # Unsupported transform, fall back to Python
-                return True
-
-            return False
+            """True iff the transform pipeline is fully expressible in the C++ float32
+            path (None, or only Resize + Normalize/ImageNetNormalize). Anything else
+            takes the standard path, which applies the pipeline per image in Python —
+            otherwise those transforms would be silently dropped."""
+            return _fastpath_analysis(self._transform)[0]
 
         def next_batch(self):
             """Get next batch as contiguous array.

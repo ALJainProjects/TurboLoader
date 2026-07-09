@@ -310,11 +310,20 @@ def test_normalize_params_helper():
     assert tl._normalize_params(None, [1, 2, 3], [4, 5, 6]) == ([1, 2, 3], [4, 5, 6])
     # ImageNetNormalize resolves to the canonical constants
     m, s = tl._normalize_params(tl.ImageNetNormalize())
-    assert m == [0.485, 0.456, 0.406]
-    assert s == [0.229, 0.224, 0.225]
-    # no transform / generic Normalize => empty (C++ default)
+    # values now come from the C++ .mean/.std properties (float32), so compare approx
+    assert [round(x, 4) for x in m] == [0.485, 0.456, 0.406]
+    assert [round(x, 4) for x in s] == [0.229, 0.224, 0.225]
+    # no transform => empty (C++ default)
     assert tl._normalize_params(None) == ([], [])
-    assert tl._normalize_params(tl.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])) == ([], [])
+    # generic Normalize now exposes .mean/.std, so its params ARE extracted (the old
+    # ([], []) behavior silently skipped normalization on the fast path — a bug).
+    m, s = tl._normalize_params(tl.Normalize([0.5, 0.5, 0.5], [0.25, 0.25, 0.25]))
+    assert [round(x, 4) for x in m] == [0.5, 0.5, 0.5]
+    assert [round(x, 4) for x in s] == [0.25, 0.25, 0.25]
+    # composed pipelines are walked too (this was the headline silent-drop bug)
+    m, s = tl._normalize_params(tl.Resize(32, 32) | tl.ImageNetNormalize())
+    assert [round(x, 4) for x in m] == [0.485, 0.456, 0.406]
+    assert [round(x, 4) for x in s] == [0.229, 0.224, 0.225]
 
 
 # --------------------------------------------------------------------------- #

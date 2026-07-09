@@ -60,6 +60,13 @@ public:
 
     const char* name() const override { return "Normalize"; }
 
+    // Read-only access to the normalization parameters (both in [0,1] scale: apply()
+    // divides by 255 before subtracting mean). Exposed to Python so loader fast paths can
+    // extract mean/std from a user-supplied Normalize (or a composed pipeline containing
+    // one) instead of silently dropping the normalization.
+    const std::vector<float>& mean() const { return mean_; }
+    const std::vector<float>& std_values() const { return std_; }
+
 private:
     /**
      * @brief Apply normalization with float32 output

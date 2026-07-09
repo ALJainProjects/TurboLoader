@@ -769,7 +769,12 @@ py::object imagedata_to_numpy_auto(std::unique_ptr<ImageData> img) {
 /**
  * @brief Helper to convert NumPy array to ImageData
  */
-std::unique_ptr<ImageData> numpy_to_imagedata(py::array_t<uint8_t> array) {
+// c_style|forcecast is REQUIRED here: this memcpy's the raw buffer assuming C-contiguous
+// HWC layout. Without it, a non-contiguous view (e.g. np.transpose(chw, (1, 2, 0)) — exactly
+// what the loader fallback passes) was accepted as-is and its bytes misread in memory order,
+// silently corrupting every transform applied to a view.
+std::unique_ptr<ImageData> numpy_to_imagedata(
+    py::array_t<uint8_t, py::array::c_style | py::array::forcecast> array) {
     auto buf = array.request();
     if (buf.ndim != 3) {
         throw std::runtime_error("Array must be 3D (H, W, C)");
@@ -1724,7 +1729,8 @@ PYBIND11_MODULE(_turboloader, m) {
              "Pipe operator (|) support:\n"
              "    >>> pipeline = Resize(224, 224) | RandomHorizontalFlip(0.5) | ImageNetNormalize()\n"
              "    >>> output = pipeline.apply(image)")
-        .def("apply", [](Transform& self, py::array_t<uint8_t> img) {
+        .def("apply", [](Transform& self,
+                         py::array_t<uint8_t, py::array::c_style | py::array::forcecast> img) {
             auto input = numpy_to_imagedata(img);
             auto output = self.apply(*input);
             return imagedata_to_numpy_auto(std::move(output));
@@ -1789,7 +1795,11 @@ PYBIND11_MODULE(_turboloader, m) {
              "Args:\n"
              "    mean (list[float]): Mean values for each channel\n"
              "    std (list[float]): Standard deviation for each channel\n"
-             "    to_float (bool): Convert to float32 (default: True)");
+             "    to_float (bool): Convert to float32 (default: True)")
+        .def_property_readonly("mean", &NormalizeTransform::mean,
+             "Per-channel mean values ([0,1] scale) used by this normalize.")
+        .def_property_readonly("std", &NormalizeTransform::std_values,
+             "Per-channel std values ([0,1] scale) used by this normalize.");
 
     py::class_<ImageNetNormalize, NormalizeTransform>(m, "ImageNetNormalize",
              "ImageNet normalization preset\n\n"
@@ -2133,6 +2143,11 @@ PYBIND11_MODULE(_turboloader, m) {
              "    np.ndarray: Transformed image (uint8 or float32)")
         .def("__len__", &PyTransformPipeline::size,
              "Get number of transforms in pipeline")
+        .def("get_transforms", &PyTransformPipeline::get_transforms,
+             "List of the transforms in this pipeline, in application order.\n\n"
+             "Used by the loader fast paths to check whether a composed pipeline is fully\n"
+             "expressible in C++ (Resize + Normalize) and to extract mean/std — pipelines\n"
+             "containing other transforms fall back to the Python-apply path.")
         .def("__call__", &PyTransformPipeline::apply,
              py::arg("img"),
              "Apply pipeline (callable interface)")
