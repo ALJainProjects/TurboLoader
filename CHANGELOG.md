@@ -5,7 +5,41 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.32.0] - unreleased
+## [2.33.0] - unreleased
+
+Experience sprint: the fast path now trains, checkpoints, and overlaps like a modern
+loader — every feature validated end-to-end on real data (Imagenette / Tiny Shakespeare).
+
+### Added
+- **Streaming decode-ahead** (`prefetch_batches`, previously ignored on the streaming
+  path): a bounded producer decodes while you train (GIL released for the whole C++ fill).
+  1.24-1.30x end-to-end epoch on real data with a simulated step. Root fix included:
+  `ThreadPool::parallel_for` dispatches are now serialized — two loaders' producers
+  calling it concurrently corrupted the shared dispatch state (deadlock).
+- **`pin_memory=True`**: streams through a fixed ring of recycled torch buffers (new
+  `DirectBatchLoader.next_batch_into`) — zero per-batch numpy allocation; pinned when the
+  torch build supports it, so `.to(device, non_blocking=True)` is genuinely async. Yields
+  torch tensors; DALI-style lifetime contract (valid until ring-1 further batches).
+- **`train_aug=True`**: torchvision-parity RandomResizedCrop + horizontal flip fused into
+  the C++ pass (DCT-scaled decode -> crop -> SIMD resize -> flip -> normalize).
+  Deterministic per (seed, epoch, sample); ~3% cost over the plain path on a real epoch.
+  Crop statistics verified against the RandomResizedCrop distribution by recovering crop
+  rects from gradient images. Pipelines the fused pass can't express raise (never dropped).
+- **`state_dict()` / `load_state_dict()`**: exact mid-epoch resumption on all DirectBatch
+  variants (streaming/prefetch/pin_memory/cache_decoded/train_aug) and TokenDataLoader —
+  {epoch, batches_served} + deterministic order = decode-free skip. Byte-exact continuation
+  verified on real data across all variants. Unsupported configs raise NotImplementedError.
+- **End-to-end training benchmark** (`benchmarks/benchmark_e2e_training.py` + results):
+  real ResNet-18 on Imagenette, identical step/recipe/settings — **TurboLoader 4.37s vs
+  PyTorch DataLoader 5.11s median steady-state epoch (1.17x)**, with TurboLoader ~0.5s
+  above the pure-GPU floor (input pipeline nearly fully hidden). GPU-resident variant
+  (CudaResidentLoader + new `return_indices=True`): **3.42s/epoch** (1.49x vs PyTorch).
+- Examples: `train_gpt_tokenloader.py` (real GPT on Tiny Shakespeare via TokenDataLoader,
+  honest note on when the loader-only advantage matters), `finetune_resnet_residentloader.py`
+  (real fine-tune from GPU-resident data), `turboloader_quickstart.ipynb` (executed
+  end-to-end; 23.7x vs a PIL loop on real images — Kaggle/Colab-ready).
+
+## [2.32.0] - 2026-07-09
 
 Correctness sprint: six bugs found by a full-system audit, each fixed with a regression
 test that fails on the old code, and validated end-to-end on real data (Imagenette).

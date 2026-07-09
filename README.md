@@ -16,6 +16,10 @@ TurboLoader is a high-performance data loading library for machine learning work
 
 ### Core Features
 
+- **Fused train pipeline** - `train_aug=True`: RandomResizedCrop + flip + normalize inside the C++ pass (torchvision-parity, deterministic per epoch, ~3% over plain loading)
+- **Trains end-to-end faster** - real ResNet-18/Imagenette: 1.17x vs PyTorch DataLoader (loader ~fully hidden behind the GPU); see `benchmarks/E2E_TRAINING_RESULTS.md`
+- **Checkpointable** - `state_dict()/load_state_dict()`: exact, decode-free mid-epoch resumption
+- **Pinned recycled buffers** - `pin_memory=True` yields torch tensors from a reused ring; async H2D with `non_blocking=True`
 - **Decoded Tensor Caching** - `FastDataLoader(..., cache_decoded=True)` keeps decoded arrays in RAM so later epochs skip decoding
 - **Multiple Loader Types** - FastDataLoader, MemoryEfficientDataLoader, standard DataLoader
 - **Distributed Training Support** - Multi-node data loading with deterministic sharding
