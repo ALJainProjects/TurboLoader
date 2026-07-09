@@ -315,7 +315,15 @@ try:
         return m, s
 
     def _serve_cache(
-        cache_X, cache_indices, batch_size, shuffle, epoch, prefetch, seed=0, drop_last=False
+        cache_X,
+        cache_indices,
+        batch_size,
+        shuffle,
+        epoch,
+        prefetch,
+        seed=0,
+        drop_last=False,
+        start_batch=0,
     ):
         """Yield fresh, optionally-shuffled batches from a contiguous decoded cache,
         with a background prefetch thread (numpy releases the GIL during the copy).
@@ -332,7 +340,7 @@ try:
         n = cache_X.shape[0]
         order = np.random.default_rng(int(seed) + int(epoch)).permutation(n) if shuffle else None
         end = (n // batch_size) * batch_size if drop_last else n
-        starts = list(range(0, end, batch_size))
+        starts = list(range(0, end, batch_size))[int(start_batch) :]  # decode-free resume
 
         def gather(s):
             if order is None:
@@ -437,6 +445,8 @@ try:
             self._cache_X = None
             self._cache_indices = None
             self._cache_populated = False
+            self._served = 0
+            self._resume_batches = 0
             self._pin_memory = bool(pin_memory)
             self._warned_decode_failures = False
             self._it = None
@@ -498,7 +508,10 @@ try:
                 # deterministic, seed-respecting shuffle order.
                 if not self._cache_populated:
                     self._populate_cache()
-                yield from _serve_cache(
+                resume = self._resume_batches
+                self._resume_batches = 0
+                self._served = resume
+                for r in _serve_cache(
                     self._cache_X,
                     self._cache_indices,
                     self._batch_size,
@@ -507,13 +520,22 @@ try:
                     self._prefetch,
                     seed=self._seed,
                     drop_last=self._drop_last,
-                )
+                    start_batch=resume,
+                ):
+                    self._served += 1
+                    yield r
                 return
-            # On-the-fly streaming path.
-            self._core.begin_epoch(self._epoch)
+            # On-the-fly streaming path. A pending resume (load_state_dict) skips the
+            # first _resume_batches batches of the deterministic order, decode-free.
+            resume = self._resume_batches
+            self._resume_batches = 0
+            self._served = resume
+            self._core.begin_epoch(self._epoch, resume)
             prefetch = max(0, int(self._prefetch or 0))
             if self._pin_memory:
-                yield from self._iter_pinned_ring(prefetch)
+                for r in self._iter_pinned_ring(prefetch):
+                    self._served += 1
+                    yield r
                 return
             if prefetch:
                 # Decode-ahead: a producer thread fills up to `prefetch_batches` batches
@@ -548,6 +570,7 @@ try:
                         if r is None:
                             break
                         self._maybe_warn_decode_failures(r[1])
+                        self._served += 1
                         yield r
                 finally:
                     stop.set()
@@ -563,6 +586,7 @@ try:
                 if r is None:
                     break
                 self._maybe_warn_decode_failures(r[1])
+                self._served += 1
                 yield r
 
         def _iter_pinned_ring(self, prefetch):
@@ -643,6 +667,19 @@ try:
                     break
                 yield r
                 k += 1
+
+        def state_dict(self):
+            """Mid-epoch checkpoint: batch order is deterministic given (seed, epoch,
+            shard), so {epoch, batches_served} resumes exactly (decode-free skip)."""
+            return {
+                "version": 1,
+                "epoch": int(self._epoch),
+                "batches_served": int(self._served),
+            }
+
+        def load_state_dict(self, sd):
+            self._epoch = int(sd["epoch"])
+            self._resume_batches = int(sd["batches_served"])
 
         def _maybe_warn_decode_failures(self, meta):
             # Corrupt samples are served zero-filled (a run shouldn't die on one bad
@@ -1037,6 +1074,30 @@ try:
                 self._impl.set_epoch(epoch)
             elif self._loader is not None:
                 self._loader.set_epoch(epoch)
+
+        def state_dict(self):
+            """Checkpoint the loader position: {'epoch', 'batches_served'}.
+
+            Batch order is deterministic given (seed, epoch, shard), so this is enough
+            for EXACT mid-epoch resumption via load_state_dict() — the resumed loader
+            skips already-served batches without decoding them. Supported on the fast
+            DirectBatch paths (streaming, prefetch, pin_memory, cache_decoded).
+            """
+            if self._fast and hasattr(self._impl, "state_dict"):
+                return self._impl.state_dict()
+            raise NotImplementedError(
+                "state_dict() is supported on the fast DirectBatch path (local archive + "
+                "tensor output). This loader configuration does not support it yet."
+            )
+
+        def load_state_dict(self, sd):
+            if self._fast and hasattr(self._impl, "load_state_dict"):
+                self._impl.load_state_dict(sd)
+                return
+            raise NotImplementedError(
+                "load_state_dict() is supported on the fast DirectBatch path (local "
+                "archive + tensor output). This loader configuration does not support it yet."
+            )
 
     class FastDataLoader:
         """High-performance DataLoader with batch array transfer (8-12% faster).

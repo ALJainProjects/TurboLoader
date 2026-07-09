@@ -65,6 +65,8 @@ class TokenDataLoader:
         self.seed = int(seed)
         self.return_targets = bool(return_targets)
         self._epoch = 0
+        self._served = 0
+        self._resume_batches = 0
         # A window needs seq_len tokens (+1 more for the shifted target).
         self._max_start = self._n - self.seq_len - (1 if return_targets else 0)
         if self._max_start <= 0:
@@ -100,8 +102,25 @@ class TokenDataLoader:
     def __iter__(self):
         starts = self._start_positions()
         bs = self.batch_size
-        for b in range(self.steps_per_epoch):
+        resume = self._resume_batches
+        self._resume_batches = 0
+        self._served = resume
+        for b in range(resume, self.steps_per_epoch):
+            self._served += 1
             yield self._gather(starts[b * bs : (b + 1) * bs])
+
+    def state_dict(self):
+        """{'epoch', 'batches_served'} — start positions are deterministic per
+        (seed, epoch), so resumption is exact."""
+        return {
+            "version": 1,
+            "epoch": int(self._epoch),
+            "batches_served": int(getattr(self, "_served", 0)),
+        }
+
+    def load_state_dict(self, sd):
+        self._epoch = int(sd["epoch"])
+        self._resume_batches = int(sd["batches_served"])
 
 
 class ArrayDataLoader:

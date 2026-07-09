@@ -78,10 +78,13 @@ public:
 
     // Start a fresh epoch: (re)build the (optionally shuffled / sharded) order and
     // reset the batch cursor.
-    void begin_epoch(int epoch) {
+    // start_batch > 0 resumes mid-epoch: the deterministic order (seed/epoch/shard) is
+    // rebuilt identically and the cursor skips the first start_batch batches — exact,
+    // decode-free resumption (powers DataLoader.state_dict()/load_state_dict()).
+    void begin_epoch(int epoch, size_t start_batch = 0) {
         epoch_ = epoch;
         build_order();
-        cursor_.store(0, std::memory_order_relaxed);
+        cursor_.store(start_batch * batch_size_, std::memory_order_relaxed);
     }
 
     // Atomically claim the next batch's sample indices. Returns the batch size

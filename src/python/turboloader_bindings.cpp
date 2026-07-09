@@ -912,7 +912,10 @@ PYBIND11_MODULE(_turboloader, m) {
         .def("decode_failures", &DirectBatchCore::decode_failures,
              "Cumulative count of samples that failed to decode and were served as "
              "zero-filled images (also included in every batch's metadata).")
-        .def("begin_epoch", &DirectBatchCore::begin_epoch, py::arg("epoch") = 0)
+        .def("begin_epoch", &DirectBatchCore::begin_epoch, py::arg("epoch") = 0,
+             py::arg("start_batch") = 0,
+             "Start an epoch; start_batch > 0 skips the first start_batch batches of the "
+             "deterministic order (exact mid-epoch resumption).")
         .def("next_batch", [](DirectBatchCore& self) -> py::object {
             std::vector<size_t> idxs;
             size_t bs = self.acquire_batch(idxs);
