@@ -12,6 +12,8 @@
 
 #include <jpeglib.h>
 
+#include <csetjmp>
+
 #include <algorithm>
 #include <cstring>
 #include <mutex>
@@ -93,11 +95,22 @@ bool decode_jpeg(const uint8_t* data, size_t size, std::vector<uint8_t>& out, in
     if (!g_ok || !data || size == 0) return false;
 
     jpeg_decompress_struct cinfo;
-    jpeg_error_mgr jerr;
-    cinfo.err = jpeg_std_error(&jerr);
-    // libjpeg aborts via longjmp by default; on any error we just report failure so the
-    // caller falls back to the CPU path. (A setjmp handler would be needed to fully trap
-    // it; for malformed input the CPU decode_jpeg is the safety net.)
+    // libjpeg's DEFAULT error_exit calls exit(): a malformed JPEG killed the whole Python
+    // process (verified: interpreter exits code 1, no traceback). Trap fatal errors with
+    // the standard setjmp/longjmp handler and report failure instead.
+    struct ErrorJmp {
+        jpeg_error_mgr pub;
+        std::jmp_buf jb;
+        static void error_exit(j_common_ptr c) {
+            std::longjmp(reinterpret_cast<ErrorJmp*>(c->err)->jb, 1);
+        }
+    } jerr;
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = &ErrorJmp::error_exit;
+    if (setjmp(jerr.jb)) {
+        jpeg_destroy_decompress(&cinfo);
+        return false;  // malformed JPEG: fail cleanly, caller falls back / raises
+    }
     jpeg_create_decompress(&cinfo);
     jpeg_mem_src(&cinfo, const_cast<unsigned char*>(data), size);
     if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
