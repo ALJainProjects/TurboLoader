@@ -40,8 +40,13 @@ def _epoch_order(loader):
 
 def test_set_epoch_survives_reset_and_reshuffles(tar32):
     fl = turboloader.FastDataLoader(
-        tar32, batch_size=8, num_workers=1, output_format="pytorch",
-        target_height=32, target_width=32, shuffle=True,
+        tar32,
+        batch_size=8,
+        num_workers=1,
+        output_format="pytorch",
+        target_height=32,
+        target_width=32,
+        shuffle=True,
     )
     fl.set_epoch(0)
     order0 = _epoch_order(fl)
