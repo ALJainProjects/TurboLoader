@@ -5,7 +5,48 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.31.0] - unreleased
+## [2.32.0] - unreleased
+
+Correctness sprint: six bugs found by a full-system audit, each fixed with a regression
+test that fails on the old code, and validated end-to-end on real data (Imagenette).
+
+### Fixed
+- **Fast paths silently dropped transforms.** The README idiom
+  `transform=Resize(224,224) | ImageNetNormalize()` took the DirectBatch fast path but
+  mean/std could not be extracted from a `ComposedTransforms` (or bare `Normalize`) — images
+  were served **un-normalized with no error**, and augmentations in a pipeline were silently
+  ignored. `FastDataLoader` had the same pair-bug on its C++ float32 path. Now: `Normalize`
+  exposes `.mean`/`.std`, `ComposedTransforms` exposes `get_transforms()`, one shared
+  analyzer extracts params and gates the fast path, and pipelines containing anything the
+  fused pass can't express (flips/crops/jitter/...) route to the worker path, which applies
+  them per image (slower but correct).
+- **Transforms misread non-contiguous arrays.** `Transform.apply` memcpy'd the raw buffer of
+  views (ignoring strides) — e.g. a CHW→HWC `np.transpose` (exactly what the loader fallback
+  passes) was silently corrupted. Input arrays are now forced C-contiguous.
+- **Heap overflow in NEON HSV kernels (ARM/Apple Silicon).** `rgb_to_hsv_batch_neon` /
+  `hsv_to_rgb_batch_neon` advanced 4 px per iteration but `vld3_u8`/`vst3_u8` always access
+  8 px — up to 12 bytes read/WRITTEN past the buffer on every call with ≥4 pixels
+  (ColorJitter / adjust_saturation; shipped in the macOS arm64 wheels). Output values are
+  bit-identical post-fix. Note: ASan cannot catch this class (NEON ld3/st3 intrinsics are
+  not instrumented) — the regression test uses explicit guard bytes.
+- **`set_epoch` was discarded every epoch on the queue pipeline.** `reset()` recreated
+  TarWorkers with epoch 0, so per-epoch reshuffling (the documented v2.8.0 contract) never
+  happened on that path; also fixed a data race on the epoch field (now atomic).
+- **Corrupt samples were served as silent black images.** DirectBatch decode failures are
+  now counted (`loader.decode_failures`, in every batch's metadata), warned to stderr with
+  sample indices (rate-limited), and raise a one-time Python `RuntimeWarning`. Zero-fill is
+  kept deliberately — one bad file must not kill a long run; the silence was the bug.
+- **Malformed JPEG killed the Python process via `metal_decode_jpeg`** (libjpeg's default
+  `error_exit` calls `exit()`). Standard setjmp handler; now raises `RuntimeError`.
+
+### Added
+- `tests/test_cuda.py`: GPU-less tier (honest degradation) + GPU tier (correctness on real
+  JPEG bytes; 200-batch nvImageCodec soak asserting device memory does not grow — verified
+  on the RTX 3090, confirming code-stream/image handles are reused, not leaked).
+- Removed stale "UNVALIDATED" comments from the CUDA sources (validated on real hardware
+  since v2.29.0); fixed broken docs links; fixed the README Windows-support contradiction.
+
+## [2.31.0] - 2026-07-01
 
 Streaming CUDA loader that **beats FFCV for datasets larger than VRAM** — completing the sweep:
 TurboLoader now beats **DALI** on-the-fly and **FFCV** on pre-processed data (both fits-in-VRAM
