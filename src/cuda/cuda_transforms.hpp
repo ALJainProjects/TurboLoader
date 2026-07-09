@@ -2,11 +2,11 @@
 // compiled with nvcc). Mirrors src/metal/metal_transforms.hpp so the two backends are
 // drop-in interchangeable behind the loader.
 //
-// !!! UNVALIDATED !!!  These kernels are a faithful port of the bit-exact, validated Metal
-// kernels (same half-pixel bilinear + normalize math), but there is no NVIDIA GPU on the
-// dev/CI machines, so this code has NOT been compiled or run. Build only with
-// TURBOLOADER_ENABLE_CUDA=1 + nvcc on a real CUDA box; expect to debug. See
-// docs/GPU_ACCELERATION.md.
+// VALIDATED on real hardware: compiled and run on two Jetson AGX Orins (CUDA 11.4,
+// aarch64) and an RTX 3090 (CUDA 13.3, x86_64). cuda_resize_normalize matches the numpy
+// bilinear reference to 3.2e-05 (same half-pixel bilinear + normalize math as the
+// bit-exact Metal kernels it ports). Build with TURBOLOADER_ENABLE_CUDA=1 + nvcc; see
+// docs/GPU_ACCELERATION.md and experiments/cuda/RESULTS.md.
 #pragma once
 
 #include <cstdint>

@@ -187,7 +187,7 @@ See [PyTorch Integration Guide](guides/pytorch-integration.md) for more examples
 
 - [Pipeline API](api/pipeline.md) - DataLoader and pipeline configuration
 - [Transforms API](api/transforms.md) - Complete transform reference
-- [Tensor Conversion](api/tensor-conversion.md) - PyTorch/TensorFlow integration
+- [Tensor Conversion](api/transforms.md#tensor-conversion) - PyTorch/TensorFlow integration
 
 ### Guides
 

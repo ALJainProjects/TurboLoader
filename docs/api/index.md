@@ -6,7 +6,7 @@ Complete API documentation for TurboLoader v2.31.0.
 
 - [Pipeline API](pipeline.md) - DataLoader and configuration
 - [Transforms API](transforms.md) - All transforms
-- [Tensor Conversion](tensor-conversion.md) - PyTorch/TensorFlow integration
+- [Tensor Conversion](transforms.md#tensor-conversion) - PyTorch/TensorFlow integration
 
 ## Module Overview
 
@@ -322,7 +322,7 @@ output = pipeline.apply(image)
 
 ### Tensor Conversion
 
-- [ToTensor](tensor-conversion.md#totensor) - Convert to tensor format
+- [ToTensor](transforms.md#tensor-conversion) - Convert to tensor format
 
 ## See Also
 

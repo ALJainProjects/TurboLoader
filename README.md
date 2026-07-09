@@ -48,7 +48,7 @@ pip install -e .
 
 - **Python:** 3.10 or higher
 - **Compiler:** C++20 capable (GCC 10+, Clang 12+, MSVC 19.29+)
-- **OS:** macOS, Linux, Windows
+- **OS:** Linux (x86_64/aarch64 wheels), macOS (arm64 wheel). Windows: not officially supported yet — use WSL2
 
 #### Optional Dependencies
 

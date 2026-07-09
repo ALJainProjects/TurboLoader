@@ -1,10 +1,11 @@
 // CUDA implementation of the GPU transform path. Compiled with nvcc only when
 // TURBOLOADER_ENABLE_CUDA=1 (see setup.py / docs/GPU_ACCELERATION.md).
 //
-// !!! UNVALIDATED !!!  This is a faithful, line-for-line port of the bit-exact, validated
-// Metal kernels in src/metal/metal_transforms.mm — the SAME half-pixel bilinear + normalize
-// math. But it has NOT been compiled or run: there is no NVIDIA GPU on the dev/CI machines.
-// It is committed so it's ready to build, test, and debug the moment a CUDA box is online.
+// VALIDATED on real hardware (two Jetson AGX Orins + an RTX 3090): a line-for-line port
+// of the bit-exact Metal kernels; cuda_resize_normalize matches the numpy reference to
+// 3.2e-05. The nvImageCodec pipeline here beats DALI on-the-fly on a 3090 — see
+// experiments/cuda/RESULTS.md for benchmarks and correctness proofs.
+
 #include "cuda_transforms.hpp"
 
 #include <cuda_runtime.h>
