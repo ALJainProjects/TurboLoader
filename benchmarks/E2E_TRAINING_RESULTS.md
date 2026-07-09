@@ -25,3 +25,18 @@ GPU-bound training and is applied identically to both sides.
 **Found during this benchmark (honesty log):** a `.DS_Store` stray in the dataset dir
 shifted ImageFolder-style class indices to 1..10 → CUDA device assert; the harness now
 filters non-directories and asserts 10 classes.
+
+## GPU-resident variant (CudaResidentLoader, build-from-source CUDA path)
+
+Same ResNet-18/Imagenette fine-tune fed from GPU-resident uint8
+(`examples/finetune_resnet_residentloader.py`, normalize-only pipeline — no random crop,
+so a lighter recipe than the augmented runs above):
+
+| Input pipeline | median epoch | notes |
+|---|---:|---|
+| **CudaResidentLoader** (zero H2D/epoch) | **3.42 s** | + 9.4 s one-time decode+upload (727 MB) |
+| TurboLoader CPU pipeline (augmented) | 4.37 s | |
+| PyTorch DataLoader (augmented) | 5.11 s | |
+
+Loss 1.72 → 0.77 over 5 epochs (real training). The loader contributes ~zero per-epoch
+overhead; the one-time upload amortizes vs PyTorch in ~11 epochs.
