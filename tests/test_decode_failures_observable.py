@@ -5,6 +5,11 @@ Bug (<= 2.31.0): DirectBatchCore::process_one caught every decode failure with
 channel mismatch) trained the model on an all-black image with zero indication anywhere.
 Now: a per-loader counter, a rate-limited stderr warning, ``decode_failures`` in every
 batch's metadata, and a one-time Python RuntimeWarning.
+
+Scope note (verified on real data): this counts HARD failures — files libjpeg cannot parse
+at all. A truncated JPEG whose header survives decodes "successfully" with libjpeg padding
+the missing scanlines (its "Premature end of JPEG file" is a warning, not an error) and is
+NOT counted — the same tolerant behavior as PIL/DALI/tf.
 """
 
 import tarfile
