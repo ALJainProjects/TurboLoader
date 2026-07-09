@@ -75,3 +75,19 @@ def test_prefetch_shuffled_epochs_still_seeded(tar24):
     loader.set_epoch(5)
     o2 = [i for _x, m in loader for i in m["indices"]]
     assert o1 == o2, "prefetch must not break seeded shuffle reproducibility"
+
+
+def test_two_prefetching_loaders_concurrently(tar24):
+    """Regression: two loaders' producer threads fill batches CONCURRENTLY — the global
+    C++ thread pool's dispatch state is shared, and unserialized concurrent parallel_for
+    calls corrupted it (observed as a hard deadlock in the suite). Interleave two
+    prefetching loaders and require both to finish."""
+    a = iter(_loader(tar24, 4))
+    b = iter(_loader(tar24, 4))
+    na = nb = 0
+    for _ in range(3):
+        xa, _ma = next(a)
+        xb, _mb = next(b)
+        na += np.asarray(xa).shape[0]
+        nb += np.asarray(xb).shape[0]
+    assert na == nb == 24

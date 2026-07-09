@@ -56,6 +56,12 @@ public:
             for (size_t i = 0; i < n; ++i) body(i);
             return;
         }
+        // One dispatch at a time: body_/cursor_/remaining_/generation_ are shared, so two
+        // concurrent callers corrupt the dispatch state (observed as a deadlock when two
+        // loaders' prefetch producers fill batches simultaneously). Serializing here keeps
+        // every caller correct; the second caller simply waits its turn. Uncontended cost
+        // is a single cheap mutex acquire.
+        std::lock_guard<std::mutex> dispatch_lock(dispatch_mu_);
         {
             std::unique_lock<std::mutex> lk(mu_);
             body_ = &body;
@@ -107,6 +113,7 @@ private:
     }
 
     std::vector<std::thread> threads_;
+    std::mutex dispatch_mu_;  // serializes whole parallel_for dispatches (single-caller pool)
     std::mutex mu_;
     std::condition_variable cv_;
     bool stop_ = false;
