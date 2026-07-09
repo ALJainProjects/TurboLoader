@@ -504,24 +504,71 @@ try:
                 return
             # On-the-fly streaming path.
             self._core.begin_epoch(self._epoch)
+            prefetch = max(0, int(self._prefetch or 0))
+            if prefetch:
+                # Decode-ahead: a producer thread fills up to `prefetch_batches` batches
+                # while the consumer trains on the current one. next_batch() releases the
+                # GIL for the whole C++ fill, so the producer runs genuinely in parallel —
+                # without this, decode time adds 100% on top of the training step (the
+                # loader sits idle during the step, the trainer waits during decode).
+                # Each next_batch() returns a freshly allocated array, so queued batches
+                # never alias. Mirrors the _serve_cache producer (clean shutdown even if
+                # the consumer abandons the generator mid-epoch).
+                import queue as _queue
+                import threading as _threading
+
+                q = _queue.Queue(maxsize=prefetch)
+                stop = _threading.Event()
+
+                def _producer():
+                    try:
+                        while not stop.is_set():
+                            r = self._core.next_batch()
+                            if r is None:
+                                break
+                            q.put(r)
+                    finally:
+                        q.put(None)
+
+                th = _threading.Thread(target=_producer, daemon=True)
+                th.start()
+                try:
+                    while True:
+                        r = q.get()
+                        if r is None:
+                            break
+                        self._maybe_warn_decode_failures(r[1])
+                        yield r
+                finally:
+                    stop.set()
+                    while True:  # drain so a blocked q.put() wakes and the thread exits
+                        try:
+                            q.get_nowait()
+                        except _queue.Empty:
+                            break
+                    th.join(timeout=2.0)
+                return
             while True:
                 r = self._core.next_batch()
                 if r is None:
                     break
-                # Corrupt samples are served zero-filled (a run shouldn't die on one bad
-                # file), but silently-black training images are poison — surface it once.
-                if not self._warned_decode_failures and r[1].get("decode_failures", 0):
-                    import warnings
-
-                    warnings.warn(
-                        "turboloader: %d sample(s) failed to decode and were served as "
-                        "zero-filled images (see stderr for details; "
-                        "loader.decode_failures tracks the count)" % r[1]["decode_failures"],
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-                    self._warned_decode_failures = True
+                self._maybe_warn_decode_failures(r[1])
                 yield r
+
+        def _maybe_warn_decode_failures(self, meta):
+            # Corrupt samples are served zero-filled (a run shouldn't die on one bad
+            # file), but silently-black training images are poison — surface it once.
+            if not self._warned_decode_failures and meta.get("decode_failures", 0):
+                import warnings
+
+                warnings.warn(
+                    "turboloader: %d sample(s) failed to decode and were served as "
+                    "zero-filled images (see stderr for details; "
+                    "loader.decode_failures tracks the count)" % meta["decode_failures"],
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._warned_decode_failures = True
 
         @property
         def decode_failures(self):
