@@ -32,9 +32,7 @@ import numpy as np
 
 def build_labeled_tar(imagenette_dir, tar_path, labels_path):
     train_dir = os.path.join(imagenette_dir, "train")
-    classes = sorted(
-        d for d in os.listdir(train_dir) if os.path.isdir(os.path.join(train_dir, d))
-    )
+    classes = sorted(d for d in os.listdir(train_dir) if os.path.isdir(os.path.join(train_dir, d)))
     assert len(classes) == 10, f"expected 10 Imagenette classes, got {len(classes)}: {classes}"
     cls_to_idx = {c: i for i, c in enumerate(classes)}
     paths, labels = [], []
@@ -161,6 +159,10 @@ def main():
     import torch
 
     assert torch.cuda.is_available(), "end-to-end benchmark needs CUDA"
+    # GPU training needs no torch CPU intraop pool; letting it spin on all cores fights the
+    # input pipeline's decode threads (measured: +40% epoch time for EITHER loader when the
+    # CPU is oversubscribed). Applied identically to both pipelines.
+    torch.set_num_threads(1)
     device = "cuda"
     tar_path = os.path.join(args.imagenette_dir, "imagenette_e2e.tar")
     labels_path = os.path.join(args.imagenette_dir, "imagenette_e2e_labels.npy")
@@ -179,9 +181,12 @@ def main():
         args.imagenette_dir, args.epochs, args.batch_size, args.workers, args.size, device
     )
     med = lambda v: sorted(v)[len(v) // 2]
+    # epoch 0 is warmup (cudnn autotune, page cache, worker spawn) — excluded from stats.
+    s_tl, s_pt = t_tl[1:] or t_tl, t_pt[1:] or t_pt
     print(
-        f"\nmedian epoch: turboloader {med(t_tl):.2f}s | pytorch {med(t_pt):.2f}s | "
-        f"speedup {med(t_pt) / med(t_tl):.2f}x"
+        f"\nmedian steady-state epoch (excl. warmup): "
+        f"turboloader {med(s_tl):.2f}s | pytorch {med(s_pt):.2f}s | "
+        f"speedup {med(s_pt) / med(s_tl):.2f}x"
     )
 
 
