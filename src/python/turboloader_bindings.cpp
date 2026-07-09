@@ -934,7 +934,38 @@ PYBIND11_MODULE(_turboloader, m) {
             meta["batch_size"] = bs;
             meta["decode_failures"] = self.decode_failures();
             return py::make_tuple(std::move(arr), meta);
-        });
+        })
+        .def("next_batch_into", [](DirectBatchCore& self,
+                                   py::array_t<float, py::array::c_style> buffer) -> py::object {
+            // Recycled-buffer variant: fill a CALLER-provided C-contiguous float32 buffer
+            // (layout matches the loader's chw flag) instead of allocating ~20-40 MB per
+            // batch under the GIL. With a torch pinned-memory buffer this also makes
+            // .to(device, non_blocking=True) a genuinely async H2D copy.
+            std::vector<size_t> idxs;
+            size_t bs = self.acquire_batch(idxs);
+            if (bs == 0) return py::none();
+            const size_t need =
+                bs * static_cast<size_t>(3) * self.target_h() * self.target_w();
+            auto buf = buffer.request();
+            if (static_cast<size_t>(buf.size) < need)
+                throw std::runtime_error("next_batch_into: buffer too small for batch");
+            float* dst = static_cast<float*>(buf.ptr);
+            {
+                py::gil_scoped_release rel;
+                self.fill_batch(idxs, dst);
+            }
+            py::list indices;
+            for (auto id : idxs) indices.append(static_cast<size_t>(id));
+            py::dict meta;
+            meta["indices"] = indices;
+            meta["batch_size"] = bs;
+            meta["decode_failures"] = self.decode_failures();
+            return meta;
+        }, py::arg("buffer"),
+           "Fill a caller-provided C-contiguous float32 buffer with the next batch "
+           "(GIL released for the whole decode+fill). Returns the metadata dict, or None "
+           "at epoch end; meta['batch_size'] is the number of samples written. The buffer "
+           "layout matches the loader's chw setting.");
 
     // DataLoader class (PyTorch-compatible)
     py::class_<DataLoader>(m, "DataLoader")

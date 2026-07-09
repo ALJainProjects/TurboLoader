@@ -397,11 +397,13 @@ try:
             std=None,
             drop_last=False,
             antialias=False,
+            pin_memory=False,
         ):
             from _turboloader import DirectBatchLoader as _DirectBatchLoader
 
             h, w = (image_size, image_size) if isinstance(image_size, int) else image_size
             self._chw = output_format in ("pytorch", "numpy_chw")
+            self._th, self._tw = h, w
             m, s = _normalize_params(transform, mean, std)
             self._core = _DirectBatchLoader(
                 data_path,
@@ -431,6 +433,7 @@ try:
             self._cache_X = None
             self._cache_indices = None
             self._cache_populated = False
+            self._pin_memory = bool(pin_memory)
             self._warned_decode_failures = False
             self._it = None
             if cache_decoded and distributed and world_size > 1:
@@ -505,6 +508,9 @@ try:
             # On-the-fly streaming path.
             self._core.begin_epoch(self._epoch)
             prefetch = max(0, int(self._prefetch or 0))
+            if self._pin_memory:
+                yield from self._iter_pinned_ring(prefetch)
+                return
             if prefetch:
                 # Decode-ahead: a producer thread fills up to `prefetch_batches` batches
                 # while the consumer trains on the current one. next_batch() releases the
@@ -554,6 +560,85 @@ try:
                     break
                 self._maybe_warn_decode_failures(r[1])
                 yield r
+
+        def _iter_pinned_ring(self, prefetch):
+            """pin_memory=True streaming: fill a ring of RECYCLED torch buffers via
+            next_batch_into (zero per-batch allocation; GIL released for the whole
+            decode+fill) and yield torch tensors. Buffers are pinned when the torch build
+            supports it, so ``.to(device, non_blocking=True)`` is a genuinely async H2D
+            copy — with pageable numpy memory it silently degrades to a blocking copy.
+
+            CONTRACT: a yielded tensor's memory is reused after ``ring - 1`` further
+            batches (ring = prefetch + 2, min 3). Consume it (``.to(device)`` / ``.copy_``)
+            before then — the same lifetime rule as DALI pipeline outputs.
+            """
+            import torch
+
+            H, W = self._th, self._tw
+            chw = self._chw
+            bs = self._batch_size
+            shape = (bs, 3, H, W) if chw else (bs, H, W, 3)
+            ring = max(3, int(prefetch) + 2)
+            bufs = []
+            for _ in range(ring):
+                t_ = torch.empty(shape, dtype=torch.float32)
+                try:
+                    t_ = t_.pin_memory()
+                except RuntimeError:
+                    pass  # no CUDA/accelerator in this torch build: recycled-only ring
+                bufs.append(t_)
+            views = [np.asarray(b) for b in bufs]  # shared memory, zero-copy
+
+            def _fill(k):
+                meta = self._core.next_batch_into(views[k % ring])
+                if meta is None:
+                    return None
+                self._maybe_warn_decode_failures(meta)
+                return bufs[k % ring][: meta["batch_size"]], meta
+
+            if prefetch:
+                import queue as _queue
+                import threading as _threading
+
+                q = _queue.Queue(maxsize=prefetch)  # < ring-1: consumer batch never clobbered
+                stop = _threading.Event()
+
+                def _producer():
+                    try:
+                        k = 0
+                        while not stop.is_set():
+                            r = _fill(k)
+                            if r is None:
+                                break
+                            q.put(r)
+                            k += 1
+                    finally:
+                        q.put(None)
+
+                th = _threading.Thread(target=_producer, daemon=True)
+                th.start()
+                try:
+                    while True:
+                        r = q.get()
+                        if r is None:
+                            break
+                        yield r
+                finally:
+                    stop.set()
+                    while True:
+                        try:
+                            q.get_nowait()
+                        except _queue.Empty:
+                            break
+                    th.join(timeout=2.0)
+                return
+            k = 0
+            while True:
+                r = _fill(k)
+                if r is None:
+                    break
+                yield r
+                k += 1
 
         def _maybe_warn_decode_failures(self, meta):
             # Corrupt samples are served zero-filled (a run shouldn't die on one bad
@@ -662,6 +747,7 @@ try:
             prefetch_batches=4,
             cache_decoded=False,
             antialias=False,
+            pin_memory=False,
         ):
             self._transform = transform
             self._output_format = output_format
@@ -768,6 +854,7 @@ try:
                         prefetch_batches,
                         drop_last=drop_last,
                         antialias=antialias,
+                        pin_memory=pin_memory,
                     )
                     self._loader = None
                 else:
