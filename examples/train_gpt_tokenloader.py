@@ -7,7 +7,11 @@ and trains a 4-layer GPT for a few hundred steps — comparing the input pipelin
   2. ``turboloader.TokenDataLoader`` (same (x, y) next-token batches)
 
 Both feed the identical model/step; loss decreasing proves the data is real and correctly
-aligned (x shifted by one = y). Usage:  python examples/train_gpt_tokenloader.py
+aligned (x shifted by one = y). Honest note: with a model this small (4x128) both pipelines
+are within ~10% in the full training loop on a 3090 — TokenDataLoader's loader-only
+advantage (see benchmarks) matters when the input path, not the model, is the bottleneck
+(bigger batches/seq, CPU-bound steps, or dataloading-heavy eval sweeps).
+Usage:  python examples/train_gpt_tokenloader.py
 """
 
 import os

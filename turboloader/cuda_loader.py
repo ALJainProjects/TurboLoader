@@ -389,10 +389,12 @@ class CudaResidentLoader:
         num_workers=8,
         shuffle=False,
         seed=42,
+        return_indices=False,
     ):
         import turboloader as t
         import torch
 
+        self.return_indices = bool(return_indices)
         if not getattr(t, "cuda_available", lambda: False)() or not hasattr(
             t, "cuda_normalize_resident"
         ):
@@ -461,7 +463,15 @@ class CudaResidentLoader:
                 ptr = t.cuda_normalize_resident(
                     base + b * stride, n, H, W, mean=self.mean, std=self.std
                 )
-            yield _CudaArray(ptr, (n, 3, H, W))
+            batch = _CudaArray(ptr, (n, 3, H, W))
+            if self.return_indices:
+                # Sample indices (into the ctor `paths` order) for this batch — align labels
+                # in a real training loop: yb = labels[idx]. GPU int64 tensor under shuffle,
+                # numpy arange otherwise.
+                idx = perm[b : b + n] if perm is not None else np.arange(b, b + n)
+                yield batch, idx
+            else:
+                yield batch
 
 
 class CudaStreamLoader:
