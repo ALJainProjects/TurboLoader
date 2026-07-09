@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <numeric>
@@ -57,6 +58,11 @@ public:
     }
 
     // Number of samples actually yielded per epoch (honors drop_last).
+    // Samples that failed to decode and were served as zero-filled images. Silent black
+    // images poison training invisibly, so failures are counted, warned to stderr (first
+    // few), and surfaced to Python in every batch's metadata.
+    size_t decode_failures() const { return decode_failures_.load(std::memory_order_relaxed); }
+
     size_t num_samples() const {
         size_t n = order_.size();
         if (drop_last_) return (n / batch_size_) * batch_size_;
@@ -134,11 +140,13 @@ private:
             turboloader::span<const uint8_t> jpeg = reader_->get_sample(idx);  // const, thread-safe
             decoder.decode_scaled(jpeg, decoded, W, H, aw, ah, ch);
         } catch (...) {
+            record_decode_failure(idx, "decode failed (corrupt or unsupported file)");
             std::memset(out, 0, num_pixels * C * sizeof(float));
             return;
         }
         if (ch != C) {
             // Unexpected channel count (e.g. CMYK/gray) — zero-fill rather than corrupt.
+            record_decode_failure(idx, "unexpected channel count (e.g. CMYK/grayscale)");
             std::memset(out, 0, num_pixels * C * sizeof(float));
             return;
         }
@@ -194,6 +202,17 @@ private:
     bool antialias_;
     int epoch_;
     std::vector<size_t> order_;
+    void record_decode_failure(size_t idx, const char* why) {
+        size_t n = decode_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 5) {  // rate-limit: warn for the first few, count the rest
+            std::fprintf(stderr,
+                         "[turboloader] WARNING: sample %zu %s; serving a zero-filled image. "
+                         "(failure %zu%s)\n",
+                         idx, why, n, n == 5 ? "; further warnings suppressed" : "");
+        }
+    }
+
+    std::atomic<size_t> decode_failures_{0};
     std::atomic<size_t> cursor_;
 };
 

@@ -908,6 +908,9 @@ PYBIND11_MODULE(_turboloader, m) {
              py::arg("world_size") = 1, py::arg("drop_last") = false,
              py::arg("antialias") = false)
         .def("num_samples", &DirectBatchCore::num_samples)
+        .def("decode_failures", &DirectBatchCore::decode_failures,
+             "Cumulative count of samples that failed to decode and were served as "
+             "zero-filled images (also included in every batch's metadata).")
         .def("begin_epoch", &DirectBatchCore::begin_epoch, py::arg("epoch") = 0)
         .def("next_batch", [](DirectBatchCore& self) -> py::object {
             std::vector<size_t> idxs;
@@ -929,6 +932,7 @@ PYBIND11_MODULE(_turboloader, m) {
             py::dict meta;
             meta["indices"] = indices;
             meta["batch_size"] = bs;
+            meta["decode_failures"] = self.decode_failures();
             return py::make_tuple(std::move(arr), meta);
         });
 

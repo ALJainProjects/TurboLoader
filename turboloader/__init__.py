@@ -431,6 +431,7 @@ try:
             self._cache_X = None
             self._cache_indices = None
             self._cache_populated = False
+            self._warned_decode_failures = False
             self._it = None
             if cache_decoded and distributed and world_size > 1:
                 import warnings
@@ -507,7 +508,28 @@ try:
                 r = self._core.next_batch()
                 if r is None:
                     break
+                # Corrupt samples are served zero-filled (a run shouldn't die on one bad
+                # file), but silently-black training images are poison — surface it once.
+                if not self._warned_decode_failures and r[1].get("decode_failures", 0):
+                    import warnings
+
+                    warnings.warn(
+                        "turboloader: %d sample(s) failed to decode and were served as "
+                        "zero-filled images (see stderr for details; "
+                        "loader.decode_failures tracks the count)" % r[1]["decode_failures"],
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    self._warned_decode_failures = True
                 yield r
+
+        @property
+        def decode_failures(self):
+            """Cumulative count of samples that failed to decode (served zero-filled)."""
+            try:
+                return int(self._core.decode_failures())
+            except AttributeError:
+                return 0
 
         def clear_cache(self):
             self._cache_X = self._cache_indices = None
