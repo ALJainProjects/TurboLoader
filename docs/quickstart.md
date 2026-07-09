@@ -20,7 +20,7 @@ Verify installation:
 
 ```python
 import turboloader
-print(turboloader.__version__)  # Should print "2.31.0" or later
+print(turboloader.__version__)  # Should print "2.33.0" or later
 ```
 
 ---
@@ -311,6 +311,32 @@ TurboLoader provides 19 SIMD-accelerated transforms:
 See [Transforms API](api/transforms.md) for complete documentation.
 
 ---
+
+## Training-loop features (v2.33.0)
+
+```python
+loader = turboloader.DataLoader(
+    "train.tar", batch_size=128, output_format="pytorch", image_size=160,
+    transform=turboloader.ImageNetNormalize(),
+    shuffle=True, seed=0,
+    train_aug=True,        # fused RandomResizedCrop + horizontal flip in the C++ pass
+    pin_memory=True,       # recycled pinned torch buffers -> async .to(device, non_blocking=True)
+    prefetch_batches=4,    # decode-ahead: the loader works while your GPU trains
+)
+
+for epoch in range(epochs):
+    loader.set_epoch(epoch)           # reproducible, different shuffle+crops per epoch
+    for x, meta in loader:            # x: torch.FloatTensor (N, 3, H, W)
+        x = x.to("cuda", non_blocking=True)
+        train_step(x)
+
+# exact mid-epoch checkpoint/resume (decode-free skip):
+sd = loader.state_dict()              # {'epoch': e, 'batches_served': k}
+loader.load_state_dict(sd)            # a fresh loader continues byte-exactly
+```
+
+Measured end-to-end (real ResNet-18 on Imagenette, RTX 3090): **1.17x faster than the
+PyTorch DataLoader recipe** — see `benchmarks/E2E_TRAINING_RESULTS.md`.
 
 ## Performance Tips
 

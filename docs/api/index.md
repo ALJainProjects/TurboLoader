@@ -1,6 +1,6 @@
 # API Reference
 
-Complete API documentation for TurboLoader v2.31.0.
+Complete API documentation for TurboLoader v2.33.0.
 
 ## Quick Links
 
@@ -41,12 +41,12 @@ turboloader.AutoAugmentPolicy  # IMAGENET, CIFAR10, SVHN
 Get TurboLoader version string.
 
 **Returns:**
-- `str`: Version string (e.g., "2.31.0")
+- `str`: Version string (e.g., "2.33.0")
 
 **Example:**
 ```python
 import turboloader
-print(turboloader.__version__)  # "2.31.0"
+print(turboloader.__version__)  # "2.33.0"
 ```
 
 The version is single-sourced from package metadata via `setuptools_scm` (derived from the git tag), so `version()`, `__version__`, and `features()['version']` never drift.

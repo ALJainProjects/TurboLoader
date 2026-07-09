@@ -1,6 +1,6 @@
 # Benchmark Overview
 
-Performance analysis of TurboLoader 2.31.0.
+Performance analysis of TurboLoader 2.33.0.
 
 ## Executive Summary
 
@@ -19,7 +19,7 @@ All image numbers use `output_format='pytorch'` (CHW), batch size 64, with a war
 epoch and the median of 3 timed epochs under real consumption that forces
 materialization of every batch.
 
-## Latest Results (2.31.0)
+## Latest Results (2.33.0)
 
 ### Image Throughput (Imagenette-160)
 

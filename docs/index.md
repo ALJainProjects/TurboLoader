@@ -236,7 +236,9 @@ See [Architecture Guide](architecture.md) for detailed design.
 
 ## Version History
 
-- **v2.31.0** (Current) - NVIDIA CUDA GPU loaders (build-from-source): `CudaImageLoader` (nvImageCodec) **beats DALI** on-the-fly; `CudaResidentLoader` **beats FFCV ~3.5×** (fits-in-VRAM); `CudaStreamLoader` **beats FFCV ~1.6×** (streaming > VRAM). See [GPU acceleration](GPU_ACCELERATION.md)
+- **v2.33.0** (Current) - Fused train pipeline (`train_aug=True`: RandomResizedCrop+flip in C++), exact mid-epoch resume (`state_dict()`), pinned recycled buffer ring (`pin_memory=True`), streaming decode-ahead (`prefetch_batches`); end-to-end training benchmark: 1.17x vs PyTorch DataLoader (ResNet-18/Imagenette)
+- **v2.32.0** - Correctness sprint: 6 audit bugs fixed (silent transform drop, ARM NEON overflow, set_epoch loss, silent black images, Metal JPEG crash, CUDA hygiene), each with fails-on-old-code regression tests
+- **v2.31.0** - NVIDIA CUDA GPU loaders (build-from-source): `CudaImageLoader` (nvImageCodec) **beats DALI** on-the-fly; `CudaResidentLoader` **beats FFCV ~3.5×** (fits-in-VRAM); `CudaStreamLoader` **beats FFCV ~1.6×** (streaming > VRAM). See [GPU acceleration](GPU_ACCELERATION.md)
 - **v2.28.0** - Apple Silicon GPU (Metal) transforms + hybrid GPU JPEG decode (`GpuImageLoader`)
 - **v2.26.2** - FFCV-style direct-batch loader, multi-modality (`TokenDataLoader`, `ArrayDataLoader`), decoded cache (`cache_decoded=True`), DDP-safe distributed sharding
 - **v2.7.0** - Decoded Tensor Caching (`cache_decoded=True`), FastDataLoader, MemoryEfficientDataLoader
@@ -271,7 +273,7 @@ If you use TurboLoader in your research:
   author = {Jain, Arnav},
   title = {TurboLoader: High-Performance ML Data Loading},
   year = {2025},
-  version = {2.31.0},
+  version = {2.33.0},
   url = {https://github.com/ALJainProjects/TurboLoader}
 }
 ```

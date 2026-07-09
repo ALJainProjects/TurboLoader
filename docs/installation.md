@@ -58,10 +58,10 @@ Install the latest stable release:
 pip install turboloader
 ```
 
-Install a specific version (latest published on PyPI is `2.31.0`):
+Install a specific version (latest published on PyPI is `2.33.0`):
 
 ```bash
-pip install turboloader==2.31.0
+pip install turboloader==2.33.0
 ```
 
 Upgrade to latest:

@@ -360,7 +360,7 @@ def main():
     print(f"Benchmark data saved to: {output_path}")
     print(f"{'=' * 80}")
     print(f"\nTo view the interactive dashboard:")
-    print(f"  1. Open benchmark_app.html in your browser")
+    print(f"  1. Open benchmarks/webapp/benchmark_app.html in your browser")
     print(f"  2. Click 'Load Sample Results' to see the data")
     print(f"\nGenerated data summary:")
     print(f"  - Frameworks tested: {len(data['frameworks'])}")
