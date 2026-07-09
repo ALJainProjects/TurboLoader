@@ -328,7 +328,8 @@ public:
               size_t distributed_start_idx = 0,
               size_t distributed_end_idx = 0,
               cache::TieredCache* cache = nullptr,
-              std::atomic<size_t>* samples_skipped = nullptr)
+              std::atomic<size_t>* samples_skipped = nullptr,
+              size_t initial_epoch = 0)
         : config_(config),
           worker_id_(worker_id),
           buffer_pool_(buffer_pool),
@@ -338,7 +339,8 @@ public:
           distributed_start_idx_(distributed_start_idx),
           distributed_end_idx_(distributed_end_idx),
           cache_(cache),
-          samples_skipped_(samples_skipped) {
+          samples_skipped_(samples_skipped),
+          epoch_(initial_epoch) {
 
         // Per-worker TAR reader.
         //
@@ -400,11 +402,13 @@ public:
     /**
      * @brief Set epoch for reproducible shuffling (NEW in v2.8.0)
      *
-     * Call this before each epoch to get reproducible shuffle order.
-     * Different epochs with the same seed will produce different orderings.
+     * Only affects the NEXT run() (the shuffle order is drawn once at thread start), so
+     * the pipeline passes the epoch into the constructor when it recreates workers on
+     * reset(). epoch_ is atomic because this setter may be called from the control thread
+     * while the worker thread reads it.
      */
     void set_epoch(size_t epoch) {
-        epoch_ = epoch;
+        epoch_.store(epoch, std::memory_order_relaxed);
     }
 
     void stop() {
@@ -443,7 +447,8 @@ private:
         if (config_.shuffle) {
             // Use worker_id + epoch for reproducible per-worker shuffling
             // Different workers get different shuffles, same epoch = same shuffle
-            std::mt19937 rng(config_.distributed_seed + worker_id_ * 1000 + epoch_);
+            std::mt19937 rng(config_.distributed_seed + worker_id_ * 1000 +
+                             epoch_.load(std::memory_order_relaxed));
             std::shuffle(indices.begin(), indices.end(), rng);
         }
 
@@ -594,7 +599,7 @@ private:
     std::atomic<size_t>* samples_skipped_ = nullptr;
 
     // Shuffle support (NEW in v2.8.0)
-    size_t epoch_ = 0;
+    std::atomic<size_t> epoch_{0};  // atomic: control thread may set while worker reads
 };
 
 /**
@@ -714,7 +719,9 @@ public:
                     config_, i, buffer_pool_.get(), remote_tar_data,
                     distributed_start_idx_, distributed_end_idx_,
                     tiered_cache_.get(),
-                    &samples_skipped_
+                    &samples_skipped_,
+                    current_epoch_  // reset() recreates workers: re-apply the epoch, or
+                                    // set_epoch() would be silently discarded every epoch
                 ));
                 tar_workers_.back()->start();
             }
