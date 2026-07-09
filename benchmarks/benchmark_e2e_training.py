@@ -31,7 +31,11 @@ import numpy as np
 
 
 def build_labeled_tar(imagenette_dir, tar_path, labels_path):
-    classes = sorted(os.listdir(os.path.join(imagenette_dir, "train")))
+    train_dir = os.path.join(imagenette_dir, "train")
+    classes = sorted(
+        d for d in os.listdir(train_dir) if os.path.isdir(os.path.join(train_dir, d))
+    )
+    assert len(classes) == 10, f"expected 10 Imagenette classes, got {len(classes)}: {classes}"
     cls_to_idx = {c: i for i, c in enumerate(classes)}
     paths, labels = [], []
     for c in classes:
