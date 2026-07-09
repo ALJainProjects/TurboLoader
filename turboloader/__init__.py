@@ -398,6 +398,8 @@ try:
             drop_last=False,
             antialias=False,
             pin_memory=False,
+            train_aug=False,
+            hflip_prob=0.5,
         ):
             from _turboloader import DirectBatchLoader as _DirectBatchLoader
 
@@ -421,6 +423,8 @@ try:
                 world_size=world_size,
                 drop_last=drop_last,
                 antialias=antialias,
+                train_aug=bool(train_aug),
+                hflip_prob=float(hflip_prob),
             )
             self._batch_size = batch_size
             self._shuffle = shuffle
@@ -748,6 +752,8 @@ try:
             cache_decoded=False,
             antialias=False,
             pin_memory=False,
+            train_aug=False,
+            hflip_prob=0.5,
         ):
             self._transform = transform
             self._output_format = output_format
@@ -835,6 +841,14 @@ try:
                 # whose fallback applies the full pipeline per image in Python (slower but
                 # correct).
                 fastpath_ok = _fastpath_analysis(transform)[0]
+                if train_aug and not fastpath_ok:
+                    raise ValueError(
+                        "train_aug=True does the RandomResizedCrop + flip inside the fused "
+                        "C++ pass; combine it only with Resize/Normalize transforms (got a "
+                        "pipeline the fused path cannot express)."
+                    )
+                if train_aug and is_remote:
+                    raise ValueError("train_aug=True requires a local archive (DirectBatch path).")
                 if not is_remote and fastpath_ok:
                     # Default fully-optimized path: FFCV-style single-pass parallel
                     # decode->batch (no worker queue / per-sample copies). Fastest for
@@ -855,6 +869,8 @@ try:
                         drop_last=drop_last,
                         antialias=antialias,
                         pin_memory=pin_memory,
+                        train_aug=train_aug,
+                        hflip_prob=hflip_prob,
                     )
                     self._loader = None
                 else:

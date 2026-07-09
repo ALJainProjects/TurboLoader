@@ -893,11 +893,11 @@ PYBIND11_MODULE(_turboloader, m) {
                          std::vector<float> mean, std::vector<float> std_vec,
                          bool shuffle, int seed, bool distributed,
                          int world_rank, int world_size, bool drop_last,
-                         bool antialias) {
+                         bool antialias, bool train_aug, float hflip_prob) {
                  return std::make_unique<DirectBatchCore>(
                      data_path, nullptr, batch_size, target_h, target_w, chw, normalize_01,
                      mean, std_vec, shuffle, seed, distributed, world_rank, world_size,
-                     drop_last, antialias);
+                     drop_last, antialias, train_aug, hflip_prob);
              }),
              py::arg("data_path"), py::arg("target_h"), py::arg("target_w"),
              py::arg("batch_size") = 32, py::arg("chw") = true,
@@ -906,7 +906,8 @@ PYBIND11_MODULE(_turboloader, m) {
              py::arg("shuffle") = false, py::arg("seed") = 42,
              py::arg("distributed") = false, py::arg("world_rank") = 0,
              py::arg("world_size") = 1, py::arg("drop_last") = false,
-             py::arg("antialias") = false)
+             py::arg("antialias") = false, py::arg("train_aug") = false,
+             py::arg("hflip_prob") = 0.5f)
         .def("num_samples", &DirectBatchCore::num_samples)
         .def("decode_failures", &DirectBatchCore::decode_failures,
              "Cumulative count of samples that failed to decode and were served as "
