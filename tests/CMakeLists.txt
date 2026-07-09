@@ -405,3 +405,8 @@ message(STATUS "Building Text Decoder tests (v2.23.0)")
 
 # Additional tests will be added as we implement more components
 # add_executable(test_core test_core.cpp)
+
+# NEON bounds regression (guard-byte check; ASan cannot see NEON ld3/st3 intrinsics)
+add_executable(test_neon_bounds test_neon_bounds.cpp)
+target_include_directories(test_neon_bounds PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME neon_bounds COMMAND test_neon_bounds)

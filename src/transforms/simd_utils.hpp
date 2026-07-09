@@ -995,8 +995,13 @@ inline void rgb_to_hsv_batch_neon(const uint8_t* rgb, float* h, float* s, float*
     size_t i = 0;
     // Process 4 pixels at a time
     for (; i + 4 <= num_pixels; i += 4) {
-        // Load 4 RGB pixels (12 bytes) - deinterleaved
-        uint8x8x3_t pixels = vld3_u8(rgb + i * 3);
+        // Load 4 RGB pixels (12 bytes) - deinterleaved. vld3_u8 ALWAYS reads 8 px (24 B)
+        // but this loop consumes only 4 px: reading straight from `rgb + i*3` overran the
+        // buffer by up to 12 B on the final iteration (heap overread). Stage through a
+        // padded temp and copy in only the 12 valid bytes.
+        uint8_t in_tmp[24] = {0};
+        std::memcpy(in_tmp, rgb + i * 3, 12);
+        uint8x8x3_t pixels = vld3_u8(in_tmp);
 
         // Extend to 16-bit then 32-bit and convert to float
         uint16x4_t r16 = vget_low_u16(vmovl_u8(pixels.val[0]));
@@ -1155,12 +1160,17 @@ inline void hsv_to_rgb_batch_neon(const float* h, const float* s, const float* v
         uint8x8_t g_u8 = vmovn_u16(vcombine_u16(g_u16, g_u16));
         uint8x8_t b_u8 = vmovn_u16(vcombine_u16(b_u16, b_u16));
 
-        // Store interleaved RGB
+        // Store interleaved RGB. vst3_u8 ALWAYS writes 8 px (24 B) but this loop produces
+        // only 4 px: storing straight to `rgb + i*3` was a HEAP OVERFLOW of up to 12 B on
+        // the final iteration (the upper 4 lanes are duplicates of the lower 4). Stage in a
+        // temp and copy out only the 12 valid bytes.
         uint8x8x3_t out;
         out.val[0] = r_u8;
         out.val[1] = g_u8;
         out.val[2] = b_u8;
-        vst3_u8(rgb + i * 3, out);
+        uint8_t out_tmp[24];
+        vst3_u8(out_tmp, out);
+        std::memcpy(rgb + i * 3, out_tmp, 12);
     }
 
     // Scalar tail
