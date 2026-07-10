@@ -47,6 +47,15 @@ def build_labeled_tar(imagenette_dir, tar_path, labels_path):
     return len(paths)
 
 
+def dev_sync(device):
+    import torch
+
+    if device == "cuda":
+        torch.cuda.synchronize()
+    elif device == "mps":
+        torch.mps.synchronize()
+
+
 def make_model_and_step(device, lr=0.05):
     import torch
     import torchvision
@@ -85,14 +94,14 @@ def bench_pytorch(imagenette_dir, epochs, batch_size, workers, size, device):
         batch_size=batch_size,
         shuffle=True,
         num_workers=workers,
-        pin_memory=True,
+        pin_memory=(device == "cuda"),
         persistent_workers=workers > 0,
         drop_last=True,
     )
     _model, step = make_model_and_step(device)
     times = []
     for ep in range(epochs):
-        torch.cuda.synchronize()
+        dev_sync(device)
         t0 = time.perf_counter()
         n, last = 0, 0.0
         for x, y in dl:
@@ -100,7 +109,7 @@ def bench_pytorch(imagenette_dir, epochs, batch_size, workers, size, device):
             y = y.to(device, non_blocking=True)
             last = step(x, y)
             n += x.shape[0]
-        torch.cuda.synchronize()
+        dev_sync(device)
         dt = time.perf_counter() - t0
         times.append(dt)
         print(f"  [pytorch] epoch {ep}: {dt:.2f}s  ({n / dt:.0f} img/s)  loss {last:.3f}")
@@ -130,7 +139,7 @@ def bench_turboloader(tar_path, labels_path, epochs, batch_size, size, device):
     times = []
     for ep in range(epochs):
         loader.set_epoch(ep)
-        torch.cuda.synchronize()
+        dev_sync(device)
         t0 = time.perf_counter()
         n, last = 0, 0.0
         for x, meta in loader:
@@ -140,7 +149,7 @@ def bench_turboloader(tar_path, labels_path, epochs, batch_size, size, device):
             yb = torch.from_numpy(labels[np.asarray(meta["indices"])]).to(device, non_blocking=True)
             last = step(xb, yb)
             n += xb.shape[0]
-        torch.cuda.synchronize()
+        dev_sync(device)
         dt = time.perf_counter() - t0
         times.append(dt)
         print(f"  [turboloader] epoch {ep}: {dt:.2f}s  ({n / dt:.0f} img/s)  loss {last:.3f}")
@@ -154,16 +163,28 @@ def main():
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--size", type=int, default=160)
+    ap.add_argument("--device", default="auto", choices=["auto", "cuda", "mps"])
+    ap.add_argument(
+        "--floor",
+        action="store_true",
+        help="also measure the pure-GPU floor (same steps, resident batch)",
+    )
     args = ap.parse_args()
 
     import torch
 
-    assert torch.cuda.is_available(), "end-to-end benchmark needs CUDA"
+    device = args.device
+    if device == "auto":
+        device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else ("mps" if torch.backends.mps.is_available() else None)
+        )
+    assert device in ("cuda", "mps"), "end-to-end benchmark needs CUDA or MPS"
     # GPU training needs no torch CPU intraop pool; letting it spin on all cores fights the
     # input pipeline's decode threads (measured: +40% epoch time for EITHER loader when the
     # CPU is oversubscribed). Applied identically to both pipelines.
     torch.set_num_threads(1)
-    device = "cuda"
     tar_path = os.path.join(args.imagenette_dir, "imagenette_e2e.tar")
     labels_path = os.path.join(args.imagenette_dir, "imagenette_e2e_labels.npy")
     if not (os.path.exists(tar_path) and os.path.exists(labels_path)):
@@ -174,6 +195,23 @@ def main():
         f"ResNet-18 / Imagenette-160 / bs={args.batch_size} / {args.epochs} epochs / "
         f"RandomResizedCrop({args.size}) + flip + normalize"
     )
+    if args.floor:
+        _m, step = make_model_and_step(device)
+        x = torch.randn(args.batch_size, 3, args.size, args.size, device=device)
+        y = torch.randint(0, 10, (args.batch_size,), device=device)
+        for _ in range(10):
+            step(x, y)
+        dev_sync(device)
+        n_steps = int(np.load(labels_path).shape[0]) // args.batch_size
+        t0 = time.perf_counter()
+        for _ in range(n_steps):
+            step(x, y)
+        dev_sync(device)
+        print(
+            f"pure-{device} floor ({n_steps} steps, resident batch): "
+            f"{time.perf_counter() - t0:.2f}s"
+        )
+
     print("== TurboLoader (train_aug + pin_memory + prefetch) ==")
     t_tl = bench_turboloader(tar_path, labels_path, args.epochs, args.batch_size, args.size, device)
     print("== PyTorch DataLoader (ImageFolder + PIL, workers=%d) ==" % args.workers)

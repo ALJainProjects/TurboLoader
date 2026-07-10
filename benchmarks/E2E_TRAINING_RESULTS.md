@@ -40,3 +40,21 @@ so a lighter recipe than the augmented runs above):
 
 Loss 1.72 → 0.77 over 5 epochs (real training). The loader contributes ~zero per-epoch
 overhead; the one-time upload amortizes vs PyTorch in ~11 epochs.
+
+## Apple Silicon (M4 Max, MPS) — the honest null result
+
+Same benchmark, `--device mps` (ResNet-18, bs=128, identical recipe, warmup excluded):
+
+| Input pipeline | median epoch |
+|---|---:|
+| pure-MPS floor (resident batch) | 7.61 s |
+| **TurboLoader** | **8.06 s** |
+| PyTorch DataLoader (8 spawn workers) | 8.08 s |
+
+**A tie (1.00x) — and that's the correct outcome.** The M4's MPS step is ~2x slower than a
+3090 (104 ms vs 52 ms), so the epoch needs only ~1,200 img/s of input; both loaders hide
+completely behind compute (each ~0.45 s above the floor). The loader can only buy back time
+the input pipeline is actually costing you. Differences that remain on macOS: cold start
+(TurboLoader first epoch 7.9 s vs PyTorch 14.9 s — no spawn-worker tax) and input-bound
+workloads (smaller models, eval sweeps, preprocessing), where the loader-throughput gap
+(~23.7x vs a PIL loop) is the operative number.
