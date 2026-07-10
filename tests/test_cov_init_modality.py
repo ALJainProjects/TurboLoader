@@ -67,8 +67,14 @@ def image_tar(tmp_path_factory):
 
 def test_dict_mode_routing_and_batch(image_tar):
     """Default output_format='dict' takes the slow per-sample C++ path: it wires
-    up ``_loader`` (not the fast ``_impl``) and yields a list of sample dicts."""
-    dl = tl.DataLoader(image_tar, batch_size=2, output_format="dict")
+    up ``_loader`` (not the fast ``_impl``) and yields a list of sample dicts.
+
+    num_workers=1: the queue pipeline does NOT guarantee cross-worker sample
+    order, so the index-0/filename assertions below are only deterministic with
+    a single worker — with the default 4, another worker's sample occasionally
+    lands first (reproduced in 3 iterations on a loaded 4-core box; flaked
+    ~1 in 70 full-suite runs)."""
+    dl = tl.DataLoader(image_tar, batch_size=2, output_format="dict", num_workers=1)
     try:
         assert dl._fast is False
         assert dl._impl is None
