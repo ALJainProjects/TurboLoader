@@ -34,11 +34,7 @@ def benchmark_dataloader(tar_path, batch_size, num_workers, num_epochs):
     total_time = 0
 
     for epoch in range(num_epochs):
-        loader = turboloader.DataLoader(
-            tar_path,
-            batch_size=batch_size,
-            num_workers=num_workers
-        )
+        loader = turboloader.DataLoader(tar_path, batch_size=batch_size, num_workers=num_workers)
 
         epoch_images = 0
         start = time.perf_counter()
@@ -50,7 +46,9 @@ def benchmark_dataloader(tar_path, batch_size, num_workers, num_epochs):
         total_time += elapsed
         total_images += epoch_images
 
-        print(f"  Epoch {epoch + 1}: {epoch_images:,} images in {elapsed:.2f}s = {epoch_images/elapsed:,.0f} img/s")
+        print(
+            f"  Epoch {epoch + 1}: {epoch_images:,} images in {elapsed:.2f}s = {epoch_images/elapsed:,.0f} img/s"
+        )
         gc.collect()
 
     return total_images, total_time
@@ -64,14 +62,10 @@ def benchmark_fastdataloader_numpy(tar_path, batch_size, num_workers, num_epochs
     total_time = 0
 
     for epoch in range(num_epochs):
-        kwargs = {
-            'batch_size': batch_size,
-            'num_workers': num_workers,
-            'output_format': 'numpy'
-        }
+        kwargs = {"batch_size": batch_size, "num_workers": num_workers, "output_format": "numpy"}
         if target_size:
-            kwargs['target_height'] = target_size[0]
-            kwargs['target_width'] = target_size[1]
+            kwargs["target_height"] = target_size[0]
+            kwargs["target_width"] = target_size[1]
 
         loader = turboloader.FastDataLoader(tar_path, **kwargs)
 
@@ -85,7 +79,9 @@ def benchmark_fastdataloader_numpy(tar_path, batch_size, num_workers, num_epochs
         total_time += elapsed
         total_images += epoch_images
 
-        print(f"  Epoch {epoch + 1}: {epoch_images:,} images in {elapsed:.2f}s = {epoch_images/elapsed:,.0f} img/s")
+        print(
+            f"  Epoch {epoch + 1}: {epoch_images:,} images in {elapsed:.2f}s = {epoch_images/elapsed:,.0f} img/s"
+        )
         gc.collect()
 
     return total_images, total_time
@@ -106,12 +102,12 @@ def benchmark_fastdataloader_torch(tar_path, batch_size, num_workers, num_epochs
 
     for epoch in range(num_epochs):
         kwargs = {
-            'batch_size': batch_size,
-            'num_workers': num_workers,
+            "batch_size": batch_size,
+            "num_workers": num_workers,
         }
         if target_size:
-            kwargs['target_height'] = target_size[0]
-            kwargs['target_width'] = target_size[1]
+            kwargs["target_height"] = target_size[0]
+            kwargs["target_width"] = target_size[1]
 
         loader = turboloader.FastDataLoader(tar_path, **kwargs)
 
@@ -127,7 +123,9 @@ def benchmark_fastdataloader_torch(tar_path, batch_size, num_workers, num_epochs
         total_time += elapsed
         total_images += epoch_images
 
-        print(f"  Epoch {epoch + 1}: {epoch_images:,} images in {elapsed:.2f}s = {epoch_images/elapsed:,.0f} img/s")
+        print(
+            f"  Epoch {epoch + 1}: {epoch_images:,} images in {elapsed:.2f}s = {epoch_images/elapsed:,.0f} img/s"
+        )
         gc.collect()
 
     return total_images, total_time
@@ -136,7 +134,7 @@ def benchmark_fastdataloader_torch(tar_path, batch_size, num_workers, num_epochs
 def benchmark_fastdataloader_tf(tar_path, batch_size, num_workers, num_epochs, target_size=None):
     """Benchmark FastDataLoader with direct TensorFlow tensor output."""
     try:
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+        os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
         import tensorflow as tf
     except ImportError:
         print("  [SKIPPED] TensorFlow not installed")
@@ -149,12 +147,12 @@ def benchmark_fastdataloader_tf(tar_path, batch_size, num_workers, num_epochs, t
 
     for epoch in range(num_epochs):
         kwargs = {
-            'batch_size': batch_size,
-            'num_workers': num_workers,
+            "batch_size": batch_size,
+            "num_workers": num_workers,
         }
         if target_size:
-            kwargs['target_height'] = target_size[0]
-            kwargs['target_width'] = target_size[1]
+            kwargs["target_height"] = target_size[0]
+            kwargs["target_width"] = target_size[1]
 
         loader = turboloader.FastDataLoader(tar_path, **kwargs)
 
@@ -170,23 +168,34 @@ def benchmark_fastdataloader_tf(tar_path, batch_size, num_workers, num_epochs, t
         total_time += elapsed
         total_images += epoch_images
 
-        print(f"  Epoch {epoch + 1}: {epoch_images:,} images in {elapsed:.2f}s = {epoch_images/elapsed:,.0f} img/s")
+        print(
+            f"  Epoch {epoch + 1}: {epoch_images:,} images in {elapsed:.2f}s = {epoch_images/elapsed:,.0f} img/s"
+        )
         gc.collect()
 
     return total_images, total_time
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Benchmark TurboLoader DataLoader vs FastDataLoader')
-    parser.add_argument('tar_file', help='Path to tar file containing images')
-    parser.add_argument('--batch-size', type=int, default=32, help='Batch size (default: 32)')
-    parser.add_argument('--workers', type=int, default=4, help='Number of workers (default: 4)')
-    parser.add_argument('--epochs', type=int, default=3, help='Number of epochs (default: 3)')
-    parser.add_argument('--target-size', type=int, nargs=2, metavar=('H', 'W'),
-                        help='Target size for resize (e.g., --target-size 224 224)')
-    parser.add_argument('--skip-original', action='store_true', help='Skip original DataLoader benchmark')
-    parser.add_argument('--skip-torch', action='store_true', help='Skip PyTorch tensor benchmark')
-    parser.add_argument('--skip-tf', action='store_true', help='Skip TensorFlow tensor benchmark')
+    parser = argparse.ArgumentParser(
+        description="Benchmark TurboLoader DataLoader vs FastDataLoader"
+    )
+    parser.add_argument("tar_file", help="Path to tar file containing images")
+    parser.add_argument("--batch-size", type=int, default=32, help="Batch size (default: 32)")
+    parser.add_argument("--workers", type=int, default=4, help="Number of workers (default: 4)")
+    parser.add_argument("--epochs", type=int, default=3, help="Number of epochs (default: 3)")
+    parser.add_argument(
+        "--target-size",
+        type=int,
+        nargs=2,
+        metavar=("H", "W"),
+        help="Target size for resize (e.g., --target-size 224 224)",
+    )
+    parser.add_argument(
+        "--skip-original", action="store_true", help="Skip original DataLoader benchmark"
+    )
+    parser.add_argument("--skip-torch", action="store_true", help="Skip PyTorch tensor benchmark")
+    parser.add_argument("--skip-tf", action="store_true", help="Skip TensorFlow tensor benchmark")
 
     args = parser.parse_args()
 
@@ -217,7 +226,7 @@ def main():
             args.tar_file, args.batch_size, args.workers, args.epochs
         )
         if elapsed > 0:
-            results['DataLoader'] = images / elapsed
+            results["DataLoader"] = images / elapsed
             print(f"  TOTAL: {images:,} images in {elapsed:.2f}s = {images/elapsed:,.0f} img/s")
 
     # 2. FastDataLoader with numpy
@@ -227,7 +236,7 @@ def main():
         args.tar_file, args.batch_size, args.workers, args.epochs, target_size
     )
     if elapsed > 0:
-        results['FastDataLoader (numpy)'] = images / elapsed
+        results["FastDataLoader (numpy)"] = images / elapsed
         print(f"  TOTAL: {images:,} images in {elapsed:.2f}s = {images/elapsed:,.0f} img/s")
 
     # 3. FastDataLoader with PyTorch tensors
@@ -238,7 +247,7 @@ def main():
             args.tar_file, args.batch_size, args.workers, args.epochs, target_size
         )
         if elapsed > 0:
-            results['FastDataLoader (torch)'] = images / elapsed
+            results["FastDataLoader (torch)"] = images / elapsed
             print(f"  TOTAL: {images:,} images in {elapsed:.2f}s = {images/elapsed:,.0f} img/s")
 
     # 4. FastDataLoader with TensorFlow tensors
@@ -249,7 +258,7 @@ def main():
             args.tar_file, args.batch_size, args.workers, args.epochs, target_size
         )
         if elapsed > 0:
-            results['FastDataLoader (tf)'] = images / elapsed
+            results["FastDataLoader (tf)"] = images / elapsed
             print(f"  TOTAL: {images:,} images in {elapsed:.2f}s = {images/elapsed:,.0f} img/s")
 
     # Summary
@@ -259,7 +268,7 @@ def main():
     print(f"\n{'Configuration':<35} | {'Throughput':>15} | {'Speedup':>10}")
     print("-" * 65)
 
-    baseline = results.get('DataLoader', results.get('FastDataLoader (numpy)', 1))
+    baseline = results.get("DataLoader", results.get("FastDataLoader (numpy)", 1))
 
     for name, throughput in sorted(results.items(), key=lambda x: -x[1]):
         speedup = throughput / baseline if baseline > 0 else 0
@@ -267,10 +276,10 @@ def main():
 
     print("-" * 65)
 
-    if 'DataLoader' in results and 'FastDataLoader (numpy)' in results:
-        speedup = results['FastDataLoader (numpy)'] / results['DataLoader']
+    if "DataLoader" in results and "FastDataLoader (numpy)" in results:
+        speedup = results["FastDataLoader (numpy)"] / results["DataLoader"]
         print(f"\nFastDataLoader is {speedup:.2f}x faster than DataLoader")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
