@@ -314,6 +314,63 @@ try:
         _, m, s = _fastpath_analysis(transform, mean, std)
         return m, s
 
+    def _prefetched(fill, maxsize):
+        """Yield fill()'s results (None = exhausted) through a bounded background
+        producer thread.
+
+        Two invariants keep abandoned iteration leak-free (a consumer that breaks
+        out mid-epoch and drops the loader):
+        - ``fill`` must NOT capture the Python loader object. A live producer
+          thread's closure is a GC root; capturing the loader would keep the
+          generator (whose ``finally`` below is the only stop signal) permanently
+          uncollectable — leaking the thread, the TAR fd, and every queued batch.
+          Bind to the C++ core instead (observed: fd exhaustion after ~1k
+          abandoned loaders, then a fatal abort at teardown).
+        - Every ``put`` is stop-aware with a timeout, so the producer re-checks
+          the stop flag ~4x/s even when the queue is full and always exits
+          promptly once the consumer's ``finally`` runs.
+        """
+        import queue as _queue
+        import threading as _threading
+
+        q = _queue.Queue(maxsize=maxsize)
+        stop = _threading.Event()
+
+        def _put(item):
+            while not stop.is_set():
+                try:
+                    q.put(item, timeout=0.25)
+                    return True
+                except _queue.Full:
+                    continue
+            return False
+
+        def _producer():
+            try:
+                while not stop.is_set():
+                    r = fill()
+                    if r is None or not _put(r):
+                        break
+            finally:
+                _put(None)  # stop-aware: if the consumer already left, nobody needs it
+
+        th = _threading.Thread(target=_producer, daemon=True)
+        th.start()
+        try:
+            while True:
+                r = q.get()
+                if r is None:
+                    break
+                yield r
+        finally:
+            stop.set()
+            while True:  # wake a producer blocked in put()
+                try:
+                    q.get_nowait()
+                except _queue.Empty:
+                    break
+            th.join(timeout=2.0)
+
     def _serve_cache(
         cache_X,
         cache_indices,
@@ -334,9 +391,6 @@ try:
         """
         if cache_X is None:
             return
-        import queue as _queue
-        import threading as _threading
-
         n = cache_X.shape[0]
         order = np.random.default_rng(int(seed) + int(epoch)).permutation(n) if shuffle else None
         end = (n // batch_size) * batch_size if drop_last else n
@@ -352,34 +406,13 @@ try:
                 idx = cache_indices[sel]
             return images, {"indices": idx.tolist(), "batch_size": int(images.shape[0])}
 
-        q = _queue.Queue(maxsize=max(2, prefetch))
-        _END = object()
-        stop = _threading.Event()
+        it = iter(starts)
 
-        def producer():
-            for s in starts:
-                if stop.is_set():
-                    break
-                q.put(gather(s))
-            q.put(_END)
+        def _fill():
+            s = next(it, None)
+            return None if s is None else gather(s)
 
-        th = _threading.Thread(target=producer, daemon=True)
-        th.start()
-        try:
-            while True:
-                item = q.get()
-                if item is _END:
-                    break
-                yield item
-        finally:
-            # Unblock the producer if the consumer abandoned us mid-epoch.
-            stop.set()
-            try:
-                while True:
-                    q.get_nowait()
-            except _queue.Empty:
-                pass
-            th.join()
+        yield from _prefetched(_fill, max(2, prefetch))
 
     class _DirectFast:
         """FFCV/tf.data-style fast image loader: one parallel C++ pass per batch
@@ -544,42 +577,13 @@ try:
                 # without this, decode time adds 100% on top of the training step (the
                 # loader sits idle during the step, the trainer waits during decode).
                 # Each next_batch() returns a freshly allocated array, so queued batches
-                # never alias. Mirrors the _serve_cache producer (clean shutdown even if
-                # the consumer abandons the generator mid-epoch).
-                import queue as _queue
-                import threading as _threading
-
-                q = _queue.Queue(maxsize=prefetch)
-                stop = _threading.Event()
-
-                def _producer():
-                    try:
-                        while not stop.is_set():
-                            r = self._core.next_batch()
-                            if r is None:
-                                break
-                            q.put(r)
-                    finally:
-                        q.put(None)
-
-                th = _threading.Thread(target=_producer, daemon=True)
-                th.start()
-                try:
-                    while True:
-                        r = q.get()
-                        if r is None:
-                            break
-                        self._maybe_warn_decode_failures(r[1])
-                        self._served += 1
-                        yield r
-                finally:
-                    stop.set()
-                    while True:  # drain so a blocked q.put() wakes and the thread exits
-                        try:
-                            q.get_nowait()
-                        except _queue.Empty:
-                            break
-                    th.join(timeout=2.0)
+                # never alias. self._core.next_batch is bound to the C++ core, NOT to
+                # self — see _prefetched for why capturing self would leak the thread
+                # and TAR fd whenever iteration is abandoned mid-epoch.
+                for r in _prefetched(self._core.next_batch, prefetch):
+                    self._maybe_warn_decode_failures(r[1])
+                    self._served += 1
+                    yield r
                 return
             while True:
                 r = self._core.next_batch()
@@ -617,56 +621,29 @@ try:
                 bufs.append(t_)
             views = [np.asarray(b) for b in bufs]  # shared memory, zero-copy
 
-            def _fill(k):
-                meta = self._core.next_batch_into(views[k % ring])
+            core = self._core  # the producer must not capture self (see _prefetched)
+            kbox = [0]
+
+            def _fill():
+                k = kbox[0]
+                meta = core.next_batch_into(views[k % ring])
                 if meta is None:
                     return None
-                self._maybe_warn_decode_failures(meta)
+                kbox[0] = k + 1
                 return bufs[k % ring][: meta["batch_size"]], meta
 
             if prefetch:
-                import queue as _queue
-                import threading as _threading
-
-                q = _queue.Queue(maxsize=prefetch)  # < ring-1: consumer batch never clobbered
-                stop = _threading.Event()
-
-                def _producer():
-                    try:
-                        k = 0
-                        while not stop.is_set():
-                            r = _fill(k)
-                            if r is None:
-                                break
-                            q.put(r)
-                            k += 1
-                    finally:
-                        q.put(None)
-
-                th = _threading.Thread(target=_producer, daemon=True)
-                th.start()
-                try:
-                    while True:
-                        r = q.get()
-                        if r is None:
-                            break
-                        yield r
-                finally:
-                    stop.set()
-                    while True:
-                        try:
-                            q.get_nowait()
-                        except _queue.Empty:
-                            break
-                    th.join(timeout=2.0)
+                # queue maxsize = prefetch < ring-1: the consumer's batch is never clobbered
+                for r in _prefetched(_fill, prefetch):
+                    self._maybe_warn_decode_failures(r[1])
+                    yield r
                 return
-            k = 0
             while True:
-                r = _fill(k)
+                r = _fill()
                 if r is None:
                     break
+                self._maybe_warn_decode_failures(r[1])
                 yield r
-                k += 1
 
         def state_dict(self):
             """Mid-epoch checkpoint: batch order is deterministic given (seed, epoch,
@@ -680,6 +657,17 @@ try:
         def load_state_dict(self, sd):
             self._epoch = int(sd["epoch"])
             self._resume_batches = int(sd["batches_served"])
+
+        def close(self):
+            """Stop the in-flight prefetch iterator (if any) deterministically.
+
+            Abandoned iterators are also reclaimed by the GC (producer threads do
+            not root the loader), but close() releases the producer thread and lets
+            the TAR handle go immediately instead of at the next collection cycle.
+            Idempotent; the loader can be iterated again afterwards."""
+            it, self._it = self._it, None
+            if it is not None:
+                it.close()
 
         def _maybe_warn_decode_failures(self, meta):
             # Corrupt samples are served zero-filled (a run shouldn't die on one bad
@@ -987,6 +975,34 @@ try:
             if self._transform is not None:
                 batch = [self._apply_transform(s) for s in batch]
             return batch
+
+        def close(self):
+            """Release prefetch producer threads and let file handles go promptly.
+
+            Called automatically on garbage collection; call it explicitly (or use
+            the loader as a context manager) for deterministic cleanup when you stop
+            iterating mid-epoch — e.g. early stopping or a debugging session that
+            creates many loaders. Idempotent; the loader remains usable."""
+            # getattr defaults: close() must be safe on a partially-constructed
+            # loader (e.g. __init__ raised on a bad path) — __del__ still calls us.
+            self._delegate_it = None
+            for obj in (getattr(self, "_delegate", None), getattr(self, "_impl", None)):
+                fn = getattr(obj, "close", None)
+                if callable(fn):
+                    fn()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+            return False
+
+        def __del__(self):
+            try:
+                self.close()
+            except Exception:
+                pass  # never raise from a finalizer (interpreter may be tearing down)
 
         def __len__(self):
             if self._delegate is not None:
