@@ -1,18 +1,27 @@
 """Real benchmark feeding benchmark_app.html. Honest methodology:
 - real consumption (np.sum forces the batch to be materialized/read),
-- warmup epoch then best-of-N median over timed epochs,
-- same dataset (Imagenette-160, 9,469 real ImageNet JPEGs) for every framework.
-Outputs TurboLoader/benchmark_results.json.
+- warmup epoch then median over timed epochs,
+- same dataset (Imagenette-160, 9,469 real ImageNet JPEGs) for every framework,
+- frameworks that aren't installed are SKIPPED and omitted from the JSON
+  (the dashboard renders whatever is present — nothing is fabricated).
+
+Writes benchmark_results.json next to this script (where the app fetches it).
+
+Usage:
+  python run_benchmark.py --tar /path/imagenette_train.tar --imgdir /path/imagenette2-160/train
 """
 
-import json, time, os, glob, statistics
+import argparse
+import glob
+import json
+import os
+import statistics
+import time
+from datetime import datetime, timezone
+
 import numpy as np
 
-S = "/private/tmp/claude-501/-Users-arnavjain/72f04b64-0199-4f2c-8108-4800fa3e6e79/scratchpad/"
-TAR = S + "imagenette_train.tar"
-IMGDIR = S + "imagenette2-160/train"
-TOKENS = S + "shakespeare_tokens.bin"
-OUT = S + "TurboLoader/benchmark_results.json"
+HERE = os.path.dirname(os.path.abspath(__file__))
 MEAN = [0.485, 0.456, 0.406]
 STD = [0.229, 0.224, 0.225]
 N_TIMED = 3
@@ -30,11 +39,11 @@ def best_rate(epoch_fn, warmup=1, timed=N_TIMED):
 
 
 # ---------------- TurboLoader ----------------
-def turbo_rate(num_workers, cache=False):
+def turbo_rate(tar, num_workers, cache=False):
     import turboloader as t
 
     dl = t.DataLoader(
-        TAR,
+        tar,
         batch_size=64,
         num_workers=num_workers,
         output_format="pytorch",
@@ -55,14 +64,14 @@ def turbo_rate(num_workers, cache=False):
 
 
 # ---------------- PyTorch ----------------
-def pytorch_rate(num_workers):
-    import torch
+def pytorch_rate(imgdir, num_workers):
+    import torch  # noqa: F401
     from torch.utils.data import DataLoader
     import torchvision.transforms as T
     from torchvision.datasets import ImageFolder
 
     tf = T.Compose([T.Resize((160, 160)), T.ToTensor(), T.Normalize(MEAN, STD)])
-    ds = ImageFolder(IMGDIR, transform=tf)
+    ds = ImageFolder(imgdir, transform=tf)
     dl = DataLoader(
         ds,
         batch_size=64,
@@ -83,10 +92,10 @@ def pytorch_rate(num_workers):
 
 
 # ---------------- tf.data ----------------
-def tfdata_rate(cache=False):
+def tfdata_rate(imgdir, cache=False):
     import tensorflow as tf
 
-    files = sorted(glob.glob(IMGDIR + "/*/*.JPEG"))
+    files = sorted(glob.glob(imgdir + "/*/*.JPEG"))
     mean = tf.constant(MEAN)
     std = tf.constant(STD)
 
@@ -112,14 +121,18 @@ def tfdata_rate(cache=False):
 
 
 # ---------------- tokens ----------------
-def token_rates():
+def token_rates(tokens_path):
     import turboloader as t
 
-    toks = np.memmap(TOKENS, dtype=np.uint16, mode="r")
+    if not os.path.exists(tokens_path):
+        # Synthesize a real-sized corpus once (50M uint16 tokens ~ 100 MB).
+        rng = np.random.default_rng(0)
+        rng.integers(0, 50257, size=50_000_000).astype(np.uint16).tofile(tokens_path)
+    toks = np.memmap(tokens_path, dtype=np.uint16, mode="r")
     n_tokens = toks.shape[0]
     seq, bs, steps = 1024, 16, 200
 
-    dl = t.TokenDataLoader(TOKENS, seq_len=seq, batch_size=bs, steps_per_epoch=steps)
+    dl = t.TokenDataLoader(tokens_path, seq_len=seq, batch_size=bs, steps_per_epoch=steps)
 
     def turbo_ep():
         n = 0
@@ -146,54 +159,113 @@ def token_rates():
     return turbo, numpy_idiom
 
 
-def main():
-    workers = [1, 2, 4, 6, 8]
-    print("worker scan (TurboLoader)...")
-    turbo_ws = [turbo_rate(w) for w in workers]
-    print("  ", turbo_ws)
-    print("worker scan (PyTorch)...")
-    pytorch_ws = [pytorch_rate(w) for w in workers]
-    print("  ", pytorch_ws)
-    print("tf.data (AUTOTUNE)...")
-    tf_rate = tfdata_rate(cache=False)
-    print("  ", tf_rate)
-    print("caches...")
-    turbo_cache = turbo_rate(6, cache=True)
-    tf_cache = tfdata_rate(cache=True)
-    print("  turbo_cache", turbo_cache, "tf_cache", tf_cache)
-    print("tokens...")
-    tok_turbo, tok_numpy = token_rates()
-    print("  ", tok_turbo, tok_numpy)
+# ---------------- Metal resident (Apple Silicon) ----------------
+def metal_resident_rates(imgdir):
+    import turboloader as t
 
-    turbo_peak = max(turbo_ws)
+    if not getattr(t, "metal_available", lambda: False)() or not hasattr(t, "MetalResidentLoader"):
+        return None
+    paths = sorted(glob.glob(os.path.join(imgdir, "**", "*.JPEG"), recursive=True))
+    if not paths:
+        return None
+    dl = t.MetalResidentLoader(paths, image_size=160, batch_size=256, shuffle=True)
+
+    def produced():
+        n = 0
+        for batch in dl:
+            n += batch.shape[0]
+        dl.set_epoch(dl._epoch + 1)
+        return n
+
+    def consumed():
+        n = 0
+        for batch in dl:
+            batch[:, 0, ::8, ::8].sum()
+            n += batch.shape[0]
+        dl.set_epoch(dl._epoch + 1)
+        return n
+
+    rates = {"produced": best_rate(produced), "consumed": best_rate(consumed)}
+    dl.close()
+    return rates
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    default_root = os.environ.get("TURBO_BENCH_DATA", os.path.join(HERE, "..", "..", ".."))
+    ap.add_argument("--tar", default=os.path.join(default_root, "imagenette_train.tar"))
+    ap.add_argument("--imgdir", default=os.path.join(default_root, "imagenette2-160", "train"))
+    ap.add_argument("--tokens", default=os.path.join(default_root, "bench_tokens.bin"))
+    ap.add_argument("--out", default=os.path.join(HERE, "benchmark_results.json"))
+    args = ap.parse_args()
+
+    import turboloader as t
+
+    workers = [1, 2, 4, 6, 8]
     results = {
         "meta": {
             "dataset": "Imagenette-160 (9,469 real ImageNet JPEGs -> 160px)",
-            "platform": "Apple Silicon",
+            "platform": getattr(t, "metal_device_name", lambda: "")() or "local machine",
+            "turboloader_version": getattr(t, "__version__", "unknown"),
             "consumption": "real (np.sum / tf.reduce_sum forces materialization)",
             "method": f"warmup + median of {N_TIMED} timed epochs",
             "batch_size": 64,
+            "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
-        "frameworks": [
-            {"name": "TurboLoader (cached)", "throughput": turbo_cache},
-            {"name": "TurboLoader", "throughput": turbo_peak},
-            {"name": "TensorFlow tf.data", "throughput": tf_rate},
-            {"name": "PyTorch DataLoader", "throughput": max(pytorch_ws)},
-        ],
-        "workers": {
-            "workers": workers,
-            "turboloader": turbo_ws,
-            "pytorch": pytorch_ws,
-            "tensorflow": [tf_rate] * len(workers),
-        },
-        "cache": {"turboloader": turbo_cache, "tensorflow": tf_cache},
-        "tokens": {"turboloader": tok_turbo, "numpy_memmap": tok_numpy},
-        "speedup_vs_pytorch": round(turbo_peak / max(pytorch_ws), 1),
-        "speedup_vs_tfdata": round(turbo_peak / tf_rate, 1),
+        "frameworks": [],
     }
-    with open(OUT, "w") as f:
+
+    print("worker scan (TurboLoader)...")
+    turbo_ws = [turbo_rate(args.tar, w) for w in workers]
+    print("  ", turbo_ws)
+    turbo_peak = max(turbo_ws)
+    results["frameworks"].append({"name": "TurboLoader", "throughput": turbo_peak})
+    results["workers"] = {"workers": workers, "turboloader": turbo_ws}
+
+    print("cache (TurboLoader)...")
+    turbo_cache = turbo_rate(args.tar, 6, cache=True)
+    print("  ", turbo_cache)
+    results["frameworks"].insert(0, {"name": "TurboLoader (cached)", "throughput": turbo_cache})
+    results["cache"] = {"turboloader": turbo_cache}
+
+    try:
+        print("worker scan (PyTorch)...")
+        pytorch_ws = [pytorch_rate(args.imgdir, w) for w in workers]
+        print("  ", pytorch_ws)
+        results["frameworks"].append({"name": "PyTorch DataLoader", "throughput": max(pytorch_ws)})
+        results["workers"]["pytorch"] = pytorch_ws
+        results["speedup_vs_pytorch"] = round(turbo_peak / max(pytorch_ws), 1)
+    except ImportError:
+        print("  torch/torchvision not installed — skipped")
+
+    try:
+        print("tf.data (AUTOTUNE)...")
+        tf_rate = tfdata_rate(args.imgdir, cache=False)
+        print("  ", tf_rate)
+        results["frameworks"].append({"name": "TensorFlow tf.data", "throughput": tf_rate})
+        results["workers"]["tensorflow"] = [tf_rate] * len(workers)
+        results["cache"]["tensorflow"] = tfdata_rate(args.imgdir, cache=True)
+        results["speedup_vs_tfdata"] = round(turbo_peak / tf_rate, 1)
+    except ImportError:
+        print("  tensorflow not installed — skipped")
+
+    print("tokens...")
+    tok_turbo, tok_numpy = token_rates(args.tokens)
+    print("  ", tok_turbo, tok_numpy)
+    results["tokens"] = {"turboloader": tok_turbo, "numpy_memmap": tok_numpy}
+
+    print("Metal resident (Apple Silicon)...")
+    mr = metal_resident_rates(args.imgdir)
+    if mr:
+        print("  ", mr)
+        results["metal_resident"] = mr
+    else:
+        print("  not available — skipped")
+
+    results["frameworks"].sort(key=lambda f: -f["throughput"])
+    with open(args.out, "w") as f:
         json.dump(results, f, indent=2)
-    print("WROTE", OUT)
+    print("WROTE", args.out)
     print(json.dumps(results["frameworks"], indent=2))
 
 

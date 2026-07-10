@@ -361,9 +361,18 @@ tables:
 
 | Pre-processed loader | img/s | |
 |---|---:|---|
+| **TurboLoader `MetalResidentLoader`** (Apple M4 Max, unified memory: no H2D exists) | **~757,000 produced / ~433,000 consumed** | ships in the pip wheel |
 | **TurboLoader `CudaResidentLoader`** (fits-in-VRAM: upload uint8 once, GPU-resident) | **~280,000** | **beats FFCV ~3.5×** |
 | **TurboLoader `CudaStreamLoader`** (streaming, dataset > VRAM; fully-C++ loop) | **~140,000** | **beats FFCV ~1.6×** |
 | FFCV, raw `.beton` (streams mmap→H2D each epoch, worker processes) | ~85,000 | |
+
+On **Apple Silicon** the resident trick is even better than on NVIDIA: memory is unified, so
+"upload" is one memcpy and every GPU-written batch is a **zero-copy numpy view**.
+`MetalResidentLoader` serves each epoch as one fused gather+shuffle+normalize kernel launch per
+batch; `MetalResidentArrays` does the same for any-dtype rows (embedding tables: ~5× numpy
+fancy-indexing). Honest null result included: `MetalTokenGather` ties the CPU memmap path
+(0.87–1.08×) — keep using `TokenDataLoader` for tokens. Numbers, methodology, and caveats:
+[benchmarks/METAL_RESIDENT_RESULTS.md](benchmarks/METAL_RESIDENT_RESULTS.md).
 
 `CudaResidentLoader` uses a custom single-launch normalize kernel + fused gather (shuffles at
 ~257k) and **beats FFCV ~3.5×** when the pre-processed uint8 dataset fits in VRAM (very common:

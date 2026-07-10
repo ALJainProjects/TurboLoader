@@ -283,20 +283,20 @@
             <p class="subtitle">High-Performance ML Data Loading - Real-Time Performance Analytics</p>
             <div class="stats-grid">
                 <div class="stat-card">
-                    <div class="stat-value" id="peak-throughput">65,499</div>
+                    <div class="stat-value" id="peak-throughput">—</div>
                     <div class="stat-label">Peak img/s (cached)</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" id="speedup">2.1×</div>
+                    <div class="stat-value" id="speedup">—</div>
                     <div class="stat-label">vs PyTorch DataLoader</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" id="bandwidth">1.3×</div>
-                    <div class="stat-label">vs tf.data (AUTOTUNE)</div>
+                    <div class="stat-value" id="metal-resident">—</div>
+                    <div class="stat-label">Metal resident img/s (consumed)</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" id="transforms">441M</div>
-                    <div class="stat-label">LLM tokens/s (2.7×)</div>
+                    <div class="stat-value" id="transforms">—</div>
+                    <div class="stat-label">LLM tokens/s</div>
                 </div>
             </div>
         </header>
@@ -377,6 +377,58 @@
                 <div class="chart-title">LLM token streaming — tokens/s (TokenDataLoader vs numpy memmap)</div>
                 <div id="tokens-chart"></div>
             </div>
+
+            <div class="chart-container" id="metal-resident-container" style="display:none">
+                <div class="chart-title">Metal resident loader — pre-processed epochs on unified memory (this machine)</div>
+                <p style="color:#6c757d; margin:-6px 0 14px; font-size:0.92em;">
+                    Dataset decoded once to uint8, resident in a shared MTLBuffer; every epoch is one
+                    fused gather+shuffle+normalize kernel launch per batch. "Produced" = kernel complete,
+                    batch CPU-visible (zero-copy on unified memory); "consumed" additionally touches every
+                    batch on the CPU. Same contract as the CUDA resident loader.</p>
+                <div id="metal-chart"></div>
+            </div>
+
+            <div class="chart-container">
+                <div class="chart-title">GPU regimes — reference results (fixed hardware, see benchmark docs)</div>
+                <p style="color:#6c757d; margin:-6px 0 14px; font-size:0.92em;">
+                    Static reference numbers measured on dedicated hardware — they don't re-run in this
+                    dashboard. Methodology, correctness checks, and the corrections history live in
+                    <code>experiments/cuda/RESULTS.md</code>, <code>benchmarks/E2E_TRAINING_RESULTS.md</code>
+                    and <code>benchmarks/METAL_RESIDENT_RESULTS.md</code>.</p>
+                <table style="width:100%; border-collapse:collapse; font-size:0.95em;">
+                    <thead>
+                        <tr style="text-align:left; border-bottom:2px solid #dee2e6; color:#495057;">
+                            <th style="padding:8px;">Regime</th><th>TurboLoader</th><th>Best alternative</th><th>Hardware</th>
+                        </tr>
+                    </thead>
+                    <tbody style="color:#495057;">
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">On-the-fly (decode JPEGs every epoch)</td>
+                            <td><strong>28,527 img/s</strong></td><td>NVIDIA DALI 25,479 (+12%)</td><td>RTX 3090</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">Pre-processed, fits in VRAM</td>
+                            <td><strong>~280k img/s</strong></td><td>FFCV-raw ~80k (3.5×)</td><td>RTX 3090</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">Pre-processed, streaming &gt; VRAM</td>
+                            <td><strong>~140k img/s</strong></td><td>FFCV-raw ~85k (1.6×)</td><td>RTX 3090</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">Pre-processed, resident (unified memory)</td>
+                            <td><strong>757k produced / 433k consumed img/s</strong></td><td>numpy resident ~3.7k</td><td>Apple M4 Max</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">End-to-end ResNet-18 training (median epoch)</td>
+                            <td><strong>4.37s (1.17×)</strong></td><td>PyTorch recipe 5.11s; pure-GPU floor 3.81s</td><td>RTX 3090</td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px;">End-to-end ResNet-18 on MPS (honest null result)</td>
+                            <td><strong>8.06s — a tie (1.00×)</strong></td><td>PyTorch 8.08s; MPS floor 7.61s (GPU-bound)</td><td>Apple M4 Max</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <div class="info-section">
@@ -417,7 +469,7 @@
         </div>
 
         <footer>
-            <p>TurboLoader v2.26.2 | C++20 Implementation | MIT License</p>
+            <p><span id="footer-version">TurboLoader v2.33+</span> | C++20 Implementation | MIT License</p>
             <p style="margin-top: 10px;">Measured on Apple Silicon over Imagenette-160
                 (9,469 real ImageNet JPEGs → 160px, <code>output_format='pytorch'</code>);
                 median img/s. See the README benchmarks for methodology.</p>
@@ -430,25 +482,26 @@
     </div>
 
     <script>
-        // REAL measured results (run_benchmark.py over Imagenette-160, Apple Silicon,
-        // real consumption via np.sum / tf.reduce_sum). Embedded so the dashboard works
-        // offline; when served over http it also tries to fetch a fresh
-        // benchmark_results.json. Re-generate by running run_benchmark.py.
+        // REAL measured results (run_benchmark.py over Imagenette-160, Apple M4 Max,
+        // TurboLoader v2.33.1.dev, 2026-07-10; real consumption via np.sum). Embedded so
+        // the dashboard works offline; when served over http it also tries to fetch a
+        // fresh benchmark_results.json. Re-generate by running run_benchmark.py.
         const EMBEDDED = {
+            meta: { platform: 'Apple M4 Max', turboloader_version: '2.33+' },
             frameworks: [
-                { name: 'TurboLoader (cached)', throughput: 65499 },
-                { name: 'TurboLoader', throughput: 39100 },
-                { name: 'TensorFlow tf.data', throughput: 30154 },
-                { name: 'PyTorch DataLoader', throughput: 18991 }
+                { name: 'TurboLoader (cached)', throughput: 75103 },
+                { name: 'TurboLoader', throughput: 58809 },
+                { name: 'PyTorch DataLoader', throughput: 19612 }
             ],
             workers: {
                 workers: [1, 2, 4, 6, 8],
-                turboloader: [39009, 39100, 38512, 38318, 38325],
-                pytorch: [3057, 5779, 10560, 15272, 18991],
-                tensorflow: [30154, 30154, 30154, 30154, 30154]
+                turboloader: [58712, 58809, 58595, 58760, 58749],
+                pytorch: [3127, 5856, 11003, 15299, 19612]
             },
-            cache: { turboloader: 65499, tensorflow: 410124 },
-            tokens: { turboloader: 441102077, numpy_memmap: 163141550 }
+            cache: { turboloader: 75103 },
+            speedup_vs_pytorch: 3.0,
+            tokens: { turboloader: 466697527, numpy_memmap: 306696842 },
+            metal_resident: { produced: 649288, consumed: 423037 }
         };
 
         async function loadData() {
@@ -464,8 +517,53 @@
 
         async function loadSampleData() {
             const data = await loadData();
+            updateStatCards(data);
             updateCharts(data);
             updateFrameworkCards(data.frameworks);
+            updateMetalChart(data);
+            const meta = data.meta || {};
+            if (meta.turboloader_version) {
+                const el = document.getElementById('footer-version');
+                if (el) el.textContent = 'TurboLoader v' + meta.turboloader_version;
+            }
+        }
+
+        function updateStatCards(data) {
+            const fw = data.frameworks || [];
+            const cached = fw.find(f => f.name.includes('cached'));
+            const peak = fw.length ? Math.max(...fw.map(f => f.throughput)) : 0;
+            document.getElementById('peak-throughput').textContent =
+                ((cached && cached.throughput) || peak).toLocaleString();
+            document.getElementById('speedup').textContent =
+                data.speedup_vs_pytorch ? data.speedup_vs_pytorch + '×' : '—';
+            document.getElementById('metal-resident').textContent =
+                data.metal_resident ? Math.round(data.metal_resident.consumed / 1000) + 'k' : '—';
+            document.getElementById('transforms').textContent =
+                data.tokens ? Math.round(data.tokens.turboloader / 1e6) + 'M' : '—';
+        }
+
+        function updateMetalChart(data) {
+            const mr = data.metal_resident;
+            const box = document.getElementById('metal-resident-container');
+            if (!mr || !box) return;
+            box.style.display = '';
+            const onthefly = ((data.frameworks || []).find(f => f.name === 'TurboLoader') || {}).throughput;
+            const rows = [
+                ['Metal resident (produced)', mr.produced],
+                ['Metal resident (consumed)', mr.consumed],
+                ['On-the-fly DirectBatch (decodes JPEGs)', onthefly || 0],
+            ].filter(r => r[1]);
+            Plotly.newPlot('metal-chart', [{
+                x: rows.map(r => r[0]),
+                y: rows.map(r => r[1]),
+                type: 'bar',
+                marker: { color: ['#667eea', '#764ba2', '#e9ecef'] },
+                text: rows.map(r => r[1].toLocaleString() + ' img/s'),
+                textposition: 'outside',
+            }], {
+                yaxis: { title: 'img/s' }, showlegend: false,
+                margin: { t: 20, b: 80 }, height: 380
+            }, { responsive: true });
         }
 
         function updateCharts(data) {
@@ -500,7 +598,7 @@
 
             Plotly.newPlot('throughput-chart', [throughputTrace], throughputLayout, {responsive: true});
 
-            // Workers scaling chart
+            // Workers scaling chart (frameworks not installed at benchmark time are omitted)
             const workersTraces = [
                 {
                     x: data.workers.workers,
@@ -510,26 +608,26 @@
                     mode: 'lines+markers',
                     line: { color: '#667eea', width: 3 },
                     marker: { size: 10 }
-                },
-                {
-                    x: data.workers.workers,
-                    y: data.workers.pytorch,
-                    name: 'PyTorch (worker processes)',
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    line: { color: '#dc3545', width: 3 },
-                    marker: { size: 10 }
-                },
-                {
-                    x: data.workers.workers,
-                    y: data.workers.tensorflow,
-                    name: 'tf.data (AUTOTUNE)',
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    line: { color: '#ff6f00', width: 3, dash: 'dot' },
-                    marker: { size: 8 }
                 }
             ];
+            if (data.workers.pytorch) workersTraces.push({
+                x: data.workers.workers,
+                y: data.workers.pytorch,
+                name: 'PyTorch (worker processes)',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#dc3545', width: 3 },
+                marker: { size: 10 }
+            });
+            if (data.workers.tensorflow) workersTraces.push({
+                x: data.workers.workers,
+                y: data.workers.tensorflow,
+                name: 'tf.data (AUTOTUNE)',
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: '#ff6f00', width: 3, dash: 'dot' },
+                marker: { size: 8 }
+            });
 
             const workersLayout = {
                 xaxis: { title: 'Number of Workers' },
