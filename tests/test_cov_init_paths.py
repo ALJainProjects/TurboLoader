@@ -274,6 +274,17 @@ def test_imagenet_normalize_matches_formula(tar20):
     )
     p, _ = plain.next_batch()
     q, _ = norm.next_batch()
+    # Diagnostic guard: one CI run (2026-07-09, py3.14) saw NaN/garbage in q with a
+    # per-row pattern (most rows fine, one uninitialized, two holding [0,1] data).
+    # Never reproduced across 223 full-suite reruns + 24M pool dispatches (TSan
+    # clean on two platforms); if it ever recurs, fail with the row map instead of
+    # a bare q.min() assert so the pattern is captured.
+    if np.isnan(q).any() or np.abs(q).max() > 100:
+        rows = [
+            (i, int(np.isnan(q[i]).sum()), float(np.nanmax(np.abs(q[i]))))
+            for i in range(q.shape[0])
+        ]
+        pytest.fail(f"corrupted normalized batch; per-row (idx, nan_count, absmax): {rows}")
     assert not np.allclose(p, q)  # normalization actually changed the values
     assert q.min() < 0.0  # ImageNet normalization produces negatives
     for c in range(3):

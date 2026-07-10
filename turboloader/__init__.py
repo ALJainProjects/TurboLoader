@@ -314,6 +314,36 @@ try:
         _, m, s = _fastpath_analysis(transform, mean, std)
         return m, s
 
+    # Producers still alive when the interpreter starts finalizing must be stopped
+    # BEFORE daemon threads are torn down: a daemon thread that re-takes the GIL
+    # during finalization is pthread_exit()ed by CPython, and that forced unwind
+    # crossing a noexcept pybind11 frame calls std::terminate ("terminate called
+    # without an active exception", abort at exit). The atexit hook runs first,
+    # while threads are still healthy, and winds every live producer down.
+    _live_producers = None  # created lazily: WeakSet of producer Thread objects
+
+    def _register_producer_atexit(th, stop):
+        global _live_producers
+        import weakref
+
+        if _live_producers is None:
+            import atexit
+
+            _live_producers = weakref.WeakSet()
+
+            def _shutdown_producers():
+                threads = list(_live_producers)
+                for t_ in threads:
+                    ev = getattr(t_, "_turboloader_stop", None)
+                    if ev is not None:
+                        ev.set()
+                for t_ in threads:
+                    t_.join(timeout=1.0)
+
+            atexit.register(_shutdown_producers)
+        th._turboloader_stop = stop
+        _live_producers.add(th)
+
     def _prefetched(fill, maxsize):
         """Yield fill()'s results (None = exhausted) through a bounded background
         producer thread.
@@ -355,6 +385,7 @@ try:
                 _put(None)  # stop-aware: if the consumer already left, nobody needs it
 
         th = _threading.Thread(target=_producer, daemon=True)
+        _register_producer_atexit(th, stop)
         th.start()
         try:
             while True:
@@ -2410,6 +2441,14 @@ try:
                 metal_crop_resize_normalize,
                 metal_train_transform,
                 metal_decode_jpeg,
+                metal_resident_images_create,
+                metal_resident_images_view,
+                metal_resident_images_gather,
+                metal_resident_images_destroy,
+                metal_resident_bytes_create,
+                metal_resident_bytes_view,
+                metal_resident_bytes_gather,
+                metal_resident_bytes_destroy,
             )
 
             __all__ += [
@@ -2417,6 +2456,14 @@ try:
                 "metal_crop_resize_normalize",
                 "metal_train_transform",
                 "metal_decode_jpeg",
+                "metal_resident_images_create",
+                "metal_resident_images_view",
+                "metal_resident_images_gather",
+                "metal_resident_images_destroy",
+                "metal_resident_bytes_create",
+                "metal_resident_bytes_view",
+                "metal_resident_bytes_gather",
+                "metal_resident_bytes_destroy",
             ]
         except ImportError:
             pass
@@ -2511,6 +2558,19 @@ try:
         )
 
         __all__ += ["CudaImageLoader", "CudaResidentLoader", "CudaStreamLoader"]
+    except Exception:
+        pass
+
+    # Metal resident loaders (Apple Silicon): pre-processed epochs on unified memory —
+    # images (fused gather+shuffle+normalize) plus dtype-agnostic arrays/token windows.
+    try:
+        from turboloader.metal_loader import (
+            MetalResidentLoader,
+            MetalResidentArrays,
+            MetalTokenGather,
+        )
+
+        __all__ += ["MetalResidentLoader", "MetalResidentArrays", "MetalTokenGather"]
     except Exception:
         pass
 

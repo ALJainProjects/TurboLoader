@@ -85,5 +85,41 @@ bool train_transform_batch(const std::vector<ImageRef>& imgs,
 bool decode_jpeg(const uint8_t* data, size_t size, std::vector<uint8_t>& out, int& width,
                  int& height);
 
+// ---------------------------------------------------------------------------
+// Resident (pre-processed) datasets on unified memory — the FFCV/CudaResident
+// trick, Apple-style: because M-series memory is unified, "uploading" the
+// dataset is a single memcpy into a shared MTLBuffer (no PCIe H2D exists), and
+// each epoch is served by ONE fused gather(+shuffle)(+normalize) kernel launch
+// per batch. Outputs are double-buffered per handle: a returned pointer stays
+// valid until the NEXT gather on the same handle (DALI-style lifetime).
+// All functions are safe to call from any thread; handles are process-global.
+// ---------------------------------------------------------------------------
+
+// Resident image dataset: n samples of (h x w x 3) uint8, NHWC-packed.
+// max_batch bounds later gather batch sizes. Returns handle >= 0, or -1.
+int resident_images_create(size_t n, int h, int w, size_t max_batch);
+
+// CPU-visible pointer to the resident dataset — write decoded uint8 HWC samples
+// straight into it (unified memory: this IS the GPU buffer). Null if bad handle.
+uint8_t* resident_images_data(int handle);
+
+// Fused gather + normalize: out[b] = (src[idx[b]]/255 - mean) / std as CHW
+// float32, one kernel launch for the whole batch. Returns the output pointer
+// (b*3*h*w floats, valid until the next gather on this handle), or nullptr.
+const float* resident_images_gather(int handle, const int32_t* idx, size_t b,
+                                    const float mean[3], const float std_[3]);
+
+void resident_images_destroy(int handle);
+
+// Generic resident byte store (tokens, embeddings, tabular — dtype-agnostic).
+// Gathers `b` spans of span_bytes each, starting at arbitrary BYTE offsets
+// (covers both aligned row gathers and overlapping token windows).
+// span_bytes may vary per call up to max_span_bytes.
+int resident_bytes_create(size_t total_bytes, size_t max_batch, size_t max_span_bytes);
+uint8_t* resident_bytes_data(int handle);
+const uint8_t* resident_bytes_gather(int handle, const uint64_t* offs_bytes, size_t b,
+                                     size_t span_bytes);
+void resident_bytes_destroy(int handle);
+
 }  // namespace metal
 }  // namespace turboloader

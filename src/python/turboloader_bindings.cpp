@@ -1319,6 +1319,100 @@ PYBIND11_MODULE(_turboloader, m) {
         py::arg("data"),
         "Hybrid GPU JPEG decode (Apple GPU IDCT) -> HxWx3 uint8 RGB. CPU Huffman + GPU "
         "dequant/IDCT + CPU upsample/colorconvert. Raises on unsupported JPEG.");
+
+    // ---- Resident (pre-processed) datasets on unified memory ----
+    // Zero-copy views: the returned arrays alias shared MTLBuffer memory. A data
+    // view is valid until destroy(); a gather view is valid until the NEXT gather
+    // on the same handle (double-buffered, DALI-style lifetime).
+    m.def(
+        "metal_resident_images_create",
+        [](size_t n, int h, int w, size_t max_batch) {
+            int hd = turboloader::metal::resident_images_create(n, h, w, max_batch);
+            if (hd < 0) throw std::runtime_error("metal_resident_images_create failed");
+            return hd;
+        },
+        py::arg("n"), py::arg("h"), py::arg("w"), py::arg("max_batch"),
+        "Allocate a resident uint8 NHWC image dataset in unified memory. Returns a handle.");
+    m.def(
+        "metal_resident_images_view",
+        [](int handle, size_t n, int h, int w) -> py::array_t<uint8_t> {
+            uint8_t* p = turboloader::metal::resident_images_data(handle);
+            if (!p) throw std::runtime_error("bad resident-images handle");
+            // Zero-copy view (base capsule = no-op): write decoded samples here.
+            return py::array_t<uint8_t>({(py::ssize_t)n, (py::ssize_t)h, (py::ssize_t)w,
+                                         (py::ssize_t)3},
+                                        p, py::capsule(p, [](void*) {}));
+        },
+        py::arg("handle"), py::arg("n"), py::arg("h"), py::arg("w"),
+        "Zero-copy (N,H,W,3) uint8 view of the resident dataset (valid until destroy).");
+    m.def(
+        "metal_resident_images_gather",
+        [](int handle, py::array_t<int32_t, py::array::c_style | py::array::forcecast> idx,
+           int h, int w, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> py::array_t<float> {
+            if (idx.ndim() != 1 || idx.shape(0) < 1)
+                throw std::runtime_error("idx must be a 1-D int32 array");
+            const size_t b = (size_t)idx.shape(0);
+            const float* out;
+            {
+                py::gil_scoped_release rel;
+                out = turboloader::metal::resident_images_gather(handle, idx.data(), b,
+                                                                 mean.data(), std_.data());
+            }
+            if (!out) throw std::runtime_error("metal_resident_images_gather failed");
+            return py::array_t<float>({(py::ssize_t)b, (py::ssize_t)3, (py::ssize_t)h,
+                                       (py::ssize_t)w},
+                                      out, py::capsule(out, [](void*) {}));
+        },
+        py::arg("handle"), py::arg("idx"), py::arg("h"), py::arg("w"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "Fused gather+normalize epoch batch: (B,3,H,W) float32 zero-copy view, valid until "
+        "the next gather on this handle.");
+    m.def("metal_resident_images_destroy", &turboloader::metal::resident_images_destroy,
+          py::arg("handle"), "Free a resident image dataset (invalidates its views).");
+    m.def(
+        "metal_resident_bytes_create",
+        [](size_t total_bytes, size_t max_batch, size_t max_span_bytes) {
+            int hd = turboloader::metal::resident_bytes_create(total_bytes, max_batch,
+                                                               max_span_bytes);
+            if (hd < 0) throw std::runtime_error("metal_resident_bytes_create failed");
+            return hd;
+        },
+        py::arg("total_bytes"), py::arg("max_batch"), py::arg("max_span_bytes"),
+        "Allocate a resident dtype-agnostic byte store (tokens/embeddings/tabular).");
+    m.def(
+        "metal_resident_bytes_view",
+        [](int handle, size_t total_bytes) -> py::array_t<uint8_t> {
+            uint8_t* p = turboloader::metal::resident_bytes_data(handle);
+            if (!p) throw std::runtime_error("bad resident-bytes handle");
+            return py::array_t<uint8_t>({(py::ssize_t)total_bytes}, p,
+                                        py::capsule(p, [](void*) {}));
+        },
+        py::arg("handle"), py::arg("total_bytes"),
+        "Zero-copy uint8 view of the resident byte store (valid until destroy).");
+    m.def(
+        "metal_resident_bytes_gather",
+        [](int handle, py::array_t<uint64_t, py::array::c_style | py::array::forcecast> offs,
+           size_t span_bytes) -> py::array_t<uint8_t> {
+            if (offs.ndim() != 1 || offs.shape(0) < 1)
+                throw std::runtime_error("offs must be a 1-D uint64 array of byte offsets");
+            const size_t b = (size_t)offs.shape(0);
+            const uint8_t* out;
+            {
+                py::gil_scoped_release rel;
+                out = turboloader::metal::resident_bytes_gather(handle, offs.data(), b,
+                                                                span_bytes);
+            }
+            if (!out) throw std::runtime_error("metal_resident_bytes_gather failed");
+            return py::array_t<uint8_t>({(py::ssize_t)b, (py::ssize_t)span_bytes}, out,
+                                        py::capsule(out, [](void*) {}));
+        },
+        py::arg("handle"), py::arg("offs"), py::arg("span_bytes"),
+        "Gather B spans (byte offsets) in one launch: (B, span_bytes) uint8 zero-copy view, "
+        "valid until the next gather on this handle.");
+    m.def("metal_resident_bytes_destroy", &turboloader::metal::resident_bytes_destroy,
+          py::arg("handle"), "Free a resident byte store (invalidates its views).");
 #else
     m.def("metal_available", []() { return false; },
           "True if the Metal GPU transform path is available. Not compiled in this build.");
