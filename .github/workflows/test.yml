@@ -6,10 +6,18 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+# Rapid successive pushes each queue 7 jobs; without this, stale runs pile up
+# against the account's concurrent-runner limit and fresh jobs sit queued for
+# 45+ minutes (observed 2026-07-09: jobs cancelled with steps:[] — never ran).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     strategy:
       fail-fast: false
@@ -45,7 +53,7 @@ jobs:
         # Test/runtime deps. torch + torchvision (CPU wheels) are required by the
         # parity tests; without them those modules fail to import and pytest aborts
         # collection (exit 2), failing the whole suite.
-        pip install pytest pytest-cov numpy pybind11 Pillow
+        pip install pytest pytest-cov pytest-timeout numpy pybind11 Pillow
         pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
     - name: Build & install TurboLoader (native extension)
@@ -61,7 +69,9 @@ jobs:
 
     - name: Run Python tests
       run: |
-        pytest tests/ -v --cov=turboloader --cov-report=xml --cov-report=term
+        # --timeout: a genuinely hung test dies in 5 min WITH a faulthandler dump
+        # of every thread's stack (instead of eating the whole job timeout silently).
+        pytest tests/ -v --timeout=300 --cov=turboloader --cov-report=xml --cov-report=term
 
     - name: Upload coverage to Codecov
       if: matrix.python-version == '3.11'
@@ -75,6 +85,7 @@ jobs:
   cpp-test:
     name: C++ Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
     - name: Checkout code
@@ -109,6 +120,7 @@ jobs:
   lint:
     name: Code Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
     - name: Checkout code
