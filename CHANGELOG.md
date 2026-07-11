@@ -5,6 +5,16 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.34.1] - 2026-07-11
+
+### Fixed
+- **macOS wheels failed to build for 2.34.0** and never reached PyPI (Linux wheels +
+  sdist were unaffected): the video path's three extra `-framework` load commands
+  exhausted the Mach-O header slack that delocate needs to rewrite bundled-dylib
+  install names during wheel repair ("larger updated load commands do not fit").
+  macOS links now pass `-Wl,-headerpad_max_install_names`. If you are on macOS,
+  use 2.34.1 — 2.34.0 has no mac wheels.
+
 ## [2.34.0] - 2026-07-11
 
 GPU-everything sprint: resident (pre-processed) epochs and hardware video decode on
