@@ -160,6 +160,28 @@ class CudaVideoLoader:
             return False
         return H >= 720 or W >= 1280  # untagged: same heuristic as the Metal path
 
+    def _probe_bt709_via_container(self):
+        """Best-effort colorimetry-tag read for the NVDEC backend (PyNvVideoCodec
+        exposes no colorspace metadata). Uses the SAME rule as the cpu backend so
+        tagged streams decode with the same matrix on both backends — previously
+        the NVDEC path hardcoded the resolution heuristic and a BT.601-tagged HD
+        stream would decode with different colors per backend. Returns True/False
+        when the container is tagged, None when untagged or PyAV is unavailable."""
+        try:
+            import av
+
+            with av.open(self.path) as c:
+                stream = c.streams.video[0]
+                cs = getattr(getattr(stream, "codec_context", None), "colorspace", None)
+                name = str(cs).lower() if cs is not None else ""
+                if "709" in name:
+                    return True
+                if "601" in name or "170" in name or "470" in name:
+                    return False
+        except Exception:
+            pass
+        return None
+
     # ------------------------- NVDEC backend -------------------------------
     def _iter_nvdec(self):
         import PyNvVideoCodec as nvc
@@ -182,6 +204,7 @@ class CudaVideoLoader:
         rows, first, idx = 0, -1, 0
         W = H = None
         bt709 = False
+        tagged = self._probe_bt709_via_container()  # tag beats heuristic
         for packet in demux:
             for frame in dec.Decode(packet):
                 keep = idx % self.frame_step == 0
@@ -189,7 +212,7 @@ class CudaVideoLoader:
                     y_v, c_v = self._nv12_plane_views(frame, torch)
                     if W is None:
                         H, W = int(y_v.shape[0]), int(y_v.shape[1])
-                        bt709 = H >= 720 or W >= 1280
+                        bt709 = tagged if tagged is not None else (H >= 720 or W >= 1280)
                         stage = torch.empty(
                             (self.batch_size, H * 3 // 2, W), dtype=torch.uint8, device="cuda"
                         )
@@ -301,21 +324,12 @@ class CudaVideoLoader:
             # tail shorter than clip_len is dropped (standard for clip sampling)
 
     def _pick_crop(self, W, H, rng, scale, ratio):
-        """torchvision RandomResizedCrop-parity sampling (area x log-ratio, 10
-        attempts, center fallback), in source pixels."""
-        area = W * H
-        for _ in range(10):
-            target = area * rng.uniform(*scale)
-            log_r = rng.uniform(np.log(ratio[0]), np.log(ratio[1]))
-            r = np.exp(log_r)
-            cw = int(round(np.sqrt(target * r)))
-            ch = int(round(np.sqrt(target / r)))
-            if 0 < cw <= W and 0 < ch <= H:
-                x = rng.integers(0, W - cw + 1)
-                y = rng.integers(0, H - ch + 1)
-                return float(x), float(y), float(cw), float(ch)
-        side = min(W, H)
-        return (W - side) / 2.0, (H - side) / 2.0, float(side), float(side)
+        """torchvision RandomResizedCrop-parity sampling — the shared sampler
+        (turboloader._augment) so the fallback matches the C++ / Metal paths
+        exactly (aspect-clamped central crop, not a center square)."""
+        from turboloader._augment import pick_crop
+
+        return pick_crop(W, H, rng, scale=scale, ratio=ratio)
 
     def _flush_clip(self, host, t, W, H, bt709, first, rng, train_aug, scale, ratio, torch):
         dev = host[:t].cuda()  # pinned staging tensor

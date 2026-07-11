@@ -46,3 +46,4 @@ turboloader/_version.py
 # coverage
 .coverage
 htmlcov/
+build_check/

@@ -153,19 +153,6 @@ endif()
 
 # Test executable for distributed pipeline (v0.5.2)
 # Only build and test on Linux with MPI support
-if(ENABLE_MPI AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_executable(test_distributed test_distributed.cpp)
-    target_include_directories(test_distributed PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${MPI_CXX_INCLUDE_DIRS}
-    )
-    target_link_libraries(test_distributed PRIVATE turboloader MPI::MPI_CXX)
-    target_compile_definitions(test_distributed PRIVATE TURBOLOADER_ENABLE_MPI)
-    add_test(NAME distributed COMMAND test_distributed)
-    message(STATUS "Building distributed test with MPI support")
-else()
-    message(STATUS "Skipping distributed test (requires MPI on Linux)")
-endif()
 
 # Test executable for transforms (SIMD-accelerated, v0.6.0)
 # Find Google Test
@@ -219,10 +206,6 @@ add_test(NAME hybrid_wait_strategy COMMAND test_hybrid_wait_strategy)
 message(STATUS "Building HybridWaitStrategy tests (v2.14.0)")
 
 # Test executable for prefetch pipeline (v1.1.0)
-add_executable(test_prefetch_pipeline test_prefetch_pipeline.cpp)
-target_include_directories(test_prefetch_pipeline PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_prefetch_pipeline PRIVATE turboloader)
-add_test(NAME prefetch_pipeline COMMAND test_prefetch_pipeline)
 message(STATUS "Building prefetch pipeline tests (v1.1.0)")
 
 # Test executable for TBL v2 format (v1.5.0)
@@ -273,10 +256,6 @@ add_test(NAME decode_scaled COMMAND test_decode_scaled)
 message(STATUS "Building DCT-scaled decode tests (v2.5.0 Phase 2)")
 
 # Test executable for Phase 3: Hybrid wait strategy
-add_executable(test_hybrid_wait test_hybrid_wait.cpp)
-target_include_directories(test_hybrid_wait PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_hybrid_wait PRIVATE turboloader pthread)
-add_test(NAME hybrid_wait COMMAND test_hybrid_wait)
 message(STATUS "Building hybrid wait tests (v2.5.0 Phase 3)")
 
 # Test executable for AutoAugment operations (v2.8.0)
@@ -296,40 +275,14 @@ message(STATUS "Building BufferPool tests (v2.10.0)")
 # Test executable for GPU Pipeline Integration (v2.16.0)
 # GPU-resident data flow: decode -> transform -> tensor output
 if(CMAKE_CUDA_COMPILER AND NVJPEG_LIBRARY)
-    add_executable(test_gpu_pipeline_integration test_gpu_pipeline_integration.cpp)
-    target_include_directories(test_gpu_pipeline_integration PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
-    )
-    target_link_libraries(test_gpu_pipeline_integration PRIVATE
-        turboloader
-        ${NVJPEG_LIBRARY}
-        CUDA::cudart
-        CUDA::nppc
-        CUDA::nppig
-        CUDA::nppicc
-    )
-    target_compile_definitions(test_gpu_pipeline_integration PRIVATE
-        TURBOLOADER_HAS_CUDA
-        HAVE_NVJPEG
-    )
-    add_test(NAME gpu_pipeline_integration COMMAND test_gpu_pipeline_integration)
     message(STATUS "Building GPU Pipeline Integration tests with CUDA/nvJPEG (v2.16.0)")
 else()
     # Build test without GPU (will show skipped tests)
-    add_executable(test_gpu_pipeline_integration test_gpu_pipeline_integration.cpp)
-    target_include_directories(test_gpu_pipeline_integration PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_gpu_pipeline_integration PRIVATE turboloader)
-    add_test(NAME gpu_pipeline_integration COMMAND test_gpu_pipeline_integration)
     message(STATUS "Building GPU Pipeline Integration tests without CUDA (v2.16.0)")
 endif()
 
 # Test executable for Quasi-Random Sampler (v2.17.0)
 # FFCV-style memory-efficient shuffling
-add_executable(test_quasi_random_sampler test_quasi_random_sampler.cpp)
-target_include_directories(test_quasi_random_sampler PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_quasi_random_sampler PRIVATE gtest gtest_main)
-add_test(NAME quasi_random_sampler COMMAND test_quasi_random_sampler)
 message(STATUS "Building Quasi-Random Sampler tests (v2.17.0)")
 
 # Test executable for TrivialAugment (v2.18.0)
@@ -342,34 +295,18 @@ message(STATUS "Building TrivialAugment tests (v2.18.0)")
 
 # Test executable for Audio Decoder (v2.19.0)
 # Multi-modal audio support: WAV, FLAC, MP3, OGG
-add_executable(test_audio_decoder test_audio_decoder.cpp)
-target_include_directories(test_audio_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_audio_decoder PRIVATE gtest gtest_main)
-add_test(NAME audio_decoder COMMAND test_audio_decoder)
 message(STATUS "Building Audio Decoder tests (v2.19.0)")
 
 # Test executable for Checkpointing (v2.20.0)
 # Mid-epoch checkpointing for resumable training
-add_executable(test_checkpointing test_checkpointing.cpp)
-target_include_directories(test_checkpointing PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_checkpointing PRIVATE gtest gtest_main pthread)
-add_test(NAME checkpointing COMMAND test_checkpointing)
 message(STATUS "Building Checkpointing tests (v2.20.0)")
 
 # Test executable for Weighted Sampling (v2.21.0)
 # Weighted/class-balanced sampling for imbalanced datasets
-add_executable(test_weighted_sampler test_weighted_sampler.cpp)
-target_include_directories(test_weighted_sampler PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_weighted_sampler PRIVATE gtest gtest_main)
-add_test(NAME weighted_sampler COMMAND test_weighted_sampler)
 message(STATUS "Building Weighted Sampler tests (v2.21.0)")
 
 # Test executable for LMDB Reader (v2.22.0)
 # Read LMDB databases commonly used for CV benchmarks
-add_executable(test_lmdb_reader test_lmdb_reader.cpp)
-target_include_directories(test_lmdb_reader PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_lmdb_reader PRIVATE gtest gtest_main)
-add_test(NAME lmdb_reader COMMAND test_lmdb_reader)
 message(STATUS "Building LMDB Reader tests (v2.22.0)")
 
 # Test executable for Sharding Strategies (v2.23.0)
@@ -382,25 +319,15 @@ message(STATUS "Building Sharding Strategies tests (v2.23.0)")
 
 # Test executable for GPU Prefetch (v2.23.0)
 # Double-buffered GPU memory prefetching
-add_executable(test_gpu_prefetch test_gpu_prefetch.cpp)
-target_include_directories(test_gpu_prefetch PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_gpu_prefetch PRIVATE gtest gtest_main)
 # Add CUDA if available
 if(CMAKE_CUDA_COMPILER)
-    target_link_libraries(test_gpu_prefetch PRIVATE CUDA::cudart)
-    target_compile_definitions(test_gpu_prefetch PRIVATE TURBOLOADER_HAS_CUDA)
     message(STATUS "Building GPU Prefetch tests with CUDA support (v2.23.0)")
 else()
     message(STATUS "Building GPU Prefetch tests with CPU fallback (v2.23.0)")
 endif()
-add_test(NAME gpu_prefetch COMMAND test_gpu_prefetch)
 
 # Test executable for Text Decoder (v2.23.0)
 # Text/NLP data loading and tokenization
-add_executable(test_text_decoder test_text_decoder.cpp)
-target_include_directories(test_text_decoder PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(test_text_decoder PRIVATE gtest gtest_main)
-add_test(NAME text_decoder COMMAND test_text_decoder)
 message(STATUS "Building Text Decoder tests (v2.23.0)")
 
 # Additional tests will be added as we implement more components

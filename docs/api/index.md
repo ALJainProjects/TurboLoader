@@ -246,43 +246,26 @@ flip = turboloader.RandomHorizontalFlip(p=0.5)
 print(flip.is_deterministic())  # False
 ```
 
-### `TransformPipeline`
+### Composing transforms
 
-Compose multiple transforms into a pipeline.
-
-**Methods:**
-
-#### `__init__()`
-
-Create empty transform pipeline.
-
-**Example:**
-```python
-import turboloader
-
-pipeline = turboloader.TransformPipeline()
-```
-
-#### `apply(image: np.ndarray) -> np.ndarray`
-
-Apply all transforms in sequence.
-
-**Parameters:**
-- `image` (np.ndarray): Input image (H, W, C) uint8
-
-**Returns:**
-- `np.ndarray`: Transformed image
+There is no `TransformPipeline` class — compose transforms with the pipe
+operator or `Compose`, then pass the result to a loader (or call `.apply()`):
 
 **Example:**
 ```python
 import turboloader
 import numpy as np
 
-pipeline = turboloader.TransformPipeline()
-# Note: Add transforms via C++ or use individual transform.apply()
+pipeline = turboloader.Resize(224, 224) | turboloader.ImageNetNormalize()
+# equivalently: turboloader.Compose([turboloader.Resize(224, 224),
+#                                    turboloader.ImageNetNormalize()])
 
 image = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
 output = pipeline.apply(image)
+
+# or hand it to the loader (fast path fuses Resize+Normalize in C++):
+loader = turboloader.DataLoader("data.tar", output_format="pytorch",
+                                transform=pipeline)
 ```
 
 ## Transform List

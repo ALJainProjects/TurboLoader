@@ -165,7 +165,7 @@ for epoch in range(100):
             img = normalize.apply(img)
 
             images.append(torch.from_numpy(img))
-            labels.append(sample['label'])
+            labels.append(label_of(sample['filename']))  # samples have NO 'label' key — map filenames to labels yourself
 
         # Stack into batch
         batch_images = torch.stack(images)

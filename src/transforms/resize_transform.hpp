@@ -119,6 +119,13 @@ public:
     void set_buffer_pool(bool enable) { use_buffer_pool_ = enable; }
     bool uses_buffer_pool() const { return use_buffer_pool_; }
 
+    // Target geometry getters: exposed to Python so the DataLoader can (a) infer
+    // image_size from a Resize in the pipeline and (b) REFUSE a conflicting
+    // image_size instead of silently ignoring the Resize (previously the fused
+    // path skipped Resize steps with no way to detect the mismatch).
+    int target_width() const { return target_width_; }
+    int target_height() const { return target_height_; }
+
     std::unique_ptr<ImageData> apply(const ImageData& input) override {
         if (input.width == target_width_ && input.height == target_height_) {
             // No resize needed, return copy

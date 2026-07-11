@@ -108,10 +108,24 @@ def test_close_is_deterministic_and_idempotent(tar20):
 
 
 def test_context_manager_closes(tar20):
+    """Regression: DataLoader once had TWO __enter__/__exit__ pairs — the later,
+    stop()-based pair shadowed the close()-based one and was a no-op on the fast
+    path, so `with DataLoader(...)` never released the prefetch producer. The
+    context manager must actually wind threads down, not merely not crash."""
+    gc.collect()
+    base_threads = threading.active_count()
     with _make(tar20) as dl:
         images, meta = dl.next_batch()
         assert images.shape[1:] == (3, 32, 32)
-    assert _settle(lambda: True)  # __exit__ ran without error; producers wind down
+        # producer thread is alive INSIDE the with-block (prefetch_batches=4)
+    assert _settle(lambda: threading.active_count() <= base_threads), (
+        f"context manager leaked producers: {threading.active_count()} threads "
+        f"(base {base_threads})"
+    )
+    # exiting must ALSO have gone through close(), not a stale stop() alias:
+    # the loader remains usable afterwards (close() contract)
+    n = sum(1 for _ in iter(dl))
+    assert n == 5  # 20 imgs / bs 4
 
 
 def test_abandoned_pinned_ring_releases(tar20):

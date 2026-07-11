@@ -2,6 +2,29 @@
 
 Get up and running with TurboLoader in 5 minutes.
 
+## The fast path (start here)
+
+The loader you want for training is the array fast path — one contiguous,
+normalized tensor per batch, assembled in parallel C++:
+
+```python
+import turboloader
+
+loader = turboloader.DataLoader(
+    "data.tar",                    # TAR archive of JPEGs
+    batch_size=64,
+    image_size=224,                # fixed size => contiguous batches
+    output_format="pytorch",       # (N, 3, H, W) float32, CHW
+    transform=turboloader.ImageNetNormalize(),
+    shuffle=True,
+)
+for images, meta in loader:        # images: numpy (N,3,H,W); meta["indices"] aligns labels
+    ...
+```
+
+The dict examples below are the flexible per-sample path — several times slower;
+use them for inspection or irregular data, not the training loop.
+
 ## Installation
 
 ```bash
@@ -47,7 +70,9 @@ for batch in loader:
     # Access first sample
     sample = batch[0]
     image = sample['image']  # NumPy array (H, W, C)
-    label = sample.get('label', 0)
+    # Samples carry NO 'label' key (a TAR is a flat archive): derive labels from
+    # sample['filename'] or align an external label array via sample['index'].
+    label = int(sample['index'])  # placeholder: replace with your label source
 
     print(f"Image shape: {image.shape}")
     print(f"Label: {label}")
@@ -156,7 +181,7 @@ for epoch in range(10):
         for sample in batch:
             img = transforms.apply(sample['image'])
             images.append(torch.from_numpy(img).float())
-            labels.append(sample.get('label', 0))
+            labels.append(label_of(sample['filename']))  # labels come from YOUR mapping — samples have no 'label' key
 
         images = torch.stack(images)
         labels = torch.tensor(labels, dtype=torch.long)
@@ -213,7 +238,7 @@ def data_generator():
         for sample in batch:
             img = transforms.apply(sample['image'])
             images.append(tf.convert_to_tensor(img, dtype=tf.float32))
-            labels.append(sample.get('label', 0))
+            labels.append(label_of(sample['filename']))  # labels come from YOUR mapping — samples have no 'label' key
 
         yield tf.stack(images), tf.constant(labels)
 

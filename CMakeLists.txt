@@ -35,7 +35,6 @@ option(TURBOLOADER_BUILD_PYTHON "Build Python bindings" ON)
 option(TURBOLOADER_WITH_CUDA "Build with CUDA support (GPU decode)" OFF)
 option(TURBOLOADER_WITH_OPENCV "Build with OpenCV (video support)" OFF)
 option(ENABLE_CUDA "Enable CUDA support for multi-GPU pipeline" OFF)
-option(ENABLE_MPI "Enable MPI support for distributed training" OFF)
 
 # Find required dependencies
 find_package(Threads REQUIRED)
@@ -96,10 +95,6 @@ if(TURBOLOADER_WITH_CUDA)
 endif()
 
 # MPI support for distributed training (optional)
-if(ENABLE_MPI)
-    find_package(MPI REQUIRED)
-    message(STATUS "Building with MPI support")
-endif()
 
 # Additional CUDA for multi-GPU pipeline (optional)
 if(ENABLE_CUDA)
@@ -121,11 +116,6 @@ if(ENABLE_CUDA)
 endif()
 
 # Add distributed pipeline if MPI enabled
-if(ENABLE_MPI)
-    list(APPEND TURBOLOADER_SOURCES
-        src/distributed/distributed_pipeline.cpp
-    )
-endif()
 
 # Create library (header-only if no sources, otherwise normal library)
 if(TURBOLOADER_SOURCES)
@@ -217,21 +207,12 @@ if(ENABLE_CUDA)
 endif()
 
 # MPI support
-if(ENABLE_MPI)
-    target_link_libraries(turboloader ${LINK_SCOPE} MPI::MPI_CXX)
-    target_include_directories(turboloader ${LINK_SCOPE} ${MPI_CXX_INCLUDE_DIRS})
-    target_compile_definitions(turboloader ${LINK_SCOPE} TURBOLOADER_ENABLE_MPI)
-endif()
 
 # Enable CURL support
 target_compile_definitions(turboloader ${LINK_SCOPE} HAVE_CURL)
 
 # Command-line tools (v1.5.0)
 # TAR to TBL v2 converter tool (with LZ4 compression)
-add_executable(tar_to_tbl tools/tar_to_tbl_v2.cpp)
-target_include_directories(tar_to_tbl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${LZ4_INCLUDE_DIR})
-target_link_libraries(tar_to_tbl PRIVATE turboloader ${LZ4_LIBRARY})
-install(TARGETS tar_to_tbl DESTINATION bin)
 
 # Tests
 if(TURBOLOADER_BUILD_TESTS)

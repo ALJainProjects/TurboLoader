@@ -84,11 +84,16 @@ class CudaImageLoader:
         gpu_output=False,
         prefetch=0,
         nvimgcodec_slots=3,
+        return_indices=False,
     ):
         import turboloader as t
 
         if not getattr(t, "cuda_available", lambda: False)():
             raise RuntimeError("CudaImageLoader needs a CUDA build; cuda_available() is False.")
+        # return_indices=True yields (batch, indices) — REQUIRED for supervised
+        # training: with nvimgcodec slots > 1 batches complete OUT OF ORDER, so
+        # labels can only be aligned via the returned source indices.
+        self.return_indices = bool(return_indices)
         self._t = t
         gpu_decode = decode == "gpu" and hasattr(t, "cuda_decode_jpeg")
         self._decode = t.cuda_decode_jpeg if gpu_decode else t.decode_jpeg
@@ -210,7 +215,8 @@ class CudaImageLoader:
             def _reader():
                 try:
                     for start in range(0, end, bs):
-                        bytes_q.put(_read_batch(idx[start : start + bs]))
+                        bidx = idx[start : start + bs]
+                        bytes_q.put((bidx, _read_batch(bidx)))
                 finally:
                     for _ in range(K):
                         bytes_q.put(read_done)
@@ -218,11 +224,12 @@ class CudaImageLoader:
             def _worker(slot):
                 try:
                     while True:
-                        jb = bytes_q.get()
-                        if jb is read_done:
+                        item = bytes_q.get()
+                        if item is read_done:
                             break
+                        bidx, jb = item
                         ptr = pipe(jb, dh, dw, mean=self.mean, std=self.std, slot=slot)
-                        out_q.put(_CudaArray(ptr, (len(jb), 3, dh, dw)))
+                        out_q.put((_CudaArray(ptr, (len(jb), 3, dh, dw)), bidx))
                 finally:
                     out_q.put(work_done)
 
@@ -237,7 +244,7 @@ class CudaImageLoader:
                 if item is work_done:
                     finished += 1
                     continue
-                yield item
+                yield item if self.return_indices else item[0]
             rt.join(timeout=0.5)
             for w in workers:
                 w.join(timeout=0.5)
@@ -287,17 +294,19 @@ class CudaImageLoader:
                 def _reader():
                     try:
                         for start in range(0, end, bs):
-                            bytes_q.put(_read_batch(idx[start : start + bs]))
+                            bidx = idx[start : start + bs]
+                            bytes_q.put((bidx, _read_batch(bidx)))
                     finally:
                         bytes_q.put(sentinel)
 
                 def _transformer():
                     try:
                         while True:
-                            jpegs = bytes_q.get()
-                            if jpegs is sentinel:
+                            item = bytes_q.get()
+                            if item is sentinel:
                                 break
-                            out_q.put(_decode_transform(jpegs))
+                            bidx, jpegs = item
+                            out_q.put((_decode_transform(jpegs), bidx))
                     finally:
                         out_q.put(sentinel)
 
@@ -309,12 +318,14 @@ class CudaImageLoader:
                     item = out_q.get()
                     if item is sentinel:
                         break
-                    yield item
+                    yield item if self.return_indices else item[0]
                 tr.join(timeout=0.5)
                 tt.join(timeout=0.5)
             else:
                 for start in range(0, end, bs):
-                    yield _decode_transform(_read_batch(idx[start : start + bs]))
+                    bidx = idx[start : start + bs]
+                    arr = _decode_transform(_read_batch(bidx))
+                    yield (arr, bidx) if self.return_indices else arr
             return
 
         gpu_out = (
@@ -333,7 +344,7 @@ class CudaImageLoader:
                         bidx = idx[start : start + bs]
                         jpegs = [_read(i) for i in bidx]
                         ptr = gpu_out(jpegs, dh, dw, mean=self.mean, std=self.std)
-                        q.put(_CudaArray(ptr, (len(jpegs), 3, dh, dw)))
+                        q.put((_CudaArray(ptr, (len(jpegs), 3, dh, dw)), bidx))
                 finally:
                     q.put(sentinel)
 
@@ -343,7 +354,7 @@ class CudaImageLoader:
                 item = q.get()
                 if item is sentinel:
                     break
-                yield item
+                yield item if self.return_indices else item[0]
             th.join(timeout=0.5)
         elif fused is not None:
             # Fused path: the C++ op decodes the whole batch on the GPU, so Python only
@@ -356,9 +367,10 @@ class CudaImageLoader:
                     # GPU-resident output: no D2H; wrap the device pointer (consume before
                     # the next batch — the device pool is reused).
                     ptr = gpu_out(jpegs, dh, dw, mean=self.mean, std=self.std)
-                    yield _CudaArray(ptr, (len(jpegs), 3, dh, dw))
+                    arr = _CudaArray(ptr, (len(jpegs), 3, dh, dw))
                 else:
-                    yield fused(jpegs, dh, dw, mean=self.mean, std=self.std)
+                    arr = fused(jpegs, dh, dw, mean=self.mean, std=self.std)
+                yield (arr, batch_idx) if self.return_indices else arr
         else:
             # v1 path: decode per image; the thread pool parallelizes the GIL-releasing
             # nvJPEG/libjpeg decode calls.
@@ -366,7 +378,8 @@ class CudaImageLoader:
                 for start in range(0, end, bs):
                     batch_idx = idx[start : start + bs]
                     imgs = list(ex.map(_load, batch_idx))
-                    yield self._t.cuda_resize_normalize(imgs, dh, dw, mean=self.mean, std=self.std)
+                    arr = self._t.cuda_resize_normalize(imgs, dh, dw, mean=self.mean, std=self.std)
+                    yield (arr, batch_idx) if self.return_indices else arr
 
 
 class CudaResidentLoader:
