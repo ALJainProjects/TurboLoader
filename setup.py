@@ -657,6 +657,12 @@ class BuildExt(build_ext):
             if ct == "unix":
                 # macOS-specific flags
                 if system == "darwin":
+                    # Leave Mach-O header padding for delocate's install-name rewrites
+                    # during wheel repair. Without this, adding load commands (the video
+                    # path links 3 extra frameworks) exhausts the header slack and
+                    # cibuildwheel fails with "larger updated load commands do not fit"
+                    # (broke the v2.34.0 macOS wheels).
+                    link_opts += ["-Wl,-headerpad_max_install_names"]
                     # Respect MACOSX_DEPLOYMENT_TARGET when the build sets it
                     # (cibuildwheel does, matched to the runner's Homebrew dylibs).
                     # Only fall back to an explicit minimum otherwise, and never force

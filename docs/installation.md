@@ -174,9 +174,9 @@ work without PyTorch installed.
 ### GPU image loader (NVIDIA CUDA) — build from source
 
 > **Prebuilt CUDA wheel (no compile):** Linux x86_64 / Python 3.10 / CUDA 13.x runtime —
-> attached to the [GitHub Release](https://github.com/ALJainProjects/TurboLoader/releases/tag/v2.33.0):
+> attached to the [GitHub Release](https://github.com/ALJainProjects/TurboLoader/releases/tag/v2.34.1):
 > ```bash
-> pip install https://github.com/ALJainProjects/TurboLoader/releases/download/v2.33.0/turboloader-2.33.0+cu13-cp310-cp310-linux_x86_64.whl
+> pip install https://github.com/ALJainProjects/TurboLoader/releases/download/v2.34.1/turboloader-2.34.1+cu13-cp310-cp310-linux_x86_64.whl
 > pip install nvidia-nvimgcodec-cu12
 > ```
 > Other Pythons/CUDA versions: build from source below.
