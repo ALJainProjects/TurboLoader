@@ -154,41 +154,68 @@ def bench_turboloader(video, size, passes, batch=32):
     raise ImportError("no TurboLoader GPU video path on this machine")
 
 
+BENCHES = {
+    "pyav": ("PyAV (reformat/swscale)", bench_pyav),
+    "opencv": ("OpenCV (VideoCapture)", bench_opencv),
+    "decord": ("decord (decode-time resize)", bench_decord),
+    "torchcodec": ("torchcodec (get_frames_in_range)", bench_torchcodec),
+    "turboloader": ("TurboLoader", bench_turboloader),
+}
+
+
 if __name__ == "__main__":
+    import subprocess
+    import sys
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True)
     ap.add_argument("--image-size", type=int, default=224)
     ap.add_argument("--passes", type=int, default=3)
+    ap.add_argument("--only", choices=sorted(BENCHES), help="run one library (internal)")
     args = ap.parse_args()
 
+    if args.only:  # child mode: run one library, print one machine-readable line
+        name, fn = BENCHES[args.only]
+        r = fn(args.video, args.image_size, args.passes)
+        if isinstance(r[0], str):  # turboloader returns its own label
+            name, r = r
+        med, n = r
+        print(f"RESULT\t{name}\t{n / med:.1f}")
+        sys.exit(0)
+
+    # Orchestrator: one SUBPROCESS per library. Isolation matters — some of these
+    # libraries cannot coexist in one process (observed: decord's teardown
+    # segfaults a later CUDA user in the same interpreter).
     results = []
-    for name, fn in [
-        ("PyAV (reformat/swscale)", lambda: bench_pyav(args.video, args.image_size, args.passes)),
-        ("OpenCV (VideoCapture)", lambda: bench_opencv(args.video, args.image_size, args.passes)),
-        (
-            "decord (decode-time resize)",
-            lambda: bench_decord(args.video, args.image_size, args.passes),
-        ),
-        (
-            "torchcodec (get_frames_in_range)",
-            lambda: bench_torchcodec(args.video, args.image_size, args.passes),
-        ),
-        ("TurboLoader", lambda: bench_turboloader(args.video, args.image_size, args.passes)),
-    ]:
-        try:
-            r = fn()
-            if isinstance(r[0], str):  # turboloader returns its own label
-                name, r = r
-            med, n = r
-            results.append((name, n / med))
-            print(f"{name:44s} {n / med:9,.0f} frames/s")
-        except ImportError as e:
-            print(f"{name:44s} unavailable ({str(e)[:50]})")
-        except Exception as e:
-            print(f"{name:44s} FAILED: {str(e)[:70]}")
+    for key in ("pyav", "opencv", "decord", "torchcodec", "turboloader"):
+        name = BENCHES[key][0]
+        proc = subprocess.run(
+            [
+                sys.executable,
+                __file__,
+                "--video",
+                args.video,
+                "--image-size",
+                str(args.image_size),
+                "--passes",
+                str(args.passes),
+                "--only",
+                key,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        line = next((l for l in proc.stdout.splitlines() if l.startswith("RESULT\t")), None)
+        if line:
+            _, name, rate = line.split("\t")
+            results.append((name, float(rate)))
+            print(f"{name:44s} {float(rate):9,.0f} frames/s")
+        else:
+            err = (proc.stderr or proc.stdout).strip().splitlines()
+            print(f"{name:44s} unavailable ({err[-1][:60] if err else 'no output'})")
 
     if results:
-        best_std = max(r for n, r in results if not n.startswith("TurboLoader"))
+        std = [r for n, r in results if not n.startswith("TurboLoader")]
         ours = [r for n, r in results if n.startswith("TurboLoader")]
-        if ours:
-            print(f"\nTurboLoader vs best industry standard: {ours[0] / best_std:.2f}x")
+        if std and ours:
+            print(f"\nTurboLoader vs best industry standard: {ours[0] / max(std):.2f}x")
