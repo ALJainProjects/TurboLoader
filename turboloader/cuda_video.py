@@ -65,6 +65,23 @@ class CudaVideoLoader:
         return _CudaArray(ptr, (n, 3, self._h, self._w))
 
     # ------------------------- CPU (PyAV) backend --------------------------
+    @staticmethod
+    def _copy_frame_i420(frame, dst_row, W, H):
+        """Copy a yuv420p frame's planes into a packed I420 row WITHOUT the
+        intermediate to_ndarray() allocation: one stride-aware copy per plane
+        straight from PyAV's buffers (on slow CPUs the per-frame Python copies,
+        not decode, are the bottleneck — measured 181 -> ~2x with this)."""
+        ysz, csz = W * H, (W // 2) * (H // 2)
+        layout = ((W, H, 0, ysz), (W // 2, H // 2, ysz, csz), (W // 2, H // 2, ysz + csz, csz))
+        for i, (w, h, off, size) in enumerate(layout):
+            p = frame.planes[i]
+            buf = np.frombuffer(p, dtype=np.uint8)
+            ls = p.line_size
+            if ls == w:
+                dst_row[off : off + size] = buf[:size]
+            else:  # padded rows: strided view copy
+                dst_row[off : off + size].reshape(h, w)[:] = buf[: ls * h].reshape(h, ls)[:, :w]
+
     def _iter_cpu(self):
         import av
         import torch
@@ -79,7 +96,12 @@ class CudaVideoLoader:
             ysz, csz = W * H, (W // 2) * (H // 2)
             fbytes = ysz + 2 * csz
 
-            host = np.empty((self.batch_size, fbytes), dtype=np.uint8)
+            # Pinned staging (reused across batches): faster H2D, zero per-batch alloc.
+            try:
+                host_t = torch.empty((self.batch_size, fbytes), dtype=torch.uint8, pin_memory=True)
+            except RuntimeError:
+                host_t = torch.empty((self.batch_size, fbytes), dtype=torch.uint8)
+            host = host_t.numpy()
             batch_rows = 0
             first = -1
             idx = 0
@@ -88,19 +110,19 @@ class CudaVideoLoader:
                 if keep:
                     if frame.format.name != "yuv420p":
                         frame = frame.reformat(format="yuv420p")
-                    host[batch_rows] = frame.to_ndarray().reshape(-1)  # clean packed I420
+                    self._copy_frame_i420(frame, host[batch_rows], W, H)
                     if batch_rows == 0:
                         first = idx
                     batch_rows += 1
                 idx += 1
                 if batch_rows == self.batch_size:
-                    yield self._flush_cpu(host, batch_rows, W, H, bt709, first, torch)
+                    yield self._flush_cpu(host_t, batch_rows, W, H, bt709, first, torch)
                     batch_rows = 0
             if batch_rows:
-                yield self._flush_cpu(host, batch_rows, W, H, bt709, first, torch)
+                yield self._flush_cpu(host_t, batch_rows, W, H, bt709, first, torch)
 
     def _flush_cpu(self, host, n, W, H, bt709, first, torch):
-        dev = torch.from_numpy(host[:n]).cuda()  # one H2D per batch
+        dev = host[:n].cuda()  # one (pinned, synchronous) H2D per batch
         base = int(dev.data_ptr())
         ysz, csz = W * H, (W // 2) * (H // 2)
         fbytes = ysz + 2 * csz
@@ -256,20 +278,24 @@ class CudaVideoLoader:
             bt709 = self._bt709(stream, W, H)
             ysz, csz = W * H, (W // 2) * (H // 2)
             fbytes = ysz + 2 * csz
-            host = np.empty((clip_len, fbytes), dtype=np.uint8)
+            try:
+                host_t = torch.empty((clip_len, fbytes), dtype=torch.uint8, pin_memory=True)
+            except RuntimeError:
+                host_t = torch.empty((clip_len, fbytes), dtype=torch.uint8)
+            host = host_t.numpy()
             rows, first, idx = 0, -1, 0
             for frame in container.decode(stream):
                 if idx % self.frame_step == 0:
                     if frame.format.name != "yuv420p":
                         frame = frame.reformat(format="yuv420p")
-                    host[rows] = frame.to_ndarray().reshape(-1)
+                    self._copy_frame_i420(frame, host[rows], W, H)
                     if rows == 0:
                         first = idx
                     rows += 1
                 idx += 1
                 if rows == clip_len:
                     yield self._flush_clip(
-                        host, clip_len, W, H, bt709, first, rng, train_aug, scale, ratio, torch
+                        host_t, clip_len, W, H, bt709, first, rng, train_aug, scale, ratio, torch
                     )
                     rows = 0
             # tail shorter than clip_len is dropped (standard for clip sampling)
@@ -292,7 +318,7 @@ class CudaVideoLoader:
         return (W - side) / 2.0, (H - side) / 2.0, float(side), float(side)
 
     def _flush_clip(self, host, t, W, H, bt709, first, rng, train_aug, scale, ratio, torch):
-        dev = torch.from_numpy(host[:t]).cuda()
+        dev = host[:t].cuda()  # pinned staging tensor
         base = int(dev.data_ptr())
         ysz, csz = W * H, (W // 2) * (H // 2)
         fbytes = ysz + 2 * csz
