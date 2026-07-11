@@ -28,6 +28,7 @@
 #include "../decode/jpeg_decoder.hpp"  // CPU JPEG decode primitive (decode_jpeg)
 #ifdef TURBOLOADER_METAL
 #include "../metal/metal_transforms.hpp"  // Apple GPU transform path (macOS arm64)
+#include "../metal/metal_video.hpp"       // VideoToolbox decode -> fused NV12 Metal kernel
 #endif
 #ifdef TURBOLOADER_CUDA_TRANSFORMS
 #include "../cuda/cuda_transforms.hpp"  // NVIDIA GPU transform path (validated on 3090 + Orins)
@@ -1163,6 +1164,9 @@ PYBIND11_MODULE(_turboloader, m) {
           "True if the Metal GPU transform path is available (compiled in AND a device present).");
     m.def("metal_device_name", []() { return std::string(turboloader::metal::device_name()); },
           "Name of the Metal GPU device (e.g. 'Apple M4 Max'), or '' if unavailable.");
+    m.def("metal_allocated_bytes",
+          []() { return turboloader::metal::device_allocated_bytes(); },
+          "Bytes currently allocated on the Metal device by this process (leak checks).");
     m.def(
         "metal_resize_normalize",
         [](py::list images, int dst_h, int dst_w, std::array<float, 3> mean,
@@ -1413,6 +1417,81 @@ PYBIND11_MODULE(_turboloader, m) {
         "valid until the next gather on this handle.");
     m.def("metal_resident_bytes_destroy", &turboloader::metal::resident_bytes_destroy,
           py::arg("handle"), "Free a resident byte store (invalidates its views).");
+
+    // ---- Video: VideoToolbox hardware decode -> fused NV12 Metal kernel ----
+    m.def("metal_video_available", []() { return turboloader::metal_video::available(); },
+          "True if the Metal video path (AVFoundation/VideoToolbox) is available.");
+    m.def(
+        "metal_video_open",
+        [](const std::string& path, int frame_step, size_t max_batch, int dst_h, int dst_w) {
+            int h = turboloader::metal_video::open_video(path.c_str(), frame_step, max_batch,
+                                                         dst_h, dst_w);
+            if (h < 0)
+                throw std::runtime_error("metal_video_open failed (missing file, no video "
+                                         "track, or Metal unavailable): " + path);
+            return h;
+        },
+        py::arg("path"), py::arg("frame_step") = 1, py::arg("max_batch") = 32,
+        py::arg("dst_h") = 224, py::arg("dst_w") = 224,
+        "Open a video for sequential hardware-accelerated decode. Returns a handle.");
+    m.def(
+        "metal_video_info",
+        [](int handle) {
+            py::dict d;
+            d["frame_count"] = turboloader::metal_video::frame_count(handle);
+            d["src_width"] = turboloader::metal_video::src_width(handle);
+            d["src_height"] = turboloader::metal_video::src_height(handle);
+            d["dst_width"] = turboloader::metal_video::dst_width(handle);
+            d["dst_height"] = turboloader::metal_video::dst_height(handle);
+            d["fps"] = turboloader::metal_video::fps(handle);
+            return d;
+        },
+        py::arg("handle"), "Source geometry / rate / best-effort kept-frame count.");
+    m.def(
+        "metal_video_next_batch",
+        [](int handle, size_t batch, int dst_h, int dst_w, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> py::object {
+            // The output buffer's real geometry is fixed at open time; shaping the
+            // zero-copy view from unchecked caller dims would let pure Python mint
+            // an out-of-bounds array. Validate instead of trusting.
+            if (dst_h != turboloader::metal_video::dst_height(handle) ||
+                dst_w != turboloader::metal_video::dst_width(handle))
+                throw std::runtime_error(
+                    "metal_video_next_batch: dst_h/dst_w must match the dimensions "
+                    "this handle was opened with");
+            const float* out = nullptr;
+            long first = -1;
+            size_t n;
+            {
+                py::gil_scoped_release rel;
+                n = turboloader::metal_video::next_batch(handle, batch, mean.data(),
+                                                         std_.data(), &out, &first);
+            }
+            if (n == 0) {
+                if (turboloader::metal_video::has_failed(handle))
+                    throw std::runtime_error(
+                        "metal_video_next_batch: decode failed mid-stream (reader/GPU "
+                        "error or mid-stream geometry change) — not a clean end of "
+                        "video");
+                return py::none();
+            }
+            // Zero-copy view of the double-buffered output: valid until the NEXT
+            // next_batch on this handle (DALI-style lifetime).
+            auto arr = py::array_t<float>({(py::ssize_t)n, (py::ssize_t)3, (py::ssize_t)dst_h,
+                                           (py::ssize_t)dst_w},
+                                          out, py::capsule(out, [](void*) {}));
+            py::dict meta;
+            meta["first_frame_index"] = first;
+            meta["batch_size"] = n;
+            return py::make_tuple(std::move(arr), meta);
+        },
+        py::arg("handle"), py::arg("batch"), py::arg("dst_h"), py::arg("dst_w"),
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "Decode+convert+resize+normalize the next batch: ((n,3,H,W) float32 view, meta), "
+        "or None at end of stream. View valid until the next call on this handle.");
+    m.def("metal_video_close", &turboloader::metal_video::close_video, py::arg("handle"),
+          "Close a video handle (invalidates its views).");
 #else
     m.def("metal_available", []() { return false; },
           "True if the Metal GPU transform path is available. Not compiled in this build.");

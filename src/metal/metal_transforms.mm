@@ -270,6 +270,11 @@ const char* device_name() {
     return g_ok ? g_name.c_str() : "";
 }
 
+unsigned long long device_allocated_bytes() {
+    init_once();
+    return g_ok ? (unsigned long long)g_dev.currentAllocatedSize : 0ull;
+}
+
 bool resize_normalize_batch(const std::vector<ImageRef>& imgs, int dst_h, int dst_w,
                             const float mean[3], const float std_[3], float* out) {
     init_once();

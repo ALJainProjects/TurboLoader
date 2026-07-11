@@ -419,6 +419,10 @@
                             <td><strong>757k produced / 433k consumed img/s</strong></td><td>numpy resident ~3.7k</td><td>Apple M4 Max</td>
                         </tr>
                         <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">Video: 1080p H.264 → 224px training batches (hardware decode)</td>
+                            <td><strong>2,544 frames/s (4.8×)</strong></td><td>PyAV/swscale 534; PyAV+PIL 166</td><td>Apple M4 Max</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
                             <td style="padding:8px;">End-to-end ResNet-18 training (median epoch)</td>
                             <td><strong>4.37s (1.17×)</strong></td><td>PyTorch recipe 5.11s; pure-GPU floor 3.81s</td><td>RTX 3090</td>
                         </tr>

@@ -2436,6 +2436,12 @@ try:
 
         __all__ += ["metal_available", "metal_device_name"]
         try:
+            from _turboloader import metal_allocated_bytes
+
+            __all__ += ["metal_allocated_bytes"]
+        except ImportError:
+            pass
+        try:
             from _turboloader import (
                 metal_resize_normalize,
                 metal_crop_resize_normalize,
@@ -2449,6 +2455,11 @@ try:
                 metal_resident_bytes_view,
                 metal_resident_bytes_gather,
                 metal_resident_bytes_destroy,
+                metal_video_available,
+                metal_video_open,
+                metal_video_info,
+                metal_video_next_batch,
+                metal_video_close,
             )
 
             __all__ += [
@@ -2464,6 +2475,11 @@ try:
                 "metal_resident_bytes_view",
                 "metal_resident_bytes_gather",
                 "metal_resident_bytes_destroy",
+                "metal_video_available",
+                "metal_video_open",
+                "metal_video_info",
+                "metal_video_next_batch",
+                "metal_video_close",
             ]
         except ImportError:
             pass
@@ -2568,9 +2584,15 @@ try:
             MetalResidentLoader,
             MetalResidentArrays,
             MetalTokenGather,
+            MetalVideoLoader,
         )
 
-        __all__ += ["MetalResidentLoader", "MetalResidentArrays", "MetalTokenGather"]
+        __all__ += [
+            "MetalResidentLoader",
+            "MetalResidentArrays",
+            "MetalTokenGather",
+            "MetalVideoLoader",
+        ]
     except Exception:
         pass
 

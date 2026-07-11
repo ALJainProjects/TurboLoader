@@ -371,7 +371,13 @@ On **Apple Silicon** the resident trick is even better than on NVIDIA: memory is
 `MetalResidentLoader` serves each epoch as one fused gather+shuffle+normalize kernel launch per
 batch; `MetalResidentArrays` does the same for any-dtype rows (embedding tables: ~5× numpy
 fancy-indexing). Honest null result included: `MetalTokenGather` ties the CPU memmap path
-(0.87–1.08×) — keep using `TokenDataLoader` for tokens. Numbers, methodology, and caveats:
+(0.87–1.08×) — keep using `TokenDataLoader` for tokens.
+
+**Video** (macOS arm64, in the pip wheel — no FFmpeg needed): `MetalVideoLoader` drives
+VideoToolbox **hardware** H.264/HEVC decode into a fused NV12→RGB+resize+normalize Metal
+kernel: real 1080p → 224px training batches at **~2,540 frames/s** on an M4 Max — **4.8×**
+the strongest PyAV/swscale CPU pipeline, 15× the common PyAV+PIL pattern. Output verified
+against raw-YUV numpy references. Numbers, methodology, and caveats:
 [benchmarks/METAL_RESIDENT_RESULTS.md](benchmarks/METAL_RESIDENT_RESULTS.md).
 
 `CudaResidentLoader` uses a custom single-launch normalize kernel + fused gather (shuffles at

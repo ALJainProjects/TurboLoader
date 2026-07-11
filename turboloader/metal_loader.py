@@ -17,7 +17,12 @@ Datasets must fit in RAM (unified memory) — for Imagenette-160 that is ~727 MB
 
 import numpy as np
 
-__all__ = ["MetalResidentLoader", "MetalTokenGather", "MetalResidentArrays"]
+__all__ = [
+    "MetalResidentLoader",
+    "MetalTokenGather",
+    "MetalResidentArrays",
+    "MetalVideoLoader",
+]
 
 
 def _require_metal():
@@ -187,6 +192,104 @@ class MetalResidentArrays:
             self.close()
         except Exception:
             pass
+
+
+class MetalVideoLoader:
+    """Hardware-decoded video batches on Apple Silicon.
+
+    AVFoundation/VideoToolbox decodes H.264/HEVC on the media engine (no FFmpeg,
+    no external deps — ships in the ordinary macOS wheel); a fused Metal kernel
+    converts NV12 -> RGB (BT.709 for HD, BT.601 for SD), bilinear-resizes and
+    normalizes into training-ready ``(B, 3, H, W)`` float32 batches.
+
+    Iteration is sequential over the stream (``frame_step`` keeps every Nth
+    frame). Yielded batches are zero-copy views valid until the NEXT batch —
+    the same DALI-style lifetime as the resident loaders; ``.copy()`` to keep.
+    """
+
+    def __init__(
+        self,
+        path,
+        image_size=224,
+        batch_size=32,
+        *,
+        frame_step=1,
+        mean=(0.485, 0.456, 0.406),
+        std=(0.229, 0.224, 0.225),
+        return_indices=False,
+    ):
+        t = _require_metal()
+        if not getattr(t, "metal_video_available", lambda: False)():
+            raise RuntimeError("Metal video path unavailable on this machine/build.")
+        h, w = (image_size, image_size) if isinstance(image_size, int) else image_size
+        self._t = t
+        self._h, self._w = int(h), int(w)
+        self.path = str(path)
+        self.batch_size = int(batch_size)
+        self.frame_step = int(frame_step)
+        self.mean = list(mean)
+        self.std = list(std)
+        self.return_indices = bool(return_indices)
+        self._handle = t.metal_video_open(
+            self.path, self.frame_step, self.batch_size, self._h, self._w
+        )
+        info = t.metal_video_info(self._handle)
+        self.frame_count = int(info["frame_count"])  # best-effort; -1 if unknown
+        self.src_width = int(info["src_width"])
+        self.src_height = int(info["src_height"])
+        self.fps = float(info["fps"])
+
+    def __len__(self):
+        if self.frame_count < 0:
+            raise TypeError("frame count unknown for this container")
+        return -(-self.frame_count // self.batch_size)
+
+    def __iter__(self):
+        """One pass over the stream. Re-iterating reopens the video from frame 0."""
+        if self._handle is None:
+            raise RuntimeError("loader is closed")
+        first_pass = not getattr(self, "_iterated", False)
+        self._iterated = True
+        if not first_pass:  # sequential reader is one-shot: reopen for a new epoch
+            # Null the handle BEFORE reopening: if open raises (file deleted between
+            # epochs), the loader must be cleanly closed, not left holding a freed
+            # handle that a later close() would double-free.
+            old, self._handle = self._handle, None
+            self._t.metal_video_close(old)
+            self._handle = self._t.metal_video_open(
+                self.path, self.frame_step, self.batch_size, self._h, self._w
+            )
+        while True:
+            r = self._t.metal_video_next_batch(
+                self._handle, self.batch_size, self._h, self._w, mean=self.mean, std=self.std
+            )
+            if r is None:
+                return
+            batch, meta = r
+            if self.return_indices:
+                first = int(meta["first_frame_index"])
+                idx = np.arange(first, first + batch.shape[0] * self.frame_step, self.frame_step)
+                yield batch, idx
+            else:
+                yield batch
+
+    def close(self):
+        h, self._handle = getattr(self, "_handle", None), None
+        if h is not None:
+            self._t.metal_video_close(h)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 class MetalTokenGather:

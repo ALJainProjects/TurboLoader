@@ -419,6 +419,7 @@ def get_extensions():
     ):
         extra_sources.append("src/metal/metal_transforms.mm")
         extra_sources.append("src/metal/metal_decode.mm")  # hybrid GPU JPEG decoder
+        extra_sources.append("src/metal/metal_video.mm")  # VideoToolbox decode -> Metal
         extra_macros.append(("TURBOLOADER_METAL", "1"))
 
     # Experimental CUDA / nvJPEG GPU decode path. UNVALIDATED in this repo's CI — there is
@@ -531,6 +532,28 @@ class BuildExt(build_ext):
         # by file extension.
         if system == "darwin" and ".mm" not in self.compiler.src_extensions:
             self.compiler.src_extensions.append(".mm")
+
+        # Objective-C++ sources MUST build under ARC: the Metal units store id<MTLBuffer>
+        # / AVAssetReader members inside registry structs and rely on `delete` running
+        # ObjC release semantics. Under clang's default (MRC) those members are trivially
+        # destructible raw pointers — every registry close() would leak its buffers
+        # (~150 MB per 1080p video open/close; found by adversarial review, 2026-07-11).
+        # Applied per-file so the plain C++ TUs are untouched. TURBOLOADER_OBJC_ARC=0
+        # exists ONLY so the leak regression test can prove it fails without ARC.
+        if (
+            system == "darwin"
+            and os.environ.get("TURBOLOADER_OBJC_ARC", "1") == "1"
+            and not getattr(self.compiler, "_tbl_arc_wrapped", False)
+        ):
+            _orig_compile = self.compiler._compile
+
+            def _compile_with_arc(obj, src, ext, cc_args, extra_postargs, pp_opts):
+                if src.endswith(".mm"):
+                    extra_postargs = list(extra_postargs) + ["-fobjc-arc"]
+                return _orig_compile(obj, src, ext, cc_args, extra_postargs, pp_opts)
+
+            self.compiler._compile = _compile_with_arc
+            self.compiler._tbl_arc_wrapped = True
 
         # Compile the CUDA transform kernels with nvcc and link the object. UNVALIDATED —
         # built only when TURBOLOADER_ENABLE_CUDA=1 on a machine with nvcc (distutils can't
@@ -652,6 +675,13 @@ class BuildExt(build_ext):
                     # (presence of the -DTURBOLOADER_METAL macro is the single source of truth).
                     if any(name == "TURBOLOADER_METAL" for name, _ in ext.define_macros):
                         link_opts += ["-framework", "Metal", "-framework", "Foundation"]
+                        # Video path: AVFoundation drives VideoToolbox hardware decode;
+                        # CoreMedia/CoreVideo provide the sample/pixel-buffer plumbing.
+                        link_opts += [
+                            "-framework", "AVFoundation",
+                            "-framework", "CoreMedia",
+                            "-framework", "CoreVideo",
+                        ]
                 else:
                     # Linux x86 SIMD flags
                     if "x86" in arch or "amd64" in arch:

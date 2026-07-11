@@ -17,6 +17,11 @@ bool available();
 // Short human-readable device name (e.g. "Apple M4 Max"), or "" if unavailable.
 const char* device_name();
 
+// Bytes currently allocated on the Metal device by this process
+// (MTLDevice.currentAllocatedSize). 0 if unavailable. Used by leak regression
+// tests — registry destroy paths must return this to baseline.
+unsigned long long device_allocated_bytes();
+
 // One source image: tightly-packed HWC uint8 RGB (3 channels), `w`*`h` pixels.
 struct ImageRef {
     const uint8_t* data;

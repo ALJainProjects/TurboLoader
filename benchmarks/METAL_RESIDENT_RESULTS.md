@@ -54,8 +54,34 @@ the measured evidence, not as a recommendation.
 **~4.8–5.1x** — the win case for non-image data: large resident tables with
 random row access (embedding shuffles, tabular epochs, negative sampling).
 
-## Video
+## Video — MetalVideoLoader (VideoToolbox hardware decode + fused NV12 kernel)
 
-Scoped, not built: the right shape is VideoToolbox hardware H.264/HEVC decode
-feeding the existing Metal color/resize kernels. Tracked as roadmap; nothing in
-the tree claims video support today.
+AVFoundation/VideoToolbox decodes H.264/HEVC on the media engine (system
+frameworks only — no FFmpeg dependency, ships in the ordinary macOS wheel); a
+fused Metal kernel converts NV12 → RGB (MPEG chroma siting, BT.709 for HD /
+BT.601 for SD, video range), bilinear-resizes and normalizes into training-ready
+`(B, 3, H, W)` float32 batches.
+
+Real 1080p H.264 clip (450 frames, crf 23) → 224px batches, warmup excluded,
+median of 3 passes, every batch consumed
+(`benchmarks/benchmark_metal_video.py`):
+
+| Pipeline | frames/s |
+|---|---:|
+| **MetalVideoLoader** (VideoToolbox + fused kernel) | **2,544** |
+| PyAV `reformat`/swscale — the STRONG CPU baseline | 534 |
+| PyAV + PIL — the common real-world pattern | 166 |
+
+**4.8× the strong baseline, 15× the common pattern** (≈85× realtime for 30fps
+video). Correctness: output matches a numpy reference computed from the raw YUV
+planes with the kernel's exact siting/matrix math to mean < 0.004, max < 0.03
+(`tests/test_metal_video.py`); frame order/step verified via content-encoded
+frame identities.
+
+Honest notes:
+- Sequential streaming only (`frame_step` keeps every Nth frame; skipped frames
+  are still decoded — inter-frame codecs require it). No random access yet.
+- At sharp synthetic chroma edges, different decoders' 4:2:0 upsampling choices
+  legitimately differ by whole chroma steps; the kernel uses correct MPEG siting
+  (horizontally co-sited, vertically centered) with bilinear interpolation.
+- macOS arm64 only, by construction.
