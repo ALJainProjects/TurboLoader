@@ -68,6 +68,19 @@ uintptr_t video_yuv420_batch(const std::vector<uintptr_t>& y_ptrs,
                              int c_px_stride, int src_w, int src_h, int dst_h, int dst_w,
                              bool bt709, const float mean[3], const float std_[3]);
 
+// Fused CLIP assembly: ONE kernel launch builds a (T, 3, dst_h, dst_w) training
+// clip from T device YUV frames, applying the SAME crop window (src pixels,
+// x/y/w/h) and horizontal flip to every frame — the standard video-augmentation
+// contract (spatial aug consistent across time) — fused with YUV->RGB, bilinear
+// resize, and normalize. Same double-buffered output pool / lifetime as
+// video_yuv420_batch. Returns 0 on error.
+uintptr_t video_clip_yuv420(const std::vector<uintptr_t>& y_ptrs,
+                            const std::vector<uintptr_t>& cb_ptrs,
+                            const std::vector<uintptr_t>& cr_ptrs, int y_stride, int c_stride,
+                            int c_px_stride, int src_w, int src_h, int dst_h, int dst_w,
+                            const float crop[4], bool flip, bool bt709, const float mean[3],
+                            const float std_[3]);
+
 // Streaming (dataset in host RAM, larger than VRAM): create `num_slots` async-H2D slots (each own
 // stream + device scratch + output ring). Returns the number created (0 if CUDA unavailable).
 int stream_normalize_init(int num_slots);

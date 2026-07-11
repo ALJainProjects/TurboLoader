@@ -162,6 +162,50 @@ def test_double_buffer_lifetime(content_clip):
     assert not np.allclose(b0, b0_again)
 
 
+def test_clip_kernel_full_frame_equals_batch_path(content_clip):
+    """With train_aug=False the clip kernel's crop is the full frame, whose
+    sampling math reduces EXACTLY to the plain resize path — so fused clips must
+    match the batch loader bit-for-bit (same kernel family, same inputs)."""
+    dl = tl.CudaVideoLoader(content_clip, image_size=(96, 128), batch_size=8)
+    batches = np.concatenate([_to_numpy(b) for b in dl], axis=0)
+    dl2 = tl.CudaVideoLoader(content_clip, image_size=(96, 128), batch_size=8)
+    clips = np.concatenate([_to_numpy(c) for c in dl2.iter_clips(8, train_aug=False)], axis=0)
+    assert clips.shape == batches.shape
+    np.testing.assert_allclose(clips, batches, atol=1e-6)
+
+
+def test_clip_crop_consistent_across_frames(content_clip):
+    """A random crop must be applied IDENTICALLY to every frame of a clip:
+    verify against a numpy reference cropped with the reported rect."""
+    dl = tl.CudaVideoLoader(content_clip, image_size=(64, 64), batch_size=8, return_indices=True)
+    planes = _decode_i420(content_clip)
+    clip, meta = next(dl.iter_clips(8, train_aug=True, seed=123))
+    got = _denorm(_to_numpy(clip))
+    x, y, cw, ch = meta["crop"]
+    for t in (0, 3, 7):
+        yy, cb, cr = planes[meta["first_frame_index"] + t]
+        # reference: crop rect sampling == resize of the crop window (same math
+        # family as _ref_convert but offset by the window)
+        H, W = yy.shape
+        sx = np.clip(x + (np.arange(64, dtype=np.float32) + 0.5) / 64 * cw - 0.5, 0, W - 1)
+        if meta["flip"]:
+            sx = sx[::-1].copy()
+        sy = np.clip(y + (np.arange(64, dtype=np.float32) + 0.5) / 64 * ch - 0.5, 0, H - 1)
+        cxf = np.clip(sx * 0.5, 0, cb.shape[1] - 1)
+        cyf = np.clip(sy * 0.5 - 0.25, 0, cb.shape[0] - 1)
+        Y = _gather_bilinear(yy, sy, sx)
+        Cb = _gather_bilinear(cb, cyf, cxf) - 128.0
+        Cr = _gather_bilinear(cr, cyf, cxf) - 128.0
+        yv = (Y - 16.0) * (255.0 / 219.0)
+        r = yv + 1.596027 * Cr
+        g = yv - 0.391762 * Cb - 0.812968 * Cr
+        b = yv + 2.017232 * Cb
+        ref = np.clip(np.stack([r, g, b], axis=0) / 255.0, 0.0, 1.0)
+        diff = np.abs(got[t] - ref)
+        assert diff.mean() < 0.004, f"clip frame {t}: mean {diff.mean():.5f}"
+        assert diff.max() < 0.03, f"clip frame {t}: max {diff.max():.5f}"
+
+
 def test_nvdec_backend_agrees_with_cpu_backend(content_clip):
     pytest.importorskip("PyNvVideoCodec")
     dl_cpu = tl.CudaVideoLoader(content_clip, image_size=(240, 320), batch_size=48, decode="cpu")

@@ -2517,9 +2517,9 @@ try:
         except ImportError:
             pass
         try:
-            from _turboloader import cuda_video_yuv420_batch
+            from _turboloader import cuda_video_yuv420_batch, cuda_video_clip_yuv420
 
-            __all__ += ["cuda_video_yuv420_batch"]
+            __all__ += ["cuda_video_yuv420_batch", "cuda_video_clip_yuv420"]
         except ImportError:
             pass
         try:

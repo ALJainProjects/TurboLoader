@@ -158,9 +158,8 @@ class CudaVideoLoader:
                 keep = idx % self.frame_step == 0
                 if keep:
                     if W is None:
-                        cai = frame.cuda().__cuda_array_interface__
-                        H = cai["shape"][0] * 2 // 3  # NV12: (H*3/2, W)
-                        W = cai["shape"][1]
+                        ycai, _ = self._nv12_plane_cais(frame)
+                        H, W = int(ycai["shape"][0]), int(ycai["shape"][1])
                         bt709 = H >= 720 or W >= 1280
                     if first < 0:
                         first = idx
@@ -172,16 +171,35 @@ class CudaVideoLoader:
         if frames:
             yield self._flush_nvdec(frames, W, H, bt709, first)
 
+    @staticmethod
+    def _nv12_plane_cais(frame):
+        """PyNvVideoCodec's frame.cuda() returns either one NV12 surface or a
+        list of per-plane objects [Y, CbCr], each with __cuda_array_interface__.
+        Normalize to (y_cai, cbcr_cai) dicts."""
+        surf = frame.cuda()
+        if isinstance(surf, (list, tuple)):
+            return surf[0].__cuda_array_interface__, surf[1].__cuda_array_interface__
+        cai = dict(surf.__cuda_array_interface__)
+        H = cai["shape"][0] * 2 // 3  # single (H*3/2, W) surface
+        W = cai["shape"][1]
+        stride = cai["strides"][0] if cai.get("strides") else W
+        y = {"shape": (H, W), "strides": (stride, 1), "data": cai["data"]}
+        c = {
+            "shape": (H // 2, W),
+            "strides": (stride, 1),
+            "data": (cai["data"][0] + H * stride, True),
+        }
+        return y, c
+
     def _flush_nvdec(self, frames, W, H, bt709, first):
         y, cb, cr = [], [], []
-        y_stride = None
+        y_stride = c_stride = None
         for f in frames:
-            cai = f.cuda().__cuda_array_interface__
-            base = int(cai["data"][0])
-            stride = cai["strides"][0] if cai.get("strides") else W
-            y_stride = int(stride)
-            y.append(base)
-            cbcr = base + H * y_stride  # NV12: interleaved CbCr plane after Y
+            ycai, ccai = self._nv12_plane_cais(f)
+            y_stride = int(ycai["strides"][0]) if ycai.get("strides") else W
+            c_stride = int(ccai["strides"][0]) if ccai.get("strides") else W
+            y.append(int(ycai["data"][0]))
+            cbcr = int(ccai["data"][0])  # interleaved CbCr plane
             cb.append(cbcr)
             cr.append(cbcr + 1)
         n = len(frames)
@@ -190,7 +208,7 @@ class CudaVideoLoader:
             cb,
             cr,
             y_stride=y_stride,
-            c_stride=y_stride,
+            c_stride=c_stride,
             c_px_stride=2,
             src_w=W,
             src_h=H,
@@ -207,3 +225,109 @@ class CudaVideoLoader:
 
     def __iter__(self):
         return self._iter_cpu() if self.decode == "cpu" else self._iter_nvdec()
+
+    # ------------------------- fused clip sampling --------------------------
+    def iter_clips(
+        self,
+        clip_len,
+        *,
+        train_aug=False,
+        scale=(0.08, 1.0),
+        ratio=(3.0 / 4.0, 4.0 / 3.0),
+        seed=42,
+    ):
+        """Yield GPU ``(clip_len, 3, H, W)`` training clips assembled by ONE fused
+        kernel launch each: YUV->RGB + the SAME RandomResizedCrop window and
+        horizontal flip across every frame of the clip (the standard video-aug
+        contract) + resize + normalize. ``train_aug=False`` uses the full frame
+        and no flip (deterministic eval clips). Clips are consecutive
+        non-overlapping windows honoring ``frame_step``. CPU decode backend.
+        A yielded clip is valid until the next clip (double-buffered)."""
+        import av
+        import torch
+
+        if self.decode != "cpu":
+            raise NotImplementedError("iter_clips currently uses the cpu decode backend")
+        rng = np.random.default_rng(seed)
+        with av.open(self.path) as container:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            W, H = stream.codec_context.width, stream.codec_context.height
+            bt709 = self._bt709(stream, W, H)
+            ysz, csz = W * H, (W // 2) * (H // 2)
+            fbytes = ysz + 2 * csz
+            host = np.empty((clip_len, fbytes), dtype=np.uint8)
+            rows, first, idx = 0, -1, 0
+            for frame in container.decode(stream):
+                if idx % self.frame_step == 0:
+                    if frame.format.name != "yuv420p":
+                        frame = frame.reformat(format="yuv420p")
+                    host[rows] = frame.to_ndarray().reshape(-1)
+                    if rows == 0:
+                        first = idx
+                    rows += 1
+                idx += 1
+                if rows == clip_len:
+                    yield self._flush_clip(
+                        host, clip_len, W, H, bt709, first, rng, train_aug, scale, ratio, torch
+                    )
+                    rows = 0
+            # tail shorter than clip_len is dropped (standard for clip sampling)
+
+    def _pick_crop(self, W, H, rng, scale, ratio):
+        """torchvision RandomResizedCrop-parity sampling (area x log-ratio, 10
+        attempts, center fallback), in source pixels."""
+        area = W * H
+        for _ in range(10):
+            target = area * rng.uniform(*scale)
+            log_r = rng.uniform(np.log(ratio[0]), np.log(ratio[1]))
+            r = np.exp(log_r)
+            cw = int(round(np.sqrt(target * r)))
+            ch = int(round(np.sqrt(target / r)))
+            if 0 < cw <= W and 0 < ch <= H:
+                x = rng.integers(0, W - cw + 1)
+                y = rng.integers(0, H - ch + 1)
+                return float(x), float(y), float(cw), float(ch)
+        side = min(W, H)
+        return (W - side) / 2.0, (H - side) / 2.0, float(side), float(side)
+
+    def _flush_clip(self, host, t, W, H, bt709, first, rng, train_aug, scale, ratio, torch):
+        dev = torch.from_numpy(host[:t]).cuda()
+        base = int(dev.data_ptr())
+        ysz, csz = W * H, (W // 2) * (H // 2)
+        fbytes = ysz + 2 * csz
+        y = [base + i * fbytes for i in range(t)]
+        cb = [p + ysz for p in y]
+        cr = [p + ysz + csz for p in y]
+        if train_aug:
+            crop = self._pick_crop(W, H, rng, scale, ratio)
+            flip = bool(rng.random() < 0.5)
+        else:
+            crop, flip = (0.0, 0.0, float(W), float(H)), False
+        ptr = self._t.cuda_video_clip_yuv420(
+            y,
+            cb,
+            cr,
+            y_stride=W,
+            c_stride=W // 2,
+            c_px_stride=1,
+            src_w=W,
+            src_h=H,
+            dst_h=self._h,
+            dst_w=self._w,
+            crop=list(crop),
+            flip=flip,
+            bt709=bt709,
+            mean=self.mean,
+            std=self.std,
+        )
+        del dev
+        clip = self._wrap(ptr, t)
+        if self.return_indices:
+            meta = {
+                "first_frame_index": first,
+                "crop": crop,
+                "flip": flip,
+            }
+            return clip, meta
+        return clip
