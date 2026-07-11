@@ -373,12 +373,16 @@ batch; `MetalResidentArrays` does the same for any-dtype rows (embedding tables:
 fancy-indexing). Honest null result included: `MetalTokenGather` ties the CPU memmap path
 (0.87–1.08×) — keep using `TokenDataLoader` for tokens.
 
-**Video** (macOS arm64, in the pip wheel — no FFmpeg needed): `MetalVideoLoader` drives
+**Video**: `MetalVideoLoader` (macOS arm64, in the pip wheel — no FFmpeg needed) drives
 VideoToolbox **hardware** H.264/HEVC decode into a fused NV12→RGB+resize+normalize Metal
-kernel: real 1080p → 224px training batches at **~2,540 frames/s** on an M4 Max — **4.8×**
-the strongest PyAV/swscale CPU pipeline, 15× the common PyAV+PIL pattern. Output verified
-against raw-YUV numpy references. Numbers, methodology, and caveats:
-[benchmarks/METAL_RESIDENT_RESULTS.md](benchmarks/METAL_RESIDENT_RESULTS.md).
+kernel: real 1080p → 224px training batches at **~2,550 frames/s** on an M4 Max —
+**3.9× the best industry standard** (OpenCV 657, PyAV 535, torchcodec 173) and 97–99% of
+the media engine's hardware decode ceiling. On NVIDIA, `CudaVideoLoader` (CUDA build)
+lands GPU-resident batches via a dual decode backend (threaded CPU decode by default;
+NVDEC opt-in — measured virtualization-throttled under WSL2) plus a novel **fused
+clip-assembly kernel** (`iter_clips`: consistent RandomResizedCrop+flip across a whole
+clip + YUV→RGB + resize + normalize in ONE launch). Honest scorecard incl. where decord
+still wins on weak-CPU hosts: [benchmarks/VIDEO_RESULTS.md](benchmarks/VIDEO_RESULTS.md).
 
 `CudaResidentLoader` uses a custom single-launch normalize kernel + fused gather (shuffles at
 ~257k) and **beats FFCV ~3.5×** when the pre-processed uint8 dataset fits in VRAM (very common:

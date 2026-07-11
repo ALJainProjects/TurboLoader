@@ -420,7 +420,11 @@
                         </tr>
                         <tr style="border-bottom:1px solid #e9ecef;">
                             <td style="padding:8px;">Video: 1080p H.264 → 224px training batches (hardware decode)</td>
-                            <td><strong>2,544 frames/s (4.8×)</strong></td><td>PyAV/swscale 534; PyAV+PIL 166</td><td>Apple M4 Max</td>
+                            <td><strong>2,556 frames/s (3.9×)</strong></td><td>OpenCV 657; PyAV 535; torchcodec 173</td><td>Apple M4 Max</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">Video on NVIDIA: GPU-resident batches (cpu-decode backend)</td>
+                            <td><strong>371 frames/s</strong></td><td>OpenCV 312; PyAV 131; decord 604 leads on this weak-CPU host</td><td>RTX 3090 (WSL2)</td>
                         </tr>
                         <tr style="border-bottom:1px solid #e9ecef;">
                             <td style="padding:8px;">End-to-end ResNet-18 training (median epoch)</td>
