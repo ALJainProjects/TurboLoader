@@ -392,15 +392,30 @@ def test_fast_format_without_image_size_raises(tar20):
         tl.DataLoader(tar20, batch_size=8, output_format="pytorch")
 
 
-def test_resize_transform_cannot_supply_image_size(tar20):
-    """The pybind Resize object does not expose its target H/W, so
-    _resize_target_from_transform() returns None and a Resize-only transform does
-    NOT satisfy the fast-format size requirement (contrary to the error message's
-    'or include Resize(H, W) in transform' hint -- see reported bug)."""
+def test_resize_transform_supplies_image_size(tar20):
+    """FIXED: the bound Resize now exposes .height/.width, so a Resize-only
+    transform satisfies the fast-format size requirement (as the error message
+    always advertised), and a CONFLICTING explicit image_size is refused
+    instead of silently ignored."""
     assert tl._resize_target_from_transform(None) is None
-    assert tl._resize_target_from_transform(tl.Resize(64, 48)) is None
-    with pytest.raises(ValueError, match="needs a fixed image size"):
-        tl.DataLoader(tar20, batch_size=8, output_format="numpy", transform=tl.Resize(16, 16))
+    assert tl._resize_target_from_transform(tl.Resize(64, 48)) == (48, 64)
+    dl = tl.DataLoader(tar20, batch_size=8, output_format="numpy", transform=tl.Resize(16, 16))
+    images, _ = dl.next_batch()
+    assert images.shape[1:3] == (16, 16)  # numpy format is HWC
+    dl.close()
+    with pytest.raises(ValueError, match="Conflicting sizes"):
+        tl.DataLoader(
+            tar20,
+            batch_size=8,
+            image_size=32,
+            output_format="numpy",
+            transform=tl.Resize(16, 16),
+        )
+    # agreeing sizes are fine
+    dl = tl.DataLoader(
+        tar20, batch_size=8, image_size=16, output_format="numpy", transform=tl.Resize(16, 16)
+    )
+    dl.close()
 
 
 # --------------------------------------------------------------------------- #

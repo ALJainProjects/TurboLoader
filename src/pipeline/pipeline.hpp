@@ -73,10 +73,10 @@
 #ifdef HAVE_NVJPEG
 #include "../decode/nvjpeg_decoder.hpp"
 #endif
-#include "../decode/png_decoder.hpp"
-#ifdef HAVE_WEBP
-#include "../decode/webp_decoder.hpp"
-#endif
+// NOTE: png/webp decoder headers are deliberately NOT included: the pipeline
+// decodes JPEG only (DataFormat::JPEG hard-coded below; the worker holds a
+// JPEGDecoder). Including libpng's header made it a phantom compile+install
+// requirement for code the wheel never exercised.
 #include "../decode/bmp_decoder.hpp"
 #include "../decode/tiff_decoder.hpp"
 #ifdef HAVE_FFMPEG

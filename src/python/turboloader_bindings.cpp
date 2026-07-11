@@ -995,7 +995,8 @@ PYBIND11_MODULE(_turboloader, m) {
              py::arg("target_width") = 0,
              "Create TurboLoader DataLoader (PyTorch-compatible)\n\n"
              "Args:\n"
-             "    data_path (str): Path to data (TAR, video, CSV, Parquet)\n"
+             "    data_path (str): Path to a TAR archive of JPEGs\n"
+             "                    (for video use MetalVideoLoader / CudaVideoLoader)\n"
              "                    Supports: local files, http://, https://, s3://, gs://\n"
              "    batch_size (int): Samples per batch (default: 32)\n"
              "    num_workers (int): Worker threads (default: 4)\n"
@@ -1865,8 +1866,11 @@ PYBIND11_MODULE(_turboloader, m) {
         features["s3_support"] = true;              // s3_reader compiled via pipeline
         features["gcs_support"] = true;             // gcs_reader compiled via pipeline
         features["jpeg_decode"] = true;
-        features["png_decode"] = true;
-        features["webp_decode"] = true;
+        // The shipped pipeline decodes JPEG only (pipeline.hpp hard-codes
+        // DataFormat::JPEG and holds a JPEGDecoder). PNG/WebP decoders exist as
+        // headers but are not wired into any compiled path — report the truth.
+        features["png_decode"] = false;
+        features["webp_decode"] = false;
         features["simd_acceleration"] = true;
         features["lock_free_queues"] = true;
         features["num_transforms"] = static_cast<int>(list_all_transform_names().size());
@@ -1909,7 +1913,9 @@ PYBIND11_MODULE(_turboloader, m) {
 #else
         features["io_uring"] = false;
 #endif
-#ifdef TURBOLOADER_HAS_CUDA
+#ifdef TURBOLOADER_CUDA_TRANSFORMS
+        // The macro setup.py actually defines for CUDA builds (TURBOLOADER_HAS_CUDA
+        // was a CMake-test-only macro — real CUDA builds wrongly reported false).
         features["gpu_transforms"] = true;
 #else
         features["gpu_transforms"] = false;  // CUDA transform kernels (need nvcc); off
@@ -2045,7 +2051,11 @@ PYBIND11_MODULE(_turboloader, m) {
              "Args:\n"
              "    width (int): Target width in pixels\n"
              "    height (int): Target height in pixels\n"
-             "    interpolation (InterpolationMode): Interpolation method (default: BILINEAR)");
+             "    interpolation (InterpolationMode): Interpolation method (default: BILINEAR)")
+        .def_property_readonly("width", &ResizeTransform::target_width,
+                               "Target width in pixels.")
+        .def_property_readonly("height", &ResizeTransform::target_height,
+                               "Target height in pixels.");
 
     // Normalize
     py::class_<NormalizeTransform, Transform>(m, "Normalize",

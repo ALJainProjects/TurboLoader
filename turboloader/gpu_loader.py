@@ -84,20 +84,12 @@ class GpuImageLoader:
         return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
 
     def _rrc_params(self, h, w, rng):
-        """torchvision-style RandomResizedCrop window (x, y, cw, ch) in source pixels."""
-        area = float(h * w)
-        log_ratio = (math.log(self.ratio[0]), math.log(self.ratio[1]))
-        for _ in range(10):
-            target = rng.uniform(self.scale[0], self.scale[1]) * area
-            ar = math.exp(rng.uniform(log_ratio[0], log_ratio[1]))
-            cw = int(round(math.sqrt(target * ar)))
-            ch = int(round(math.sqrt(target / ar)))
-            if 0 < cw <= w and 0 < ch <= h:
-                x = int(rng.integers(0, w - cw + 1))
-                y = int(rng.integers(0, h - ch + 1))
-                return float(x), float(y), float(cw), float(ch)
-        s = float(min(h, w))  # fallback: center crop
-        return float((w - s) // 2), float((h - s) // 2), s, s
+        """torchvision-style RandomResizedCrop window (x, y, cw, ch) in source
+        pixels — the shared sampler (turboloader._augment) so the fallback matches
+        the C++ path exactly (aspect-clamped central crop, not a center square)."""
+        from turboloader._augment import pick_crop
+
+        return pick_crop(w, h, rng, scale=self.scale, ratio=self.ratio)
 
     def __iter__(self):
         idx = np.arange(len(self.paths))

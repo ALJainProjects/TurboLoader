@@ -25,7 +25,7 @@ TurboLoader is a high-performance data loading library for machine learning work
 - **Distributed Training Support** - Multi-node data loading with deterministic sharding
 - **SIMD-Accelerated Transforms** - 19 vectorized transforms using AVX2/AVX-512/NEON
 - **TBL v2 Binary Format** - Custom format with LZ4 compression for reduced storage
-- **Framework Integration** - Seamless support for PyTorch, TensorFlow, and JAX
+- **Framework-ready outputs** - `output_format='pytorch'/'numpy'/'tensorflow'` batch layouts, zero-copy torch adoption for the GPU loaders, and a shipped `WebDatasetLoader`
 - **Memory-Mapped I/O** - Zero-copy file access for improved throughput
 - **Lock-Free Queues** - Concurrent data structures for efficient multi-threading
 - **GPU image loaders** - `CudaImageLoader` (NVIDIA nvImageCodec — **beats DALI** on an RTX 3090, see below) and `GpuImageLoader` (Apple Metal): end-to-end GPU decode + resize + normalize, GPU-resident output. See [GPU acceleration](docs/GPU_ACCELERATION.md)
@@ -33,6 +33,30 @@ TurboLoader is a high-performance data loading library for machine learning work
 - **Video loaders** - `MetalVideoLoader` (VideoToolbox **hardware** decode, **3.9× the best industry standard** on an M4 Max) and `CudaVideoLoader` (GPU-resident batches, dual CPU/NVDEC decode backends, novel fused clip-assembly kernel via `iter_clips`). See [video results](benchmarks/VIDEO_RESULTS.md)
 
 ---
+
+## Which loader do I use?
+
+One decision table for every entry point — pick by data type and hardware,
+without reading the internals:
+
+| You have | Use | Notes |
+|---|---|---|
+| A TAR of JPEGs, training on any hardware | **`DataLoader(..., output_format='pytorch', image_size=N)`** | The default fast path — auto-fused C++ decode+resize+normalize. Start here. |
+| The same, need per-sample dicts (inspection, irregular data) | `DataLoader(...)` (default `output_format='dict'`) | Several times slower; not for training loops. |
+| Labels | derive from `meta['indices']` / `sample['filename']` | Samples carry **no** `label` key; align an external label array by index. |
+| A dataset that fits in GPU/unified memory, many epochs | `CudaResidentLoader` (NVIDIA) / `MetalResidentLoader` (Apple) | Decode once, ~280k / 433–757k img/s per epoch. `return_indices=True` for labels. |
+| A pre-processed dataset larger than VRAM (NVIDIA) | `CudaStreamLoader` | Fully-C++ streaming, ~140k img/s. |
+| On-the-fly GPU decode (NVIDIA) | `CudaImageLoader(decode='nvimgcodec', return_indices=True)` | Beats DALI; batches complete OUT of order — align labels via the returned indices. |
+| On-the-fly GPU transforms (Apple) | `MetalImageLoader` (alias of `GpuImageLoader`) | Metal decode+transforms. |
+| Video files | `MetalVideoLoader` (Apple) / `CudaVideoLoader` (NVIDIA) | Hardware decode → training batches; `iter_clips()` for augmented clips. |
+| LLM token streams (memmap) | `TokenDataLoader` | CPU memmap is already optimal (measured). |
+| Arrays / embeddings / tabular | `ArrayDataLoader`; `MetalResidentArrays` for GPU row gathers | |
+| WebDataset-style TARs | `WebDatasetLoader` | |
+
+Two lifetime rules to know: (1) loaders yielding **zero-copy views** (`pin_memory=True`
+ring, Metal/CUDA resident + video loaders) reuse their buffers — consume or copy a
+batch before advancing past the documented window; (2) GPU loaders yield
+`__cuda_array_interface__` objects — adopt with `torch.as_tensor(x, device='cuda')`.
 
 ## Installation
 
@@ -72,7 +96,30 @@ sudo apt-get install libjpeg-turbo8-dev libpng-dev libwebp-dev liblz4-dev
 
 ## Quick Start
 
-### Basic Usage
+### Training input (the fast path — start here)
+
+```python
+import turboloader
+
+loader = turboloader.DataLoader(
+    'imagenet.tar',                 # TAR archive of JPEGs
+    batch_size=128,
+    image_size=224,                 # fixed size => one contiguous tensor per batch
+    output_format='pytorch',        # (N, 3, H, W) float32, normalized
+    transform=turboloader.ImageNetNormalize(),
+    shuffle=True,
+    train_aug=True,                 # fused RandomResizedCrop + flip in C++
+)
+for images, meta in loader:
+    # images: numpy (N,3,224,224); torch.from_numpy(images) is zero-copy.
+    # meta['indices'] aligns external labels to this batch.
+    ...
+```
+
+This is the path all the benchmark numbers refer to. The dict API below is the
+flexible per-sample path — several times slower; use it for inspection, not epochs.
+
+### Basic Usage (per-sample dicts)
 
 ```python
 import turboloader

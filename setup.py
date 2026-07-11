@@ -278,25 +278,11 @@ def get_extensions():
         )
     print(f"  libjpeg-turbo: {jpeg_include}")
 
-    png_include, png_lib = find_library("libpng", "libpng", "libpng")
-    if not png_include:
-        raise RuntimeError(
-            "Could not find libpng installation.\n"
-            "Please install it:\n"
-            "  macOS: brew install libpng\n"
-            "  Linux: sudo apt-get install libpng-dev\n"
-        )
-    print(f"  libpng: {png_include}")
-
-    webp_include, webp_lib = find_library("webp", "webp", "libwebp")
-    if not webp_include:
-        raise RuntimeError(
-            "Could not find libwebp installation.\n"
-            "Please install it:\n"
-            "  macOS: brew install webp\n"
-            "  Linux: sudo apt-get install libwebp-dev\n"
-        )
-    print(f"  libwebp: {webp_include}")
+    # libpng/libwebp were previously HARD-required and linked, but the shipped
+    # pipeline decodes JPEG only — nothing in the compiled extension references
+    # either library (verified: zero png/webp symbols in the built .so). They
+    # are no longer required nor linked; the decoder headers remain in-tree for
+    # future wiring.
 
     curl_include, curl_lib = find_library("curl", "curl", "libcurl", header_subdir="curl")
     if not curl_include:
@@ -357,8 +343,6 @@ def get_extensions():
         for inc in (
             get_pybind_include(),
             jpeg_include,
-            png_include,
-            webp_include,
             curl_include,
             lz4_include,
         )
@@ -376,9 +360,7 @@ def get_extensions():
             return False
         return True
 
-    library_dirs = [
-        lib for lib in (jpeg_lib, png_lib, webp_lib, curl_lib, lz4_lib) if _keep_lib(lib)
-    ]
+    library_dirs = [lib for lib in (jpeg_lib, curl_lib, lz4_lib) if _keep_lib(lib)]
     # Detect compiler for LTO flag: Clang uses -flto=thin, GCC uses -flto
     import platform as _plat
 
@@ -474,8 +456,6 @@ def get_extensions():
             library_dirs=library_dirs,
             libraries=[
                 "jpeg",
-                "png",
-                "webp",
                 "curl",
                 "lz4",
             ]

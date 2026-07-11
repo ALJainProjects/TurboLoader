@@ -340,20 +340,14 @@ def test_resize_target_helper_extraction():
     assert f(DuckResize()) == (20, 30)
 
 
-def test_resize_target_helper_returns_none_for_real_resize():
-    """The real C++ Resize object exposes none of the (target_)height/width attrs
-    the helper looks for, so size inference yields None for it. This pins the
-    current behavior that motivates the xfail below."""
-    assert tl._resize_target_from_transform(tl.Resize(20, 20)) is None
+def test_resize_target_helper_extracts_real_resize():
+    """The bound Resize now exposes .height/.width, so size inference works —
+    FIXED: previously it returned None and the documented 'Resize supplies
+    image_size' contract was broken. Resize(width, height) -> (H, W)."""
+    assert tl._resize_target_from_transform(tl.Resize(20, 20)) == (20, 20)
+    assert tl._resize_target_from_transform(tl.Resize(64, 48)) == (48, 64)
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="BUG: docstring/error message advertise that a Resize(H,W) in the "
-    "transform supplies image_size for the fast path, but the C++ Resize exposes "
-    "no height/width attrs, so _resize_target_from_transform always returns None "
-    "and construction still raises 'needs a fixed image size'.",
-)
 def test_resize_transform_supplies_fast_image_size(image_tar):
     # Per the documented contract this should construct a working fast loader
     # using the Resize's (20, 20) target; today it raises ValueError instead.

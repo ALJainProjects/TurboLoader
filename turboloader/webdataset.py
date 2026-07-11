@@ -13,8 +13,9 @@ from collections import defaultdict
 try:
     from _turboloader import DataLoader as _CppDataLoader
 except ImportError:
-    raise ImportError("TurboLoader C++ extension not found. "
-                      "Make sure TurboLoader is properly installed.")
+    raise ImportError(
+        "TurboLoader C++ extension not found. " "Make sure TurboLoader is properly installed."
+    )
 
 
 class WebDatasetLoader:
@@ -60,11 +61,11 @@ class WebDatasetLoader:
             data_path=data_path,
             batch_size=batch_size * 10,  # Load more files, will group them
             num_workers=num_workers,
-            shuffle=shuffle
+            shuffle=shuffle,
         )
 
         # Pattern to extract base name and extension
-        self._pattern = re.compile(r'^(.+?)\.([^.]+)$')
+        self._pattern = re.compile(r"^(.+?)\.([^.]+)$")
 
     def _group_by_sample(self, files: list) -> list:
         """
@@ -77,15 +78,15 @@ class WebDatasetLoader:
         samples = defaultdict(dict)
 
         for file_data in files:
-            filename = file_data.get('filename', '')
+            filename = file_data.get("filename", "")
             match = self._pattern.match(filename)
 
             if match:
                 base_name, extension = match.groups()
 
                 # Store data under extension key
-                samples[base_name][extension] = file_data.get('image')
-                samples[base_name]['filename'] = filename
+                samples[base_name][extension] = file_data.get("image")
+                samples[base_name]["filename"] = filename
 
         # Convert to list of dicts
         return [sample for sample in samples.values()]
@@ -112,8 +113,8 @@ class WebDatasetLoader:
 
                 # Yield batch when full
                 if len(current_batch) >= self.batch_size:
-                    yield current_batch[:self.batch_size]
-                    current_batch = current_batch[self.batch_size:]
+                    yield current_batch[: self.batch_size]
+                    current_batch = current_batch[self.batch_size :]
 
         # Yield remaining samples
         if current_batch:
@@ -141,22 +142,23 @@ def webdataset_decoder(sample: Dict[str, Any]) -> Dict[str, Any]:
     decoded = {}
 
     for key, value in sample.items():
-        if key in ['jpg', 'jpeg', 'png', 'webp']:
+        if key in ["jpg", "jpeg", "png", "webp"]:
             # Image data already decoded by TurboLoader
-            decoded['image'] = value
-        elif key == 'json':
+            decoded["image"] = value
+        elif key == "json":
             # Parse JSON if needed
             import json
+
             if isinstance(value, bytes):
-                decoded['label'] = json.loads(value.decode('utf-8'))
+                decoded["label"] = json.loads(value.decode("utf-8"))
             else:
-                decoded['label'] = value
-        elif key == 'txt':
+                decoded["label"] = value
+        elif key == "txt":
             # Decode text
             if isinstance(value, bytes):
-                decoded['text'] = value.decode('utf-8')
+                decoded["text"] = value.decode("utf-8")
             else:
-                decoded['text'] = value
+                decoded["text"] = value
         else:
             # Keep as-is
             decoded[key] = value
@@ -205,7 +207,7 @@ class PyTorchWebDataset:
             batch_size=batch_size,
             num_workers=num_workers,
             shuffle=shuffle,
-            transform=decoder if not transform else lambda x: transform(decoder(x))
+            transform=decoder if not transform else lambda x: transform(decoder(x)),
         )
 
     def __iter__(self):

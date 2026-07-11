@@ -12,9 +12,6 @@ import json
 import numpy as np
 from pathlib import Path
 
-# Add python directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
-
 
 def create_webdataset_tar(num_samples=10):
     """
@@ -73,7 +70,7 @@ def test_webdataset_basic():
     print("=" * 80)
 
     try:
-        from webdataset_loader import WebDatasetLoader
+        from turboloader.webdataset import WebDatasetLoader
 
         tar_path = create_webdataset_tar(10)
 
@@ -124,7 +121,7 @@ def test_webdataset_decoder():
     print("=" * 80)
 
     try:
-        from webdataset_loader import WebDatasetLoader, webdataset_decoder
+        from turboloader.webdataset import WebDatasetLoader, webdataset_decoder
 
         tar_path = create_webdataset_tar(8)
 
@@ -176,7 +173,7 @@ def test_pytorch_webdataset():
     print("=" * 80)
 
     try:
-        from webdataset_loader import PyTorchWebDataset
+        from turboloader.webdataset import PyTorchWebDataset
 
         tar_path = create_webdataset_tar(12)
 
@@ -218,7 +215,7 @@ def test_webdataset_shuffle():
     print("=" * 80)
 
     try:
-        from webdataset_loader import WebDatasetLoader
+        from turboloader.webdataset import WebDatasetLoader
 
         tar_path = create_webdataset_tar(20)
 
@@ -258,7 +255,7 @@ def test_webdataset_custom_transform():
     print("=" * 80)
 
     try:
-        from webdataset_loader import WebDatasetLoader
+        from turboloader.webdataset import WebDatasetLoader
 
         tar_path = create_webdataset_tar(8)
 

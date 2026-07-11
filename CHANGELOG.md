@@ -5,6 +5,73 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Cleanliness sprint: a three-lens adversarial audit (dead code / duplication / user
+ergonomics) confirmed 24 findings; every one is fixed here.
+
+### Fixed
+- **`with DataLoader(...)` never released resources on the fast path**: the class
+  body contained TWO `__enter__`/`__exit__` pairs and the later, stop()-based pair
+  (a no-op for the fast path) silently shadowed the close()-based one. One
+  cleanup method now covers every path (`close()` also stops the queue pipeline;
+  `stop()` delegates to it); the previously-vacuous context-manager test now
+  asserts producer threads actually wind down. All loaders expose `close()`.
+- **Latent use-after-free in the Metal resident registries**: gathers run
+  GIL-released, but `registry_erase` deleted contexts immediately — a concurrent
+  destroy could free buffers mid-gather. Ported the per-context mutex close-guard
+  from the video registry (the two copies had drifted).
+- **`features()` no longer lies**: `png_decode`/`webp_decode` report false (the
+  shipped pipeline is JPEG-only) and `gpu_transforms` checks the macro CUDA
+  builds actually define (`TURBOLOADER_CUDA_TRANSFORMS`) — real CUDA builds
+  previously reported false.
+- **libpng/libwebp are no longer required or linked**: they were hard install
+  requirements for code the wheel never exercised (zero symbols in the built
+  extension); the dead includes in pipeline.hpp are gone too.
+- **BT.601/709 colorimetry unified across video backends**: the NVDEC path now
+  reads the container's colorimetry tag (best-effort PyAV probe) with the same
+  rule as the CPU backend — a tagged stream contradicting the resolution
+  heuristic previously decoded with different color matrices per backend.
+- **RandomResizedCrop unified**: three divergent samplers (C++, Metal-loader
+  Python, CUDA-video Python) had different fallback behavior; the two Python
+  copies now share `turboloader/_augment.py`, matching the C++/torchvision
+  fallback exactly (aspect-clamped central crop, not a center square).
+- **Conflicting `Resize` + `image_size` now raises** instead of silently
+  training on the wrong size; the bound `Resize` exposes `.width`/`.height`, so
+  a Resize in the pipeline can genuinely supply `image_size` (as the error
+  message always claimed) — including inside composed pipelines.
+
+### Changed / Ergonomics
+- README gains a **"Which loader do I use?"** decision table covering every
+  entry point + the two lifetime rules; Quick Start (README + docs) now LEADS
+  with the fast training path instead of the slow dict path.
+- Docs no longer train on a `label` key that does not exist (quickstart /
+  getting-started examples fixed; `PyTorchCompatibleLoader` or index-aligned
+  labels are the documented routes).
+- The `pin_memory=True` ring-buffer lifetime contract is documented in the
+  PUBLIC DataLoader docstring (it lived only in a private method).
+- `CudaImageLoader(return_indices=True)`: batches complete out of order with
+  multiple decode slots, so supervised training REQUIRES index alignment —
+  now possible on every decode path.
+- `MetalImageLoader` alias for the confusingly-named (Metal-only)
+  `GpuImageLoader`; `WebDatasetLoader` now SHIPS in the wheel
+  (`turboloader.webdataset`, previously an unpackaged `python/` module).
+- Honest docstrings: the base DataLoader no longer advertises video/CSV/Parquet
+  it cannot load (video lives in Metal/CudaVideoLoader).
+
+### Removed (dead code — ~25% of src/ was unreachable from any build)
+- Zero-reference headers: azure/hdf5/tfrecord/zarr readers, coco_voc parser,
+  io_uring reader, object_pool, the obsolete `hybrid_wait.hpp` twin (the live
+  copy in `spsc_ring_buffer.hpp` keeps its test).
+- Tested-but-unshipped headers + their CI-only test binaries (green tests that
+  covered nothing the wheel ships): checkpointing (superseded by
+  `state_dict()`), weighted/quasi-random samplers, audio/text decoders, LMDB
+  reader, prefetch/GPU-prefetch pipelines, `gpu_pipeline_integration.hpp`.
+- Broken-by-construction paths: `tools/tar_to_tbl.cpp` (included deleted
+  headers), the `ENABLE_MPI` plumbing (referenced files that never existed).
+- Unshipped `python/` JAX/TensorFlow adapter modules and their self-skipping
+  tests (the README claim they backed is corrected).
+
 ## [2.34.1] - 2026-07-11
 
 ### Fixed

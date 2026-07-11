@@ -249,19 +249,22 @@ try:
     ]
 
     def _resize_target_from_transform(transform):
-        """Best-effort (H, W) extraction from a Resize in the transform.
+        """Best-effort (H, W) extraction from a Resize anywhere in the transform
+        pipeline (walks composed pipelines too — the bound Resize exposes
+        .height/.width properties).
 
         Returns None if it cannot be determined (then image_size must be passed).
         """
         if transform is None:
             return None
-        for attr in ("target_height", "height", "out_height", "h"):
-            h = getattr(transform, attr, None)
-            if isinstance(h, int) and h > 0:
-                for wattr in ("target_width", "width", "out_width", "w"):
-                    w = getattr(transform, wattr, None)
-                    if isinstance(w, int) and w > 0:
-                        return (h, w)
+        for step in _flatten_transforms(transform):
+            for attr in ("target_height", "height", "out_height", "h"):
+                h = getattr(step, attr, None)
+                if isinstance(h, int) and h > 0:
+                    for wattr in ("target_width", "width", "out_width", "w"):
+                        w = getattr(step, wattr, None)
+                        if isinstance(w, int) and w > 0:
+                            return (h, w)
         return None
 
     def _flatten_transforms(transform):
@@ -760,6 +763,15 @@ try:
             auto_smart_batching (bool): Auto-detect smart batching (default: True)
             enable_smart_batching (bool): Manual smart batching override (default: False)
             prefetch_batches (int): Batches to prefetch (default: 4)
+            pin_memory (bool): Stream batches through a RING of recycled pinned
+                torch buffers (fast async H2D). LIFETIME CONTRACT: a yielded
+                tensor's memory is REUSED after ``prefetch_batches + 1`` further
+                batches — consume it (``.to(device)`` / ``.copy_()``) before
+                then, or hold a ``.clone()``. Holding raw references across the
+                ring silently yields another batch's pixels (same rule as DALI
+                pipeline outputs). Default False (fresh arrays every batch).
+            train_aug (bool): Fused RandomResizedCrop + horizontal flip inside
+                the C++ pass (torchvision-parity distribution; ~3% overhead).
 
         Example:
             >>> # With transforms
@@ -821,6 +833,10 @@ try:
 
                 if seq_len is None:
                     raise ValueError("modality='tokens' requires seq_len=...")
+                # NOTE: DataLoader's shuffle default (False) applies here, while
+                # TokenDataLoader's OWN constructor defaults shuffle=True — the two
+                # entry points to the same loader intentionally follow their own
+                # documented defaults; pass shuffle explicitly to be unambiguous.
                 self._delegate = TokenDataLoader(
                     data_path,
                     seq_len=seq_len,
@@ -877,8 +893,20 @@ try:
                 # batch, assembled in parallel C++ (faster than PyTorch/tf.data). Needs a
                 # fixed image_size so the batch can be a single contiguous array.
                 target = image_size
+                from_resize = _resize_target_from_transform(transform)
                 if target is None:
-                    target = _resize_target_from_transform(transform)
+                    target = from_resize
+                elif from_resize is not None:
+                    # Both a Resize transform and image_size were given. Silently
+                    # preferring one produced wrong-size training data with no
+                    # error (the fused path drops Resize steps) — refuse instead.
+                    want = (target, target) if isinstance(target, int) else tuple(target)
+                    if tuple(from_resize) != want:
+                        raise ValueError(
+                            "Conflicting sizes: transform contains Resize%s but "
+                            "image_size=%r. Pass ONE of them (they must agree)."
+                            % ((from_resize[1], from_resize[0]), image_size)
+                        )
                 if target is None:
                     raise ValueError(
                         "output_format=%r needs a fixed image size. Pass image_size=(H, W) "
@@ -1021,6 +1049,14 @@ try:
                 fn = getattr(obj, "close", None)
                 if callable(fn):
                     fn()
+            # Queue-pipeline path: stop the C++ workers too. ONE cleanup method
+            # must cover every path — this class previously had a second
+            # __enter__/__exit__ pair lower in the body whose stop()-based exit
+            # silently SHADOWED this close()-based one, so `with DataLoader(...)`
+            # never released the fast path's producer thread or TAR handle.
+            loader = getattr(self, "_loader", None)
+            if getattr(self, "_delegate", None) is None and loader is not None:
+                loader.stop()
 
         def __enter__(self):
             return self
@@ -1055,17 +1091,8 @@ try:
             return self._loader.smart_batching_enabled()
 
         def stop(self):
-            """Stop the pipeline and clean up resources."""
-            if self._delegate is None and self._loader is not None:
-                self._loader.stop()
-
-        def __enter__(self):
-            """Context manager entry."""
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            """Context manager exit."""
-            self.stop()
+            """Stop the pipeline and clean up resources (alias of close())."""
+            self.close()
 
         def __iter__(self):
             """Make DataLoader iterable. Re-iterable across epochs in all modes."""
@@ -1567,6 +1594,10 @@ try:
             """Stop the pipeline and clean up resources."""
             self._loader.stop()
 
+        def close(self):
+            """Alias of stop() — uniform cleanup name across all loaders."""
+            self.stop()
+
         def __enter__(self):
             """Context manager entry."""
             return self
@@ -1718,11 +1749,14 @@ try:
         """Unified factory function for creating DataLoaders.
 
         Creates either a DataLoader or FastDataLoader based on the `fast` parameter.
-        This provides a convenient single entry point with a toggle for the
-        high-performance batch array API.
+
+        NOTE: this legacy factory defaults to the SLOW per-sample dict path
+        (fast=False), unlike create_loader() which defaults to 'fast'. For
+        training, prefer ``DataLoader(..., output_format='pytorch', image_size=N)``
+        directly — see the "which loader" table in the README.
 
         Args:
-            data_path (str): Path to data (TAR, video, CSV, Parquet)
+            data_path (str): Path to a TAR archive of JPEGs
             batch_size (int): Samples per batch (default: 32)
             num_workers (int): Worker threads (default: 4)
             fast (bool): If True, use FastDataLoader with batch array transfer
@@ -2004,6 +2038,10 @@ try:
         def stop(self):
             """Stop the pipeline and clean up resources."""
             self._loader.stop()
+
+        def close(self):
+            """Alias of stop() — uniform cleanup name across all loaders."""
+            self.stop()
 
         def __enter__(self):
             """Context manager entry."""
@@ -2395,6 +2433,10 @@ try:
             if self._loader is not None:
                 self._loader.stop()
 
+        def close(self):
+            """Alias of stop() — uniform cleanup name across all loaders."""
+            self.stop()
+
         def __enter__(self):
             """Context manager entry."""
             return self
@@ -2567,7 +2609,11 @@ try:
     try:
         from turboloader.gpu_loader import GpuImageLoader
 
-        __all__ += ["GpuImageLoader"]
+        # GpuImageLoader is the APPLE METAL loader despite the generic name (it
+        # predates the CUDA family). MetalImageLoader is the clear alias; the old
+        # name stays for compatibility.
+        MetalImageLoader = GpuImageLoader
+        __all__ += ["GpuImageLoader", "MetalImageLoader"]
     except Exception:
         pass
 
@@ -2588,6 +2634,14 @@ try:
         from turboloader.cuda_video import CudaVideoLoader
 
         __all__ += ["CudaVideoLoader"]
+    except Exception:
+        pass
+
+    # WebDataset-style TAR loading utilities (pure Python, ships in the wheel).
+    try:
+        from turboloader.webdataset import WebDatasetLoader
+
+        __all__ += ["WebDatasetLoader"]
     except Exception:
         pass
 

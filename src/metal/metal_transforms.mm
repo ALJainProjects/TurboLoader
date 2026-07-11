@@ -178,6 +178,10 @@ struct ResidentImages {
     id<MTLBuffer> out[2];  // double-buffered: max_batch x 3 x H x W float
     size_t n = 0, max_batch = 0;
     int h = 0, w = 0, cur = 0;
+    // Serializes gathers against destroy: gathers run GIL-released, so a
+    // concurrent destroy would otherwise delete the ctx mid-use (same guard
+    // as metal_video.mm's VideoCtx — the two registries must not drift).
+    std::mutex mu;
 };
 struct ResidentBytes {
     id<MTLBuffer> data;    // total_bytes
@@ -185,6 +189,7 @@ struct ResidentBytes {
     id<MTLBuffer> out[2];  // double-buffered: max_batch x max_span bytes
     size_t total = 0, max_batch = 0, max_span = 0;
     int cur = 0;
+    std::mutex mu;  // see ResidentImages::mu
 };
 std::mutex g_res_mu;
 std::vector<ResidentImages*> g_res_imgs;
@@ -218,7 +223,13 @@ void registry_erase(std::vector<T*>& reg, int handle) {
         r = reg[handle];
         reg[handle] = nullptr;
     }
-    delete r;  // ARC releases the MTLBuffers with the struct
+    if (!r) return;
+    {
+        // Wait for any in-flight gather (they run GIL-released); new gathers can
+        // no longer reach this ctx — its registry slot is already null.
+        std::lock_guard<std::mutex> lk(r->mu);
+    }
+    delete r;  // .mm units compile with -fobjc-arc: this releases the MTLBuffers
 }
 
 void init_once() {
@@ -464,6 +475,7 @@ const float* resident_images_gather(int handle, const int32_t* idx, size_t b,
                                     const float mean[3], const float std_[3]) {
     ResidentImages* r = registry_get(g_res_imgs, handle);
     if (!r || !idx || b == 0 || b > r->max_batch) return nullptr;
+    std::lock_guard<std::mutex> ctx_lock(r->mu);  // registry_erase waits on this
     for (size_t i = 0; i < b; i++)  // a bad index would be a silent wild read on GPU
         if (idx[i] < 0 || (size_t)idx[i] >= r->n) return nullptr;
     @autoreleasepool {
@@ -528,6 +540,7 @@ const uint8_t* resident_bytes_gather(int handle, const uint64_t* offs_bytes, siz
     if (!r || !offs_bytes || b == 0 || b > r->max_batch || span_bytes == 0 ||
         span_bytes > r->max_span)
         return nullptr;
+    std::lock_guard<std::mutex> ctx_lock(r->mu);  // registry_erase waits on this
     for (size_t i = 0; i < b; i++)
         if (offs_bytes[i] + span_bytes > r->total) return nullptr;
     @autoreleasepool {
