@@ -2517,6 +2517,12 @@ try:
         except ImportError:
             pass
         try:
+            from _turboloader import cuda_video_yuv420_batch
+
+            __all__ += ["cuda_video_yuv420_batch"]
+        except ImportError:
+            pass
+        try:
             from _turboloader import (
                 cuda_decode_jpeg,
                 cuda_decode_resize_normalize,
