@@ -1,6 +1,6 @@
 # TurboLoader Architecture
 
-This document describes the internal architecture of TurboLoader v2.33.0.
+This document describes the internal architecture of TurboLoader v2.34.0.
 
 ## Overview
 
@@ -393,7 +393,17 @@ turboloader/
 
 ## Version History
 
-### v2.33.0 Current Features
+### v2.34.0 Current Features
+
+0. **GPU resident + video paths** ✅
+   - `MetalResidentLoader`/`MetalResidentArrays`: unified-memory resident datasets served
+     by one fused gather+shuffle+normalize kernel launch per batch (433–757k img/s, M4 Max)
+   - `MetalVideoLoader`: VideoToolbox hardware H.264/HEVC decode -> fused
+     NV12->RGB+resize+normalize kernel (2,556 f/s @1080p->224, 3.9x best industry standard)
+   - `CudaVideoLoader`: dual decode backends (CPU/PyAV default, NVDEC opt-in) -> fused
+     yuv420 CUDA kernel -> GPU-resident batches; novel fused clip-assembly kernel
+     (`iter_clips`: consistent crop+flip across a clip in ONE launch)
+
 
 1. **Direct-batch fast path** ✅
    - FFCV / tf.data-style loader: one parallel pass decodes → resizes → normalizes

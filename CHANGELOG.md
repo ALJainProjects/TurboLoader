@@ -5,7 +5,76 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.33.0] - unreleased
+## [2.34.0] - 2026-07-11
+
+GPU-everything sprint: resident (pre-processed) epochs and hardware video decode on
+Apple Silicon, a CUDA video path with a novel fused clip-assembly kernel, and a set of
+real bugs found by chaos stress + adversarial review — every number measured on real
+data, every kernel validated against numpy references.
+
+### Added
+- **Metal resident loaders** (Apple Silicon, in the pip wheel): `MetalResidentLoader`
+  (uint8 dataset resident in unified memory, one fused gather+shuffle+normalize kernel
+  launch per batch — 433k img/s consumed / 757k produced on an M4 Max vs 3.7k numpy
+  resident; beats the 3090's CUDA-resident 280k), `MetalResidentArrays` (any-dtype row
+  gathers, ~5x numpy fancy-indexing), `MetalTokenGather` (honest TIE vs the CPU memmap
+  path, 0.87–1.08x — `TokenDataLoader` remains the recommendation).
+- **Metal video** (`MetalVideoLoader`): AVFoundation/VideoToolbox HARDWARE H.264/HEVC
+  decode (system frameworks only — no FFmpeg dependency) feeding a fused
+  NV12→RGB+resize+normalize kernel (MPEG chroma siting, BT.601/709 from the buffer's
+  colorimetry attachment, video range). 1080p→224px at 2,556 f/s on an M4 Max =
+  **3.9x the best industry standard** (OpenCV/PyAV/torchcodec), at 97–99% of the media
+  engine's decode ceiling. Output validated against numpy references computed from raw
+  YUV planes (mean < 0.004).
+- **CUDA video** (`CudaVideoLoader`, CUDA build): GPU-resident `(B,3,H,W)` batches via a
+  dual decode backend — `decode="cpu"` (PyAV threaded decode → plane-direct pinned
+  staging → fused `yuv420_resize_normalize` kernel; DEFAULT) and `decode="nvdec"`
+  (PyNvVideoCodec, zero host↔device traffic; NVDEC measured virtualization-throttled
+  under WSL2 — 130 f/s at ~99% engine utilization vs 1,453 f/s CPU decode — so the flag
+  is opt-in for native Linux). One kernel covers both 4:2:0 layouts (NV12 + I420).
+- **Novel fused clip-assembly kernel** (`CudaVideoLoader.iter_clips`): ONE launch builds
+  a `(T,3,H,W)` training clip with the SAME RandomResizedCrop window + horizontal flip
+  across every frame (spatial augmentation consistent over time), fused with YUV→RGB +
+  resize + normalize. torchvision-parity crop sampling; `train_aug=False` reduces
+  exactly to the batch path (pinned at 1e-6 by tests).
+- `DataLoader.close()` + context-manager support; `metal_allocated_bytes()`
+  (MTLDevice.currentAllocatedSize — powers native-memory leak regression tests);
+  `metal_video_*` / `cuda_video_*` low-level bindings.
+- Benchmarks: `benchmark_video_standards.py` (PyAV / OpenCV / decord / torchcodec vs
+  TurboLoader, per-library subprocess isolation), `benchmark_metal_video.py`,
+  `benchmark_metal_resident.py`; results in `benchmarks/VIDEO_RESULTS.md` and
+  `benchmarks/METAL_RESIDENT_RESULTS.md` (honest losses included: decord leads pure
+  throughput on weak-CPU Linux hosts; e2e ResNet-18 on MPS is a tie — GPU-bound).
+
+### Fixed
+- **Abandoned prefetching loaders leaked a producer thread + TAR fd forever** (the
+  producer's closure rooted the loader against GC while blocking on a full queue;
+  ~1k abandonments exhausted the fd limit and aborted the process). Producers now bind
+  only the C++ core, every put is stop-aware, and an atexit hook winds live producers
+  down before interpreter finalization (also fixes a `terminate called without an
+  active exception` abort at exit). Regression tests fail on the old code.
+- **Objective-C++ units now compile with `-fobjc-arc`**: the Metal registries stored
+  `id<MTLBuffer>`/reader members in structs and relied on `delete` running ObjC release
+  semantics — under the previous default (MRC) every video/resident close leaked its
+  buffers (~65 MB per video open). Leak regression test provably fails on a non-ARC
+  build (`TURBOLOADER_OBJC_ARC=0`).
+- **NVDEC surface-pool recycling**: retaining PyNvVideoCodec frame objects does not keep
+  their device pointers valid past the next `Decode()` call — a retained batch became N
+  copies of the last surface. Frames now copy device-to-device into loader-owned staging
+  immediately (caught by the cpu-vs-nvdec agreement test).
+- Racy first-sample assertion in the dict-mode routing test (the queue pipeline does not
+  guarantee cross-worker order); CI runner-queue starvation on rapid pushes
+  (concurrency cancel-in-progress + job timeouts + pytest-timeout).
+- `metal_video_next_batch` validates caller dims against the handle (an unchecked shape
+  could mint an out-of-bounds numpy view from pure Python); video decode errors now
+  raise instead of truncating silently; a per-context mutex closes a close()-vs-
+  GIL-released next_batch race.
+
+### Performance
+- CUDA video cpu backend: plane-direct copies from PyAV buffers into reused pinned
+  staging (2x on CPU-bound hosts: 181 → 371 f/s on the 3090 box, ahead of OpenCV 312).
+
+## [2.33.0] - 2026-07-09
 
 Experience sprint: the fast path now trains, checkpoints, and overlaps like a modern
 loader — every feature validated end-to-end on real data (Imagenette / Tiny Shakespeare).

@@ -177,3 +177,54 @@ GPU with a hardware JPEG decoder, or different sizes, could shift the balance. `
 trades GPU memory (~K× the input/output buffers) for throughput; 3 is a good default on a 24 GB
 card. The older `__global__` kernels in `gpu_pipeline_integration.hpp` are a separate unwired
 path; this build uses the clean `cuda_transforms.cu`.
+
+## Resident (pre-processed) loaders — decode once, GPU-serve every epoch
+
+FFCV's trick without the `.beton`: decode + resize the dataset to uint8 ONCE, keep it
+GPU/unified-memory resident, then serve each epoch with one fused
+gather(+shuffle)+normalize kernel launch per batch.
+
+```python
+# NVIDIA (CUDA build): ~280k img/s on a 3090 — beats FFCV-raw ~3.5x
+dl = turboloader.CudaResidentLoader(paths, image_size=160, batch_size=64, shuffle=True)
+
+# Apple Silicon (in the pip wheel): 433-757k img/s on an M4 Max (unified memory:
+# "upload" is one memcpy, every GPU-written batch is a zero-copy numpy view)
+dl = turboloader.MetalResidentLoader(paths, image_size=160, batch_size=256, shuffle=True)
+
+# Any-dtype rows (embedding tables, tabular): ~5x numpy fancy-indexing on M4
+ra = turboloader.MetalResidentArrays(embedding_table)   # .gather(idx) -> zero-copy view
+```
+
+Honest note: `MetalTokenGather` (token windows on GPU) measured a TIE with the CPU
+memmap path (0.87–1.08x) — keep using `TokenDataLoader` for tokens. Numbers and
+caveats: `benchmarks/METAL_RESIDENT_RESULTS.md`.
+
+## Video loaders — hardware decode to training batches
+
+```python
+# Apple Silicon (in the pip wheel; no FFmpeg needed): VideoToolbox HARDWARE decode ->
+# fused NV12->RGB + resize + normalize Metal kernel. 2,556 f/s on 1080p H.264 -> 224px
+# (M4 Max) = 3.9x the best industry standard (OpenCV/PyAV/torchcodec), at 97-99% of the
+# media engine's decode ceiling.
+for batch in turboloader.MetalVideoLoader("clip.mp4", image_size=224, batch_size=32):
+    ...  # (B, 3, 224, 224) float32 zero-copy view, valid until the next batch
+
+# NVIDIA (CUDA build): GPU-resident batches with a dual decode backend —
+# decode="cpu" (PyAV threaded, DEFAULT: NVDEC measured virtualization-throttled
+# under WSL2) or decode="nvdec" (PyNvVideoCodec, zero H2D; right on native Linux).
+for batch in turboloader.CudaVideoLoader("clip.mp4", image_size=224, decode="cpu"):
+    x = torch.as_tensor(batch, device="cuda")  # zero-copy adopt
+
+# Novel fused clip assembly: ONE kernel launch builds a (T,3,H,W) clip with the SAME
+# RandomResizedCrop + flip across every frame (the video-augmentation contract),
+# fused with YUV->RGB + resize + normalize:
+for clip in turboloader.CudaVideoLoader("clip.mp4", image_size=224).iter_clips(
+    16, train_aug=True
+):
+    ...
+```
+
+Cross-platform scorecard vs the industry standards (PyAV, OpenCV, decord, torchcodec),
+including where decord still wins on weak-CPU hosts and the WSL2 NVDEC measurement:
+`benchmarks/VIDEO_RESULTS.md`.

@@ -29,6 +29,8 @@ TurboLoader is a high-performance data loading library for machine learning work
 - **Memory-Mapped I/O** - Zero-copy file access for improved throughput
 - **Lock-Free Queues** - Concurrent data structures for efficient multi-threading
 - **GPU image loaders** - `CudaImageLoader` (NVIDIA nvImageCodec — **beats DALI** on an RTX 3090, see below) and `GpuImageLoader` (Apple Metal): end-to-end GPU decode + resize + normalize, GPU-resident output. See [GPU acceleration](docs/GPU_ACCELERATION.md)
+- **Resident (pre-processed) epochs** - `CudaResidentLoader` (**~280k img/s**, beats FFCV 3.5×) and `MetalResidentLoader` (**433–757k img/s** on unified memory) + `MetalResidentArrays` for any-dtype rows. Decode once, serve every epoch with one fused gather+shuffle+normalize kernel launch per batch
+- **Video loaders** - `MetalVideoLoader` (VideoToolbox **hardware** decode, **3.9× the best industry standard** on an M4 Max) and `CudaVideoLoader` (GPU-resident batches, dual CPU/NVDEC decode backends, novel fused clip-assembly kernel via `iter_clips`). See [video results](benchmarks/VIDEO_RESULTS.md)
 
 ---
 
