@@ -47,6 +47,13 @@ class _CudaArray:
             "version": 3,
         }
 
+    @property
+    def shape(self):
+        return self.__cuda_array_interface__["shape"]
+
+    def __len__(self):
+        return self.shape[0]
+
 
 class CudaImageLoader:
     """Parallel decode (nvJPEG or CPU) + cuda_resize_normalize image loader.

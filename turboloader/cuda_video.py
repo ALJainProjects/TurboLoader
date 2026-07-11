@@ -141,6 +141,7 @@ class CudaVideoLoader:
     # ------------------------- NVDEC backend -------------------------------
     def _iter_nvdec(self):
         import PyNvVideoCodec as nvc
+        import torch
 
         demux = nvc.CreateDemuxer(self.path)
         dec = nvc.CreateDecoder(
@@ -150,65 +151,64 @@ class CudaVideoLoader:
             cudastream=0,
             usedevicememory=True,
         )
-        frames, first, idx = [], -1, 0
+        # The decoder RECYCLES its surface pool: pointers taken from a frame are
+        # only valid until Decode() is called again, no matter how long the Python
+        # frame object lives (observed: retaining a batch of frames yields N copies
+        # of the LAST surface). Copy each frame device-to-device into our own
+        # staging the moment it is produced — still zero host<->device traffic.
+        stage = None  # torch cuda uint8 (batch, H*3//2, W)
+        rows, first, idx = 0, -1, 0
         W = H = None
         bt709 = False
         for packet in demux:
             for frame in dec.Decode(packet):
                 keep = idx % self.frame_step == 0
                 if keep:
+                    y_v, c_v = self._nv12_plane_views(frame, torch)
                     if W is None:
-                        ycai, _ = self._nv12_plane_cais(frame)
-                        H, W = int(ycai["shape"][0]), int(ycai["shape"][1])
+                        H, W = int(y_v.shape[0]), int(y_v.shape[1])
                         bt709 = H >= 720 or W >= 1280
-                    if first < 0:
+                        stage = torch.empty(
+                            (self.batch_size, H * 3 // 2, W), dtype=torch.uint8, device="cuda"
+                        )
+                    stage[rows, :H] = y_v
+                    stage[rows, H:] = c_v
+                    if rows == 0:
                         first = idx
-                    frames.append(frame)  # keep alive until the kernel consumed them
+                    rows += 1
                 idx += 1
-                if len(frames) == self.batch_size:
-                    yield self._flush_nvdec(frames, W, H, bt709, first)
-                    frames, first = [], -1
-        if frames:
-            yield self._flush_nvdec(frames, W, H, bt709, first)
+                if rows == self.batch_size:
+                    yield self._flush_nvdec(stage, rows, W, H, bt709, first)
+                    rows, first = 0, -1
+        if rows:
+            yield self._flush_nvdec(stage, rows, W, H, bt709, first)
 
     @staticmethod
-    def _nv12_plane_cais(frame):
-        """PyNvVideoCodec's frame.cuda() returns either one NV12 surface or a
-        list of per-plane objects [Y, CbCr], each with __cuda_array_interface__.
-        Normalize to (y_cai, cbcr_cai) dicts."""
+    def _nv12_plane_views(frame, torch):
+        """Adopt PyNvVideoCodec's frame planes as torch CUDA views: (H, W) luma and
+        the interleaved CbCr plane flattened to (H//2, W). Handles both the
+        per-plane list API ([Y (H,W,1), CbCr (H/2,W/2,2)]) and single surfaces."""
         surf = frame.cuda()
         if isinstance(surf, (list, tuple)):
-            return surf[0].__cuda_array_interface__, surf[1].__cuda_array_interface__
-        cai = dict(surf.__cuda_array_interface__)
-        H = cai["shape"][0] * 2 // 3  # single (H*3/2, W) surface
-        W = cai["shape"][1]
-        stride = cai["strides"][0] if cai.get("strides") else W
-        y = {"shape": (H, W), "strides": (stride, 1), "data": cai["data"]}
-        c = {
-            "shape": (H // 2, W),
-            "strides": (stride, 1),
-            "data": (cai["data"][0] + H * stride, True),
-        }
-        return y, c
+            y = torch.as_tensor(surf[0], device="cuda").squeeze(-1)
+            c = torch.as_tensor(surf[1], device="cuda")
+            return y, c.reshape(c.shape[0], -1)
+        s = torch.as_tensor(surf, device="cuda")  # (H*3/2, W)
+        H = s.shape[0] * 2 // 3
+        return s[:H], s[H:]
 
-    def _flush_nvdec(self, frames, W, H, bt709, first):
-        y, cb, cr = [], [], []
-        y_stride = c_stride = None
-        for f in frames:
-            ycai, ccai = self._nv12_plane_cais(f)
-            y_stride = int(ycai["strides"][0]) if ycai.get("strides") else W
-            c_stride = int(ccai["strides"][0]) if ccai.get("strides") else W
-            y.append(int(ycai["data"][0]))
-            cbcr = int(ccai["data"][0])  # interleaved CbCr plane
-            cb.append(cbcr)
-            cr.append(cbcr + 1)
-        n = len(frames)
+    def _flush_nvdec(self, stage, n, W, H, bt709, first):
+        base = int(stage.data_ptr())
+        fbytes = (H * 3 // 2) * W
+        y = [base + i * fbytes for i in range(n)]
+        cb = [p + H * W for p in y]  # interleaved CbCr plane after Y in staging
+        cr = [p + 1 for p in cb]
         ptr = self._t.cuda_video_yuv420_batch(
             y,
             cb,
             cr,
-            y_stride=y_stride,
-            c_stride=c_stride,
+            y_stride=W,
+            c_stride=W,
             c_px_stride=2,
             src_w=W,
             src_h=H,
