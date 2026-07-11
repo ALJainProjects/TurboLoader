@@ -55,6 +55,19 @@ uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const
 uintptr_t normalize_resident_gather_batch(uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W,
                                           const float mean[3], const float std_[3]);
 
+// Fused YUV 4:2:0 -> RGB (video-range BT.601/709) + bilinear resize + normalize for a
+// batch of decoded VIDEO frames already on the device. Covers NV12 (c_px_stride 2,
+// cb/cr addressing the interleaved plane: cr = cb + 1) and I420 (c_px_stride 1,
+// separate planes). Per-frame plane pointers; strides shared across the batch.
+// Returns a device pointer to (N, 3, dst_h, dst_w) float32 in a double-buffered
+// persistent allocation (valid until the NEXT call — Metal-side lifetime contract),
+// or 0 on error. Sampling math is the numpy-validated Metal nv12 kernel's.
+uintptr_t video_yuv420_batch(const std::vector<uintptr_t>& y_ptrs,
+                             const std::vector<uintptr_t>& cb_ptrs,
+                             const std::vector<uintptr_t>& cr_ptrs, int y_stride, int c_stride,
+                             int c_px_stride, int src_w, int src_h, int dst_h, int dst_w,
+                             bool bt709, const float mean[3], const float std_[3]);
+
 // Streaming (dataset in host RAM, larger than VRAM): create `num_slots` async-H2D slots (each own
 // stream + device scratch + output ring). Returns the number created (0 if CUDA unavailable).
 int stream_normalize_init(int num_slots);

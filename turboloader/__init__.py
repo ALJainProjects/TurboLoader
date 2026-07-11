@@ -2577,6 +2577,14 @@ try:
     except Exception:
         pass
 
+    # CUDA video loader (dual decode backends: CPU/PyAV -> GPU convert, or NVDEC).
+    try:
+        from turboloader.cuda_video import CudaVideoLoader
+
+        __all__ += ["CudaVideoLoader"]
+    except Exception:
+        pass
+
     # Metal resident loaders (Apple Silicon): pre-processed epochs on unified memory —
     # images (fused gather+shuffle+normalize) plus dtype-agnostic arrays/token windows.
     try:

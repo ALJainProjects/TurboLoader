@@ -1562,6 +1562,31 @@ PYBIND11_MODULE(_turboloader, m) {
         "ONE kernel launch — no resize, no H2D. For a GPU-resident pre-processed dataset. Wrap "
         "zero-copy via __cuda_array_interface__.");
     m.def(
+        "cuda_video_yuv420_batch",
+        [](std::vector<uintptr_t> y_ptrs, std::vector<uintptr_t> cb_ptrs,
+           std::vector<uintptr_t> cr_ptrs, int y_stride, int c_stride, int c_px_stride,
+           int src_w, int src_h, int dst_h, int dst_w, bool bt709, std::array<float, 3> mean,
+           std::array<float, 3> std_) -> uintptr_t {
+            uintptr_t out;
+            {
+                py::gil_scoped_release rel;
+                out = turboloader::cuda::video_yuv420_batch(
+                    y_ptrs, cb_ptrs, cr_ptrs, y_stride, c_stride, c_px_stride, src_w, src_h,
+                    dst_h, dst_w, bt709, mean.data(), std_.data());
+            }
+            if (!out) throw std::runtime_error("cuda_video_yuv420_batch failed");
+            return out;
+        },
+        py::arg("y_ptrs"), py::arg("cb_ptrs"), py::arg("cr_ptrs"), py::arg("y_stride"),
+        py::arg("c_stride"), py::arg("c_px_stride"), py::arg("src_w"), py::arg("src_h"),
+        py::arg("dst_h"), py::arg("dst_w"), py::arg("bt709") = false,
+        py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        "Fused YUV 4:2:0 -> RGB + resize + normalize for a batch of DEVICE video frames "
+        "(NV12: c_px_stride=2 with cr_ptrs = cb_ptrs + 1; I420: c_px_stride=1, separate "
+        "planes). Returns device pointer (int) to (N,3,dst_h,dst_w) float32, valid until "
+        "the NEXT call (double-buffered). Wrap via __cuda_array_interface__.");
+    m.def(
         "cuda_normalize_resident_gather",
         [](uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W, std::array<float, 3> mean,
            std::array<float, 3> std_) -> uintptr_t {

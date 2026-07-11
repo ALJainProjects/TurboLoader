@@ -134,6 +134,68 @@ __global__ void normalize_gather_kernel(const uint8_t* src, const long long* sel
     dst[idx] = (v / 255.0f - m) * isd;
 }
 
+// Port of the (numpy-validated) Metal `nv12_resize_normalize` kernel, generalized
+// over the 4:2:0 chroma layout: c_px_stride 2 with cb/cr addressing one interleaved
+// plane = NV12 (NVDEC output); c_px_stride 1 with separate planes = I420 (what CPU
+// decoders emit). Identical sampling math: half-pixel luma bilinear, MPEG chroma
+// siting (horizontal co-sited cx = sx/2, vertical centered cy = sy/2 - 1/4),
+// video-range BT.601/709 matrix, clip.
+__global__ void yuv420_resize_normalize_kernel(const uint8_t* yp, const uint8_t* cbp,
+                                               const uint8_t* crp, int y_stride, int c_stride,
+                                               int c_px_stride, int srcW, int srcH, int dstW,
+                                               int dstH, int bt709, float* dst, float3 mean,
+                                               float3 invstd) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= dstW || y >= dstH) return;
+    float sx = fmaxf(0.0f, (x + 0.5f) * (float)srcW / dstW - 0.5f);
+    float sy = fmaxf(0.0f, (y + 0.5f) * (float)srcH / dstH - 0.5f);
+
+    int x0 = (int)sx, y0 = (int)sy;
+    int x1 = min(x0 + 1, srcW - 1), y1 = min(y0 + 1, srcH - 1);
+    float dx = sx - x0, dy = sy - y0;
+    float Ytop = yp[y0 * y_stride + x0] * (1 - dx) + yp[y0 * y_stride + x1] * dx;
+    float Ybot = yp[y1 * y_stride + x0] * (1 - dx) + yp[y1 * y_stride + x1] * dx;
+    float Yv = Ytop * (1 - dy) + Ybot * dy;
+
+    int cw = (srcW + 1) / 2, ch = (srcH + 1) / 2;
+    float cxf = fminf(fmaxf(sx * 0.5f, 0.0f), (float)(cw - 1));
+    float cyf = fminf(fmaxf(sy * 0.5f - 0.25f, 0.0f), (float)(ch - 1));
+    int cx0 = (int)cxf, cy0 = (int)cyf;
+    int cx1 = min(cx0 + 1, cw - 1), cy1 = min(cy0 + 1, ch - 1);
+    float cdx = cxf - cx0, cdy = cyf - cy0;
+    const uint8_t* cb00 = cbp + cy0 * c_stride;
+    const uint8_t* cb10 = cbp + cy1 * c_stride;
+    const uint8_t* cr00 = crp + cy0 * c_stride;
+    const uint8_t* cr10 = crp + cy1 * c_stride;
+    float Cb = ((float)cb00[cx0 * c_px_stride] * (1 - cdx) +
+                (float)cb00[cx1 * c_px_stride] * cdx) * (1 - cdy) +
+               ((float)cb10[cx0 * c_px_stride] * (1 - cdx) +
+                (float)cb10[cx1 * c_px_stride] * cdx) * cdy;
+    float Cr = ((float)cr00[cx0 * c_px_stride] * (1 - cdx) +
+                (float)cr00[cx1 * c_px_stride] * cdx) * (1 - cdy) +
+               ((float)cr10[cx0 * c_px_stride] * (1 - cdx) +
+                (float)cr10[cx1 * c_px_stride] * cdx) * cdy;
+
+    float yv = (Yv - 16.0f) * (255.0f / 219.0f);
+    float cb = Cb - 128.0f, cr = Cr - 128.0f;
+    float R, G, B;
+    if (bt709) {
+        R = yv + 1.792741f * cr;
+        G = yv - 0.213249f * cb - 0.532909f * cr;
+        B = yv + 2.112402f * cb;
+    } else {
+        R = yv + 1.596027f * cr;
+        G = yv - 0.391762f * cb - 0.812968f * cr;
+        B = yv + 2.017232f * cb;
+    }
+    float rgb[3] = {fminf(fmaxf(R / 255.0f, 0.0f), 1.0f), fminf(fmaxf(G / 255.0f, 0.0f), 1.0f),
+                    fminf(fmaxf(B / 255.0f, 0.0f), 1.0f)};
+    float m[3] = {mean.x, mean.y, mean.z};
+    float isd[3] = {invstd.x, invstd.y, invstd.z};
+    for (int c = 0; c < 3; c++) dst[(c * dstH + y) * dstW + x] = (rgb[c] - m[c]) * isd[c];
+}
+
 }  // namespace
 
 namespace turboloader {
@@ -222,6 +284,58 @@ static float* g_rn_pool[RN_RING] = {nullptr};
 static size_t g_rn_cap[RN_RING] = {0};
 static int g_rn_idx = 0;
 static std::mutex g_rn_mutex;
+
+// Video conversion path: own stream + double-buffered output (a returned pointer
+// stays valid until the NEXT call — same lifetime contract as the Metal side).
+static cudaStream_t g_vid_stream = nullptr;
+static float* g_vid_pool[2] = {nullptr, nullptr};
+static size_t g_vid_cap[2] = {0, 0};
+static int g_vid_idx = 0;
+static std::mutex g_vid_mutex;
+
+uintptr_t video_yuv420_batch(const std::vector<uintptr_t>& y_ptrs,
+                             const std::vector<uintptr_t>& cb_ptrs,
+                             const std::vector<uintptr_t>& cr_ptrs, int y_stride, int c_stride,
+                             int c_px_stride, int src_w, int src_h, int dst_h, int dst_w,
+                             bool bt709, const float mean[3], const float std_[3]) {
+    const size_t n = y_ptrs.size();
+    if (!available() || n == 0 || cb_ptrs.size() != n || cr_ptrs.size() != n || src_w <= 0 ||
+        src_h <= 0 || dst_h <= 0 || dst_w <= 0 || y_stride < src_w ||
+        (c_px_stride != 1 && c_px_stride != 2))
+        return 0;
+    std::lock_guard<std::mutex> lk(g_vid_mutex);
+    if (!g_vid_stream && cudaStreamCreate(&g_vid_stream) != cudaSuccess) return 0;
+    const size_t per = (size_t)3 * dst_h * dst_w;
+    const size_t out_bytes = n * per * sizeof(float);
+    g_vid_idx ^= 1;
+    float*& outp = g_vid_pool[g_vid_idx];
+    if (out_bytes > g_vid_cap[g_vid_idx]) {
+        if (outp) cudaFree(outp);
+        if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
+            g_vid_cap[g_vid_idx] = 0;
+            return 0;
+        }
+        g_vid_cap[g_vid_idx] = out_bytes;
+    }
+    const float3 m = make_float3(mean[0], mean[1], mean[2]);
+    const float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
+    const dim3 block(16, 16);
+    const dim3 grid((dst_w + 15) / 16, (dst_h + 15) / 16);
+    for (size_t i = 0; i < n; i++) {
+        yuv420_resize_normalize_kernel<<<grid, block, 0, g_vid_stream>>>(
+            reinterpret_cast<const uint8_t*>(y_ptrs[i]),
+            reinterpret_cast<const uint8_t*>(cb_ptrs[i]),
+            reinterpret_cast<const uint8_t*>(cr_ptrs[i]), y_stride, c_stride, c_px_stride, src_w,
+            src_h, dst_w, dst_h, bt709 ? 1 : 0, outp + i * per, m, isd);
+    }
+    cudaError_t err = cudaStreamSynchronize(g_vid_stream);
+    if (err == cudaSuccess) err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "[turboloader cuda] video yuv420: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    return reinterpret_cast<uintptr_t>(outp);
+}
 
 uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const float mean[3],
                                    const float std_[3]) {
