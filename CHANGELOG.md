@@ -5,7 +5,7 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.35.0] - 2026-07-12
 
 Cleanliness sprint: a three-lens adversarial audit (dead code / duplication / user
 ergonomics) confirmed 24 findings; every one is fixed here.
