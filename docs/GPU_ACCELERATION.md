@@ -115,9 +115,9 @@ consumer stressing the output ring) — every async batch matched a distinct ref
 ### Build (on a real CUDA box; needs `nvcc` + toolkit, gcc 10+ for C++20)
 
 > **Prebuilt CUDA wheel (no compile):** Linux x86_64 / Python 3.10 / CUDA 13.x runtime —
-> attached to the [GitHub Release](https://github.com/ALJainProjects/TurboLoader/releases/tag/v2.34.1):
+> attached to the [GitHub Release](https://github.com/ALJainProjects/TurboLoader/releases/tag/v2.35.0):
 > ```bash
-> pip install https://github.com/ALJainProjects/TurboLoader/releases/download/v2.34.1/turboloader-2.34.1+cu13-cp310-cp310-linux_x86_64.whl
+> pip install https://github.com/ALJainProjects/TurboLoader/releases/download/v2.35.0/turboloader-2.35.0+cu13-cp310-cp310-linux_x86_64.whl
 > pip install nvidia-nvimgcodec-cu12
 > ```
 > Other Pythons/CUDA versions: build from source below.
