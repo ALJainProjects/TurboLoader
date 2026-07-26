@@ -1,167 +1,158 @@
-# Benchmark Overview
+# Benchmarks — full methodology and results
 
-Performance analysis of TurboLoader 2.33.0.
+The complete, honest scorecard (corrections included). Headlines live in the
+[README](../../README.md); raw scripts in [`benchmarks/`](../../benchmarks/);
+GPU details in [`experiments/cuda/RESULTS.md`](../../experiments/cuda/RESULTS.md),
+[`benchmarks/METAL_RESIDENT_RESULTS.md`](../../benchmarks/METAL_RESIDENT_RESULTS.md),
+[`benchmarks/VIDEO_RESULTS.md`](../../benchmarks/VIDEO_RESULTS.md), and
+[`benchmarks/E2E_TRAINING_RESULTS.md`](../../benchmarks/E2E_TRAINING_RESULTS.md).
 
-## Executive Summary
 
-TurboLoader's direct-batch image loader (one parallel pass: decode -> resize ->
-normalize straight into the output batch buffer) reaches **~39,100 img/s on the fly**
-and **~65,499 img/s with the decoded cache enabled** (`cache_decoded=True`) on Apple
-Silicon over Imagenette-160. Measured against the same dataset and the same forced,
-real consumption, that makes it:
+Measured on **Apple Silicon** over **Imagenette-160** (9,469 real ImageNet JPEGs →
+resize 160×160 → ImageNet-normalize → batched CHW float32, batch 64). To control for
+thermal throttling, every loader is built once, warmed up one epoch, then timed over
+**5 interleaved rounds** (each loader runs once per round); the table reports the
+median. Output is verified correct against torchvision (mean abs diff ≈ 0.04, bilinear
+antialiasing only).
 
-- **1.3x faster** than TensorFlow `tf.data` (AUTOTUNE): ~30,154 img/s
-- **2.1x faster** than PyTorch `DataLoader` (8 persistent workers): ~18,991 img/s
-- For LLM token streams, `TokenDataLoader` sustains **~441M tokens/s** vs **~163M
-  tokens/s** for the NumPy `memmap` idiom (**2.7x**)
+**Image — on-the-fly decode** (re-decode every epoch; for datasets too large to cache
+or with per-epoch random augmentation):
 
-All image numbers use `output_format='pytorch'` (CHW), batch size 64, with a warmup
-epoch and the median of 3 timed epochs under real consumption that forces
-materialization of every batch.
+| Loader | img/s (median) | vs tf.data |
+|---|---:|---:|
+| **TurboLoader `DataLoader`** (`output_format='pytorch'`, nw=6) | **~55,000** | **2.0×** |
+| TensorFlow `tf.data` (AUTOTUNE) | ~27,300 | 1.00× |
+| PyTorch `DataLoader` (PIL, 8 persistent workers) | ~20,500 | 0.75× |
 
-## Latest Results (2.33.0)
+**Image — cached** (decoded tensors held in RAM; both sides consume identically via
+`np.sum`, i.e. delivered as numpy/torch-ready batches — the PyTorch use case):
 
-### Image Throughput (Imagenette-160)
+| Loader | img/s (median) | vs tf.data.cache |
+|---|---:|---:|
+| **TurboLoader** (`cache_decoded=True`, prefetch) | **~67,000** | **1.9×** |
+| TensorFlow `tf.data.cache()` (+ `.numpy()` materialize) | ~35,100 | 1.00× |
 
-| Loader | Throughput (img/s) | Relative |
-|--------|--------------------|----------|
-| **TurboLoader (cached, `cache_decoded=True`)** | **~65,499** | 1.7x vs on-the-fly |
-| **TurboLoader (on-the-fly)** | **~39,100** | 1.0x (reference) |
-| TensorFlow `tf.data` (AUTOTUNE) | ~30,154 | TurboLoader is 1.3x |
-| PyTorch `DataLoader` (8 persistent workers) | ~18,991 | TurboLoader is 2.1x |
+(For *TF-native* consumption that stays in tf tensors, `tf.data.cache()` is faster —
+TurboLoader's cache win is for delivering numpy/torch batches.)
 
-The on-the-fly path decodes, resizes, and normalizes each image in a single parallel
-pass into the output batch buffer, with automatic libjpeg-turbo DCT scaled decode for
-large images. The cached path stores decoded tensors so subsequent epochs skip JPEG
-decoding entirely.
+**LLM tokens** (real text, 55M-token memory-mapped corpus, `seq_len=1024`, next-token):
 
-### LLM Token Streams
-
-| Loader | Throughput (tokens/s) | Relative |
-|--------|-----------------------|----------|
-| **TurboLoader `TokenDataLoader`** | **~441M** | TurboLoader is 2.7x |
-| NumPy `memmap` idiom | ~163M | 1.0x (reference) |
-
-### Test Configuration
-
-- **Hardware:** Apple Silicon
-- **Dataset:** Imagenette-160 — 9,469 real ImageNet JPEGs resized to 160 px
-- **Output format:** `pytorch` (CHW)
-- **Batch size:** 64
-- **Measurement:** real consumption forcing materialization of each batch; one warmup
-  epoch followed by the median of 3 timed epochs
-
-### A Note on Worker Scaling
-
-`num_workers` does not mean the same thing across loaders, so it is not a fair single
-knob to sweep:
-
-- **PyTorch** scales with `num_workers` because each worker is a separate OS process.
-- **TurboLoader's** fast path is a single process-wide C++ thread pool that is already
-  saturated at one "worker" — adding workers does not change its throughput.
-- **TensorFlow** uses `AUTOTUNE` and picks its own parallelism.
-
-The numbers above use each loader's recommended/best configuration: PyTorch with 8
-persistent workers, `tf.data` with AUTOTUNE, and TurboLoader's single saturated thread
-pool.
-
-## Multi-Modality
-
-The same engine drives more than images:
-
-- **Images** packed in WebDataset TAR shards via the direct-batch loader.
-- **LLM token streams** via `TokenDataLoader` (see the token numbers above).
-- **Generic `(N, ...)` arrays** via `ArrayDataLoader`.
-
-Output can be emitted as NumPy, PyTorch CHW, or TensorFlow HWC. Distributed training is
-supported with DDP-safe equal/disjoint sharding.
-
-## Transform Performance
-
-Transforms run on SIMD-vectorized kernels (NEON on Apple Silicon / ARM, AVX2 and
-AVX-512 on x86). Resize uses half-pixel sampling that matches PIL/PyTorch/TF, with
-optional antialiasing. Because transforms are fused into the same parallel pass that
-produces the output batch, their cost is already included in the end-to-end throughput
-numbers reported above rather than measured in isolation.
-
-## Memory Usage
-
-The direct-batch loader writes decoded, resized, normalized samples into a single
-reusable output batch buffer instead of allocating per-sample intermediates, which
-keeps the steady-state working set small. Enabling `cache_decoded=True` trades memory
-for speed by retaining decoded tensors across epochs.
-
-## Methodology
-
-See the [Benchmark Setup Guide](../benchmark_setup.md) for:
-
-- Installing the frameworks compared (TurboLoader, PyTorch, TensorFlow)
-- Dataset preparation (Imagenette-160)
-- Measurement technique (real consumption, warmup + median of timed epochs)
-
-## NVIDIA GPU: vs DALI and FFCV (RTX 3090)
-
-The high-performance GPU comparison, run on its home turf (Linux + RTX 3090). TurboLoader's
-`CudaImageLoader(decode="nvimgcodec")` runs the whole decode + resize + normalize + batch in
-GIL-released C++ via **nvImageCodec** (the codec DALI uses), with K independent decode slots
-overlapping batches. Imagenette-160, batch 64, real consumption, **interleaved** rounds (each
-loader timed adjacently per round, because the host drifts ~40% run-to-run — only within-run
-relative numbers are reliable).
-
-**On-the-fly loaders** (read a JPEG folder, decode+resize+normalize every epoch):
-
-| Loader | vs TurboLoader |
+| Loader | sequences/s (median) |
 |---|---:|
-| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **1.0× (fastest)** |
-| NVIDIA **DALI** (`num_threads=8/12`, best-tuned) | ~0.9× |
-| PyTorch `DataLoader` (PIL, CPU) | ~0.25× |
+| **TurboLoader `TokenDataLoader`** | **~467,000** |
+| numpy memmap idiom (nanoGPT `get_batch`) | ~251,000 |
 
-**TurboLoader beats DALI**: in the cleanest run its median (28,527, min 25,676) sits above DALI's
-max (26,743) — **+12%**; it is ≥ DALI in every run (+6–28% by host load). Output is bijectively
-verified correct vs the single-slot synced path (96/96 batches exact) and correlates 0.99986 with
-the libjpeg-turbo path. Journey: **9.2k → 14.5k → 22.4k → 28.5k** img/s (nvJPEG → Python
-nvImageCodec → single-slot C++ → K-slot async multi-stream).
+**Transforms** (per-image throughput vs torchvision): Resize **2.7×**, ImageNetNormalize
+**3.3×**, HFlip ~1.0×. For CenterCrop, torchvision returns a **lazy strided view** (moves
+zero bytes); compared against TurboLoader's real contiguous crop that looks like 0.45×,
+but when torchvision actually materializes the crop (`.contiguous()`, required before
+batching/most ops) it drops to ~23k img/s and **TurboLoader's contiguous crop is ~6.8×
+faster** (155k vs 23k). Like the cache, this is a lazy-vs-eager comparison; for the
+realistic crop→batch path TurboLoader wins.
 
-**FFCV can't do on-the-fly** — it always requires a one-time offline conversion to its `.beton`
-format. So the fair FFCV comparison is *pre-processed vs pre-processed* — and there TurboLoader
-turns the tables:
+> Earlier drafts quoted single-run figures (~42k, "1.4×") and a "cached epoch" in the
+> tens-of-millions img/s. Those were artifacts (thermal noise; a no-op loop over aliased
+> cached arrays) and were replaced with the interleaved, identical-consumption medians
+> above. Numbers are hardware-dependent — run `benchmarks/` yourself.
 
-| Pre-processed loader (RTX 3090, isolated) | img/s | |
-|---|---:|---|
-| **TurboLoader `CudaResidentLoader`** (fits-in-VRAM, GPU-resident, custom kernel) | **~280,000** | **beats FFCV ~3.5×** |
-| **TurboLoader `CudaStreamLoader`** (streaming > VRAM, fully-C++ GIL-free loop) | **~140,000** | **beats FFCV ~1.6×** |
-| FFCV, raw `.beton` (streams mmap→H2D, worker processes) | ~85,000 | |
+The fast path runs decode + resize + normalize + batch assembly in C++ across a thread
+pool with zero Python per-sample work. Use it like this:
 
-Both TurboLoader loaders decode+resize once (like FFCV's `.beton`) then keep the uint8 on the GPU:
-`CudaResidentLoader` normalizes GPU-resident data with **zero per-epoch H2D** via a custom
-single-launch kernel (~280k; shuffles at ~257k via a fused gather kernel), and `CudaStreamLoader`
-streams larger-than-VRAM data with a fully-in-C++ prefetch loop (~140k, near the PCIe ceiling).
-Measured isolated (the real single-loader-feeds-training case); correctness bijectively verified.
-CUDA is a build-from-source path (not in the PyPI wheels); see
-[GPU acceleration](../GPU_ACCELERATION.md) and `experiments/cuda/RESULTS.md`. Caveat: one RTX 3090
-(GPU-hybrid JPEG decode) at 160px.
-
-So the honest statement: TurboLoader is **measured faster than PyTorch and tf.data on CPU** (above),
-**faster than NVIDIA DALI on-the-fly**, and **faster than FFCV on pre-processed data — both
-fits-in-VRAM and streaming** — on an NVIDIA GPU, while running the same unified API on the CPU and
-on Apple Metal, where neither DALI nor FFCV runs at all.
-
-## Reproducing Results
-
-```bash
-# Clone repository
-git clone https://github.com/ALJainProjects/TurboLoader.git
-cd TurboLoader
-
-# Install (prebuilt manylinux wheels on Linux x86_64 / aarch64)
-pip install turboloader            # torch is optional: pip install turboloader[torch]
-
-# Run the image benchmark against Imagenette-160 (batch 64)
-cd benchmarks
-python benchmark_comparison.py --dataset /path/to/imagenette-160 --batch-size 64
+```python
+loader = turboloader.DataLoader(
+    'imagenet.tar', batch_size=64, num_workers=6,
+    output_format='pytorch',          # (N, C, H, W) float32 array per batch
+    image_size=160,                   # exact resize, done in C++
+    transform=turboloader.ImageNetNormalize())
+for epoch in range(epochs):           # re-iterable
+    for images, meta in loader:       # images.shape == (64, 3, 160, 160)
+        train_step(images)
 ```
 
-## Questions?
+Honest caveats:
+- **Run it yourself** (`benchmarks/`) — results depend heavily on hardware, image size,
+  and pipeline; Linux `fork`-based PyTorch workers shift the PyTorch numbers a lot.
+- **Decode backend differs**: TurboLoader uses libjpeg-turbo; the PyTorch baseline uses PIL.
+- The `output_format='dict'` path returns per-sample dicts and stacks in Python
+  (GIL-bound), so it is much slower — use it only when you need per-sample metadata.
 
-- [Benchmark Setup](../benchmark_setup.md) - How to reproduce these numbers
-- [GitHub Issues](https://github.com/ALJainProjects/TurboLoader/issues)
+For **large source images**, the default path also wins: on 768×768 JPEGs resized to
+160 it runs ~15,000 img/s — faster than even an expertly-tuned `tf.data` pipeline using
+manual `decode_jpeg(ratio=...)` (~14,400) — because it picks the libjpeg-turbo DCT
+scaled-decode factor automatically (you don't have to know to set `ratio`).
+
+### GPU loaders (NVIDIA & Apple)
+
+On **NVIDIA**, `CudaImageLoader(decode="nvimgcodec")` runs the whole decode + resize + normalize
++ batch in GIL-released C++ via **nvImageCodec** (the codec DALI uses), with K independent decode
+slots overlapping batches (multi-batch-in-flight). Among **on-the-fly** loaders (read a JPEG
+folder, decode+resize every epoch) on an **RTX 3090** (Imagenette-160, batch 64, real consumption,
+interleaved rounds to control for ~40% host drift):
+
+| On-the-fly loader | vs TurboLoader |
+|---|---:|
+| **TurboLoader** `decode="nvimgcodec"`, `nvimgcodec_slots=3` | **1.0× (fastest)** |
+| NVIDIA **DALI** (`num_threads=8`, best-tuned) | ~0.9× (TurboLoader **+12%** cleanest run) |
+| PyTorch `DataLoader` (PIL, CPU) | ~0.25× |
+
+**TurboLoader beats DALI** (median above DALI's max in the cleanest run), output bijectively
+verified correct. For **on-the-fly** loading FFCV is faster (~2.6–5.9×) — but it requires an
+offline conversion to its `.beton` format.
+
+**Pre-processed loaders** (decode+resize once, like FFCV's `.beton`) — here TurboLoader turns the
+tables:
+
+| Pre-processed loader | img/s | |
+|---|---:|---|
+| **TurboLoader `MetalResidentLoader`** (Apple M4 Max, unified memory: no H2D exists) | **~757,000 produced / ~433,000 consumed** | ships in the pip wheel |
+| **TurboLoader `CudaResidentLoader`** (fits-in-VRAM: upload uint8 once, GPU-resident) | **~280,000** | **beats FFCV ~3.5×** |
+| **TurboLoader `CudaStreamLoader`** (streaming, dataset > VRAM; fully-C++ loop) | **~140,000** | **beats FFCV ~1.6×** |
+| FFCV, raw `.beton` (streams mmap→H2D each epoch, worker processes) | ~85,000 | |
+
+On **Apple Silicon** the resident trick is even better than on NVIDIA: memory is unified, so
+"upload" is one memcpy and every GPU-written batch is a **zero-copy numpy view**.
+`MetalResidentLoader` serves each epoch as one fused gather+shuffle+normalize kernel launch per
+batch; `MetalResidentArrays` does the same for any-dtype rows (embedding tables: ~5× numpy
+fancy-indexing). Honest null result included: `MetalTokenGather` ties the CPU memmap path
+(0.87–1.08×) — keep using `TokenDataLoader` for tokens.
+
+**Video**: `MetalVideoLoader` (macOS arm64, in the pip wheel — no FFmpeg needed) drives
+VideoToolbox **hardware** H.264/HEVC decode into a fused NV12→RGB+resize+normalize Metal
+kernel: real 1080p → 224px training batches at **~2,550 frames/s** on an M4 Max —
+**3.9× the best industry standard** (OpenCV 657, PyAV 535, torchcodec 173) and 97–99% of
+the media engine's hardware decode ceiling. On NVIDIA, `CudaVideoLoader` (CUDA build)
+lands GPU-resident batches via a dual decode backend (threaded CPU decode by default;
+NVDEC opt-in — measured virtualization-throttled under WSL2) plus a novel **fused
+clip-assembly kernel** (`iter_clips`: consistent RandomResizedCrop+flip across a whole
+clip + YUV→RGB + resize + normalize in ONE launch). Honest scorecard incl. where decord
+still wins on weak-CPU hosts: [benchmarks/VIDEO_RESULTS.md](../../benchmarks/VIDEO_RESULTS.md).
+
+`CudaResidentLoader` uses a custom single-launch normalize kernel + fused gather (shuffles at
+~257k) and **beats FFCV ~3.5×** when the pre-processed uint8 dataset fits in VRAM (very common:
+fine-tuning, per-GPU shards, small/medium sets). For datasets **larger than VRAM**,
+`CudaStreamLoader` runs the whole iteration GIL-free in C++ (`CudaStreamCore`: worker pool + async
+H2D on non-blocking streams + prefetch) and **beats FFCV's streaming ~1.6×** (~140k vs ~85k, near
+the PCIe transfer ceiling). So TurboLoader beats **DALI** on-the-fly and **FFCV** on pre-processed
+data — both fits-in-VRAM and streaming. On **Apple Silicon**, `GpuImageLoader` offloads
+resize+normalize (and a hybrid GPU JPEG decode) to Metal — where neither DALI nor FFCV runs at
+all. CUDA is a build-from-source path (not
+in the PyPI wheels); see [GPU acceleration](../GPU_ACCELERATION.md) for flags, usage, and the
+full write-up (`experiments/cuda/RESULTS.md`).
+
+### Implementation notes
+- **Direct-batch path** (`src/pipeline/direct_batch_loader.hpp`): the default fast path
+  is FFCV/`tf.data`-style — a persistent thread pool reads JPEG bytes by index and
+  decodes → resizes → normalizes **directly into the output batch buffer** in one
+  parallel pass (no worker queue, no per-sample heap copy, no serial collection).
+  Verified memory-safe and race-free (disjoint slot writes, const mmap reads, atomic
+  cursor, per-thread decoders).
+- **Automatic DCT scaled decode**: large JPEGs are decoded at the nearest libjpeg-turbo
+  scale ≥ target, then finely resized — much faster than full-decode + resize.
+- **Resize convention**: half-pixel centers (`align_corners=False`), matching
+  PIL/OpenCV/PyTorch/TF (agrees with torchvision plain bilinear to ~0.4/255; the only
+  remaining difference vs torchvision's default is its antialiasing low-pass filter).
+- SIMD transforms (AVX2/AVX-512/NEON), libjpeg-turbo decode, lock-free SPSC queues
+  (legacy/dict + remote path), persistent `std::thread` pool (`src/core/parallel_for.hpp`).
+- The GIL is released during C++ processing.
+- **OpenMP is opt-in** (`TURBOLOADER_ENABLE_OPENMP=1`); off by default because linking a
+  second OpenMP runtime crashes alongside PyTorch on macOS — the thread pool replaces it.
