@@ -18,9 +18,34 @@ for xb, yb in loader:
 ```
 
 `TokenDataLoader` uses a vectorized fancy-index gather over a `np.memmap` (so multi-GB
-corpora stream without loading into RAM) and benchmarks ~1.9× the standard nanoGPT
-`get_batch` idiom. The image pipeline (decode/transform/TBL) remains C++; these
-modality loaders are NumPy-based and modality-agnostic.
+corpora stream without loading into RAM): measured on an RTX 3090 at GPT-2 shape
+(batch 32 × seq 1024), it delivers **168M tok/s to device vs 88M for the exact nanoGPT
+`get_batch` idiom (1.9×)** — `benchmarks/benchmark_token_loader.py`. The image pipeline
+(decode/transform/TBL) remains C++; these modality loaders are NumPy-based and
+modality-agnostic.
+
+### CUDA fast path: pinned ring and `device=`
+
+```python
+# yields pinned torch int64 tensors from a reused ring (zero steady-state allocs);
+# a yielded tensor's buffer is overwritten `ring` (default 4) batches later
+loader = turboloader.TokenDataLoader('train.bin', seq_len=1024, batch_size=32,
+                                     pin_memory=True)
+
+# or let the loader manage transfers: ONE seq_len+1 gather feeds both x and y
+# (half the memory traffic of separate x/y gathers), H2D runs on a side CUDA
+# stream overlapped with your model's compute, buffer reuse is guarded by CUDA
+# events — batches arrive as CUDA tensors with no lifetime rules to track
+loader = turboloader.TokenDataLoader('train.bin', seq_len=1024, batch_size=32,
+                                     device='cuda')
+for x, y in loader:        # already on GPU
+    loss = model(x, y)
+```
+
+Honest note: in a full GPT training loop the model usually hides the pipeline —
+on a 3090 with a small GPT all paths land within ~2% (`examples/train_gpt_tokenloader.py`).
+The fast path pays off when the input path is the bottleneck: eval sweeps, big
+batch × seq, or CPU-bound steps.
 
 All three modalities are also reachable from the **single `DataLoader` entry point**:
 

@@ -42,6 +42,14 @@ TurboLoader's cache win is for delivering numpy/torch batches.)
 | **TurboLoader `TokenDataLoader`** | **~467,000** |
 | numpy memmap idiom (nanoGPT `get_batch`) | ~251,000 |
 
+On CUDA, measured **delivered to device** at GPT-2 shape (RTX 3090, 32×1024,
+`benchmarks/benchmark_token_loader.py`): TokenDataLoader **168M tok/s vs 88M** for
+the exact nanoGPT idiom incl. `.pin_memory().to(non_blocking=True)` — **1.9×** —
+and `TokenDataLoader(device="cuda")` (zero-alloc pinned ring, side-stream H2D,
+CUDA-event-guarded reuse) matches that while yielding ready GPU tensors. In a full
+GPT training loop all paths are within ~2% (the model hides the pipeline —
+e2e details in [E2E_TRAINING_RESULTS.md](../../benchmarks/E2E_TRAINING_RESULTS.md)).
+
 **Transforms** (per-image throughput vs torchvision): Resize **2.7×**, ImageNetNormalize
 **3.3×**, HFlip ~1.0×. For CenterCrop, torchvision returns a **lazy strided view** (moves
 zero bytes); compared against TurboLoader's real contiguous crop that looks like 0.45×,
@@ -124,7 +132,14 @@ the media engine's hardware decode ceiling. On NVIDIA, `CudaVideoLoader` (CUDA b
 lands GPU-resident batches via a dual decode backend (threaded CPU decode by default;
 NVDEC opt-in — measured virtualization-throttled under WSL2) plus a novel **fused
 clip-assembly kernel** (`iter_clips`: consistent RandomResizedCrop+flip across a whole
-clip + YUV→RGB + resize + normalize in ONE launch). Honest scorecard incl. where decord
+clip + YUV→RGB + resize + normalize in ONE launch). For **training on a labeled video
+dataset**, `VideoDatasetLoader` (`root/class_x/*.mp4` → `(clips, labels, meta)` CUDA
+batches; threaded decode, deterministic per-(seed, epoch) sampling) trains a real
+r3d_18 classifier **1.16× faster end-to-end** than the PyTorch DataLoader + PyAV
+recipe — the first e2e video training benchmark, honest caveat included (both
+pipelines are decode-bound; see
+[E2E_TRAINING_RESULTS.md](../../benchmarks/E2E_TRAINING_RESULTS.md)). Single-file
+scorecard incl. where decord
 still wins on weak-CPU hosts: [benchmarks/VIDEO_RESULTS.md](../../benchmarks/VIDEO_RESULTS.md).
 
 `CudaResidentLoader` uses a custom single-launch normalize kernel + fused gather (shuffles at

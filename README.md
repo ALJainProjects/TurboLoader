@@ -28,11 +28,11 @@ flowchart LR
     D --> E["your training step<br/>(zero-copy to torch)"]
 ```
 
-- **Fast on CPU**: ~55k img/s on-the-fly (2.0× `tf.data`, 2.7× PyTorch DataLoader); trains a real ResNet-18 **1.17× faster end-to-end** with the input pipeline hidden behind the GPU
+- **Fast on CPU**: ~55k img/s on-the-fly (2.0× `tf.data`, 2.7× PyTorch DataLoader); trains a real ResNet-18 **1.05–1.17× faster end-to-end** (run-dependent), ~9% above the pure-GPU floor
 - **Fast on GPU**: beats **NVIDIA DALI** on-the-fly (+12%, RTX 3090) and **FFCV** on pre-processed data (1.6–3.5×); ~757k img/s resident on Apple unified memory
-- **Video**: hardware decode to training batches — **3.9× the best industry standard** on Apple Silicon; CUDA path with a fused clip-assembly kernel
+- **Video**: hardware decode to training batches — **3.9× the best industry standard** on Apple Silicon; CUDA `VideoDatasetLoader` trains a real video classifier **1.16× faster** than the PyTorch+PyAV recipe (first e2e video benchmark)
 - **Train-ready**: fused `train_aug` (torchvision-parity RandomResizedCrop+flip), `state_dict()` mid-epoch resume, pinned-memory rings, DDP sharding
-- **Also tokens & arrays**: memory-mapped `TokenDataLoader` (~1.9× the nanoGPT idiom), `ArrayDataLoader`, and `MapDataLoader` for any `__getitem__` dataset
+- **Also tokens & arrays**: memory-mapped `TokenDataLoader` (**1.9× nanoGPT `get_batch` to-device**, zero-alloc pinned ring, `device='cuda'` overlapped H2D), `ArrayDataLoader`, and `MapDataLoader` for any `__getitem__` dataset
 - **Every number is honest**: interleaved medians, real consumption, corrections published — [full methodology](docs/benchmarks/index.md)
 
 ---
@@ -53,8 +53,10 @@ flowchart TD
     Q1 -- no --> Q2{"Where to decode?"}
     Q2 -- "CPU fast path (default)" --> DL["DataLoader(output_format='pytorch',<br/>image_size=N)"]
     Q2 -- "NVIDIA GPU" --> CIL["CudaImageLoader(decode='nvimgcodec',<br/>return_indices=True)"]
-    VID --> MV["MetalVideoLoader · Apple<br/>CudaVideoLoader · NVIDIA"]
-    TOK --> TDL["TokenDataLoader"]
+    VID --> QV{"Training on a labeled<br/>video dataset?"}
+    QV -- yes --> VDS["VideoDatasetLoader · NVIDIA<br/>(dir of class folders → clips)"]
+    QV -- "stream one file" --> MV["MetalVideoLoader · Apple<br/>CudaVideoLoader · NVIDIA"]
+    TOK --> TDL["TokenDataLoader<br/>(device='cuda' for GPU batches)"]
     ARR --> ADL["ArrayDataLoader<br/>MetalResidentArrays (GPU gathers)"]
     ANY --> MAP["MapDataLoader"]
 
@@ -73,8 +75,9 @@ flowchart TD
 | A pre-processed dataset larger than VRAM (NVIDIA) | `CudaStreamLoader` | Fully-C++ streaming, ~140k img/s. |
 | On-the-fly GPU decode (NVIDIA) | `CudaImageLoader(decode='nvimgcodec', return_indices=True)` | Beats DALI; batches complete OUT of order — align labels via the returned indices. |
 | On-the-fly GPU transforms (Apple) | `MetalImageLoader` (alias of `GpuImageLoader`) | Metal decode+transforms. |
-| Video files | `MetalVideoLoader` (Apple) / `CudaVideoLoader` (NVIDIA) | Hardware decode → training batches; `iter_clips()` for augmented clips. |
-| LLM token streams (memmap) | `TokenDataLoader` | CPU memmap is already optimal (measured). |
+| Video files (stream one) | `MetalVideoLoader` (Apple) / `CudaVideoLoader` (NVIDIA) | Hardware decode → training batches; `iter_clips()` for augmented clips. |
+| Labeled video dataset, training (NVIDIA) | `VideoDatasetLoader(root_dir)` | `root/class_x/*.mp4` → `(clips, labels, meta)` CUDA batches; threaded decode + ONE fused kernel per clip. |
+| LLM token streams (memmap) | `TokenDataLoader` | CPU memmap is already optimal (measured); `device='cuda'` yields ready GPU batches (pinned ring, overlapped H2D). |
 | Arrays / embeddings / tabular | `ArrayDataLoader`; `MetalResidentArrays` for GPU row gathers | |
 | WebDataset-style TARs | `WebDatasetLoader` | |
 
@@ -143,14 +146,16 @@ caveats (and the corrections we published) in [docs/benchmarks](docs/benchmarks/
 | Pre-processed, streaming > VRAM | **~140k img/s** | FFCV ~85k (**1.6×**) | RTX 3090 |
 | Pre-processed, unified memory | **433–757k img/s** | numpy resident ~3.7k | M4 Max |
 | Video → training batches | **2,556 f/s (3.9×)** | OpenCV 657 · PyAV 535 · torchcodec 173 | M4 Max |
-| End-to-end ResNet-18 training | **1.17×** vs PyTorch recipe | at the pure-GPU floor | RTX 3090 |
-| LLM tokens (memmap) | **~467k seq/s** | nanoGPT `get_batch` ~251k | M4 Max |
+| End-to-end ResNet-18 training | **1.05–1.17×** vs PyTorch recipe | ~9% above the pure-GPU floor | RTX 3090 |
+| End-to-end VIDEO training (r3d_18) | **1.16×** vs PyTorch+PyAV recipe | both decode-bound (honest) | RTX 3090 |
+| LLM tokens → device | **168M tok/s (1.9×)** | nanoGPT `get_batch` 88M | RTX 3090 |
 
 Honest notes worth knowing before you quote these: FFCV is faster than us
 *on-the-fly is impossible for it* (needs `.beton` conversion); decord beats our CUDA
 video cpu-backend on weak-CPU hosts; `MetalTokenGather` ties the CPU path (so we
 recommend the CPU path); e2e ResNet-18 on Apple MPS is a **tie** because the GPU is
-the bottleneck. All in the [full write-ups](docs/benchmarks/index.md).
+the bottleneck; `CudaPrefetcher` measured **neutral** in our e2e runs (decode, not
+H2D, binds them). All in the [full write-ups](docs/benchmarks/index.md).
 
 ---
 

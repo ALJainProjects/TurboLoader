@@ -156,6 +156,45 @@ def bench_turboloader(tar_path, labels_path, epochs, batch_size, size, device):
     return times
 
 
+def bench_turboloader_prefetcher(tar_path, labels_path, epochs, batch_size, size, device):
+    """Same recipe + CudaPrefetcher: batch k+1's H2D runs on a side stream while
+    the model computes on batch k (the copy leaves the compute stream entirely)."""
+    import torch
+
+    import turboloader as tl
+
+    labels = np.load(labels_path)
+    loader = tl.DataLoader(
+        tar_path,
+        batch_size=batch_size,
+        output_format="pytorch",
+        image_size=size,
+        transform=tl.ImageNetNormalize(),
+        shuffle=True,
+        seed=0,
+        train_aug=True,
+        pin_memory=True,
+        prefetch_batches=4,
+        drop_last=True,
+    )
+    _model, step = make_model_and_step(device)
+    times = []
+    for ep in range(epochs):
+        loader.set_epoch(ep)
+        dev_sync(device)
+        t0 = time.perf_counter()
+        n, last = 0, 0.0
+        for xb, meta in tl.CudaPrefetcher(loader, device=device):
+            yb = torch.from_numpy(labels[np.asarray(meta["indices"])]).to(device, non_blocking=True)
+            last = step(xb, yb)
+            n += xb.shape[0]
+        dev_sync(device)
+        dt = time.perf_counter() - t0
+        times.append(dt)
+        print(f"  [tl+prefetcher] epoch {ep}: {dt:.2f}s  ({n / dt:.0f} img/s)  loss {last:.3f}")
+    return times
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--imagenette-dir", required=True)
@@ -192,7 +231,8 @@ def main():
         print(f"built labeled tar: {n} images")
 
     print(
-        f"ResNet-18 / Imagenette-160 / bs={args.batch_size} / {args.epochs} epochs / "
+        f"ResNet-18 / {os.path.basename(args.imagenette_dir.rstrip('/'))} / "
+        f"bs={args.batch_size} / {args.epochs} epochs / "
         f"RandomResizedCrop({args.size}) + flip + normalize"
     )
     if args.floor:
@@ -214,6 +254,12 @@ def main():
 
     print("== TurboLoader (train_aug + pin_memory + prefetch) ==")
     t_tl = bench_turboloader(tar_path, labels_path, args.epochs, args.batch_size, args.size, device)
+    t_pf = None
+    if device == "cuda":
+        print("== TurboLoader + CudaPrefetcher (overlapped H2D) ==")
+        t_pf = bench_turboloader_prefetcher(
+            tar_path, labels_path, args.epochs, args.batch_size, args.size, device
+        )
     print("== PyTorch DataLoader (ImageFolder + PIL, workers=%d) ==" % args.workers)
     t_pt = bench_pytorch(
         args.imagenette_dir, args.epochs, args.batch_size, args.workers, args.size, device
@@ -221,11 +267,18 @@ def main():
     med = lambda v: sorted(v)[len(v) // 2]
     # epoch 0 is warmup (cudnn autotune, page cache, worker spawn) — excluded from stats.
     s_tl, s_pt = t_tl[1:] or t_tl, t_pt[1:] or t_pt
-    print(
+    line = (
         f"\nmedian steady-state epoch (excl. warmup): "
         f"turboloader {med(s_tl):.2f}s | pytorch {med(s_pt):.2f}s | "
         f"speedup {med(s_pt) / med(s_tl):.2f}x"
     )
+    if t_pf is not None:
+        s_pf = t_pf[1:] or t_pf
+        line += (
+            f"\nwith CudaPrefetcher: {med(s_pf):.2f}s | "
+            f"speedup vs pytorch {med(s_pt) / med(s_pf):.2f}x"
+        )
+    print(line)
 
 
 if __name__ == "__main__":
