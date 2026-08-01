@@ -5,12 +5,16 @@ and trains a 4-layer GPT for a few hundred steps — comparing the input pipelin
 
   1. the classic nanoGPT ``get_batch`` numpy-memmap idiom
   2. ``turboloader.TokenDataLoader`` (same (x, y) next-token batches)
+  3. ``TokenDataLoader(device="cuda")`` — pinned ring + overlapped H2D, yields
+     CUDA tensors directly (CUDA only)
 
-Both feed the identical model/step; loss decreasing proves the data is real and correctly
-aligned (x shifted by one = y). Honest note: with a model this small (4x128) both pipelines
-are within ~10% in the full training loop on a 3090 — TokenDataLoader's loader-only
-advantage (see benchmarks) matters when the input path, not the model, is the bottleneck
-(bigger batches/seq, CPU-bound steps, or dataloading-heavy eval sweeps).
+All feed the identical model/step; loss decreasing proves the data is real and correctly
+aligned (x shifted by one = y). Honest note: with a model this small (4x128) all three
+are within ~2% in the full training loop on a 3090 (85.4 / 83.7 / 83.6 steps/s) — the
+model hides the pipeline. Loader-only at GPT-2 shape (32x1024) the difference is real:
+TokenDataLoader delivers 168M tok/s to device vs get_batch's 88M (1.9x) — see
+benchmarks/benchmark_token_loader.py. It matters when the input path is the bottleneck
+(dataloading-heavy eval sweeps, CPU-bound steps, big batch x seq).
 Usage:  python examples/train_gpt_tokenloader.py
 """
 

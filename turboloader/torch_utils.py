@@ -73,8 +73,8 @@ class CudaPrefetcher:
         for item in self.loader:
             if staged is not None:
                 dev, meta, was_tuple = staged
-                current.wait_stream(stream)   # consumer must not touch dev early
-                dev.record_stream(current)    # nor may the allocator recycle it
+                current.wait_stream(stream)  # consumer must not touch dev early
+                dev.record_stream(current)  # nor may the allocator recycle it
                 yield (dev, meta) if was_tuple else dev
             staged = _stage(item)
         if staged is not None:

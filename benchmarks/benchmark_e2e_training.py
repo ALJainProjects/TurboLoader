@@ -231,7 +231,8 @@ def main():
         print(f"built labeled tar: {n} images")
 
     print(
-        f"ResNet-18 / Imagenette-160 / bs={args.batch_size} / {args.epochs} epochs / "
+        f"ResNet-18 / {os.path.basename(args.imagenette_dir.rstrip('/'))} / "
+        f"bs={args.batch_size} / {args.epochs} epochs / "
         f"RandomResizedCrop({args.size}) + flip + normalize"
     )
     if args.floor:

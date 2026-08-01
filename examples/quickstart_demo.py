@@ -4,7 +4,7 @@ import turboloader as tl
 print("TurboLoader — 9,469 real ImageNet JPEGs (Imagenette-160)\n")
 
 loader = tl.DataLoader(
-    "imagenette_train.tar"  # TAR archive of JPEGs,
+    "imagenette_train.tar",  # TAR archive of JPEGs
     batch_size=256,
     image_size=160,
     output_format="pytorch",        # (N, 3, H, W) float32, normalized

@@ -5,6 +5,48 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+End-to-end speed sprint: video training, LLM token fast path, honest re-measurement
+of the ResNet e2e story on fresh hardware states, and platform/CI gaps.
+
+### Added
+- **`VideoDatasetLoader`** (CUDA): labeled clip batches from a DIRECTORY of videos —
+  ImageFolder-style `root/class_x/*.mp4` discovery, N PyAV decoder threads with
+  per-thread container caches and pts-derived seeking (counting fallback for
+  untagged streams), frame-weighted uniform `(video, start)` sampling reproducible
+  per `(seed, epoch)`, augmentation decisions drawn in task order and results
+  re-sequenced (bit-reproducible under any worker scheduling), stop-aware queue
+  lifecycle, flat pinned staging, ONE fused `cuda_video_clip_yuv420` launch per
+  clip. Yields `(clips, labels, meta)` CUDA tensors.
+- **First end-to-end VIDEO training benchmark** (`benchmark_e2e_video_training.py`):
+  r3d_18 on real footage (BBB vs Jellyfish segments) — TurboLoader **1.16×** vs the
+  PyTorch DataLoader + PyAV recipe, honest caveat: both pipelines decode-bound.
+- **`TokenDataLoader` fast path**: `pin_memory=True` (zero-alloc pinned ring) and
+  `device="cuda"` (side-stream H2D overlapped with compute, CUDA-event-guarded
+  buffer reuse, yields ready GPU tensors). ONE `seq_len+1` gather feeds both x and
+  the shifted target — half the memory traffic of the two-gather idiom. Measured
+  to-device at GPT-2 shape (3090): **168M tok/s vs nanoGPT get_batch 88M (1.9×)**;
+  new `benchmark_token_loader.py`.
+- **`CudaPrefetcher`** (`turboloader.torch_utils`): apex-style overlapped H2D
+  double-buffering for any loader. Honest measured result in our ResNet e2e at
+  160px AND 224px: **neutral** (decode delivery, not H2D, binds those epochs) —
+  documented as such; useful when transfers dominate.
+- **Self-hosted CUDA CI** (`cuda-tests.yml`): workflow_dispatch-only job on the
+  registered RTX 3090 WSL2 runner (never runs fork-PR code) — builds the extension
+  in-place and runs the CUDA suite (`gh workflow run cuda-tests.yml`).
+- Tests: token pinned/device paths (gather equivalence on CPU; ring reuse, device
+  parity, resume under CUDA), VideoDatasetLoader (discovery on all platforms;
+  batch contract, label alignment via pixel means, per-epoch determinism,
+  early-exit wind-down under CUDA).
+
+### Changed
+- e2e training results re-measured and re-framed honestly: 3090 at 160px AND new
+  224px runs (1.05–1.08× vs PyTorch, ~9% above the pure-GPU floor; earlier-run
+  1.17× kept with context — gap-to-floor is the stable metric), M4 MPS 224px tie
+  documented alongside the 160px tie. README headline table updated (video e2e +
+  tokens-to-device rows), docs/tokens_arrays.md documents the fast path.
+
 ## [2.35.0] - 2026-07-12
 
 Cleanliness sprint: a three-lens adversarial audit (dead code / duplication / user
