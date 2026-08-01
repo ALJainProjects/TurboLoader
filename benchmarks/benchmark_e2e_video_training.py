@@ -26,11 +26,30 @@ import urllib.request
 
 import numpy as np
 
-VIDS = {
-    "bunny": "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_30MB.mp4",
-    "jellyfish": "https://test-videos.co.uk/vids/jellyfish/mp4/h264/720/Jellyfish_720_10s_30MB.mp4",
+VIDS = {  # first URL that works wins (some hosts 403 non-browser agents)
+    "bunny": [
+        "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_30MB.mp4",
+        "https://download.blender.org/peach/trailer/trailer_480p.mov",
+    ],
+    "jellyfish": [
+        "https://test-videos.co.uk/vids/jellyfish/mp4/h264/720/Jellyfish_720_10s_30MB.mp4",
+        "https://download.blender.org/durian/trailer/sintel_trailer-480p.mp4",
+    ],
 }
 SEG_FRAMES = 30  # 1s segments @30fps
+
+
+def _download(urls, dst):
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=60) as r, open(dst, "wb") as f:
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+            return url
+        except Exception as e:
+            print(f"  {url}: {e}")
+    raise RuntimeError(f"could not download any of {urls}")
 
 
 def build_dataset(root):
@@ -41,11 +60,11 @@ def build_dataset(root):
     if os.path.exists(os.path.join(root, "bunny")):
         return
     os.makedirs(root, exist_ok=True)
-    for cls, url in VIDS.items():
+    for cls, urls in VIDS.items():
         src = os.path.join(root, f"_{cls}.mp4")
         if not os.path.exists(src):
             print(f"downloading {cls} ...")
-            urllib.request.urlretrieve(url, src)
+            _download(urls, src)
         cdir = os.path.join(root, cls)
         os.makedirs(cdir, exist_ok=True)
         with av.open(src) as ic:
