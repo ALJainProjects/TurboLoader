@@ -33,6 +33,16 @@ class TokenDataLoader:
         steps_per_epoch: batches per epoch (default: cover the corpus once).
         return_targets: also yield shifted-by-one targets (causal LM). If False, yields
             just inputs (e.g. for encoder/MLM pipelines that build their own targets).
+        pin_memory: yield torch int64 tensors backed by page-locked (pinned) host
+            memory instead of numpy arrays, gathered zero-alloc into a reused ring of
+            ``ring`` buffer pairs. Requires torch + CUDA. LIFETIME: a yielded tensor's
+            buffer is overwritten ``ring`` batches later — transfer it (or finish using
+            it) before then, or use ``device=`` which manages this for you.
+        device: stage batches onto this CUDA device (implies ``pin_memory``). The
+            host->device copy runs on a side stream, overlapped with your model's
+            compute, and pinned-buffer reuse is guarded with CUDA events — no lifetime
+            rules for you to track. Yields device tensors ready for the current stream.
+        ring: pinned buffer pairs in flight (default 4).
 
     Example:
         >>> dl = TokenDataLoader("train.bin", seq_len=1024, batch_size=8)
@@ -51,6 +61,9 @@ class TokenDataLoader:
         seed=42,
         steps_per_epoch=None,
         return_targets=True,
+        pin_memory=False,
+        device=None,
+        ring=4,
     ):
         if isinstance(source, (str, bytes)) or hasattr(source, "__fspath__"):
             self._tokens = np.memmap(source, dtype=np.dtype(dtype), mode="r")
@@ -74,6 +87,29 @@ class TokenDataLoader:
         if steps_per_epoch is None:
             steps_per_epoch = max(1, self._max_start // (self.batch_size * self.seq_len))
         self.steps_per_epoch = int(steps_per_epoch)
+
+        self._device = device
+        self._pin = bool(pin_memory) or device is not None
+        self._ring = int(ring)
+        self._torch = None
+        if self._pin:
+            if self._ring < 2:
+                raise ValueError("ring must be >= 2 (double buffering)")
+            try:
+                import torch
+            except ImportError:
+                raise RuntimeError("pin_memory/device on TokenDataLoader requires torch")
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "pin_memory/device on TokenDataLoader requires CUDA (page-locked "
+                    "host memory is a CUDA-driver feature); without CUDA the default "
+                    "numpy path is already the right choice"
+                )
+            self._torch = torch
+            if device is not None:
+                self._device = torch.device(device)
+                if self._device.type != "cuda":
+                    raise ValueError("device= fast path supports CUDA devices only")
 
     def __len__(self):
         return self.steps_per_epoch
@@ -99,12 +135,73 @@ class TokenDataLoader:
         y = np.asarray(self._tokens[rows + 1], dtype=np.int64)
         return x, y
 
+    def _gather_into(self, starts, offs, idx, stage, x_out, y_out):
+        """Zero-alloc gather: ONE fancy-index read of the seq_len+1 window into a
+        reused staging buffer covers both x and its shifted target (the numpy path
+        reads x and y separately — twice the memory traffic), then cast-copies into
+        the caller's preallocated int64 buffers."""
+        np.add(starts[:, None], offs[None, :], out=idx)
+        np.take(self._tokens, idx, out=stage)
+        if y_out is None:
+            np.copyto(x_out, stage)
+        else:
+            np.copyto(x_out, stage[:, :-1])
+            np.copyto(y_out, stage[:, 1:])
+
+    def _iter_pinned(self, starts, resume):
+        torch = self._torch
+        bs, L, ring = self.batch_size, self.seq_len, self._ring
+        win = L + (1 if self.return_targets else 0)
+        offs = np.arange(win, dtype=np.int64)
+        idx = np.empty((bs, win), dtype=np.int64)
+        stage = np.empty((bs, win), dtype=self._tokens.dtype)
+        xs = [torch.empty((bs, L), dtype=torch.int64, pin_memory=True) for _ in range(ring)]
+        x_np = [t.numpy() for t in xs]
+        if self.return_targets:
+            ys = [torch.empty((bs, L), dtype=torch.int64, pin_memory=True) for _ in range(ring)]
+            y_np = [t.numpy() for t in ys]
+        to_device = self._device is not None
+        if to_device:
+            side = torch.cuda.Stream(device=self._device)
+            current = torch.cuda.current_stream(device=self._device)
+            events = [torch.cuda.Event() for _ in range(ring)]
+        r = 0
+        for b in range(resume, self.steps_per_epoch):
+            self._served += 1
+            s = starts[b * bs : (b + 1) * bs]
+            if to_device:
+                # The H2D copy out of slot r (issued `ring` batches ago) must have
+                # drained before the CPU overwrites the pinned buffer.
+                events[r].synchronize()
+            self._gather_into(
+                s, offs, idx, stage, x_np[r], y_np[r] if self.return_targets else None
+            )
+            if not to_device:
+                yield (xs[r], ys[r]) if self.return_targets else xs[r]
+            else:
+                # Copies ride a side stream: enqueued when the generator resumes,
+                # i.e. AFTER the consumer queued its step on batch b-1, so they
+                # overlap that step's kernels instead of serializing behind them.
+                with torch.cuda.stream(side):
+                    dx = xs[r].to(self._device, non_blocking=True)
+                    dy = ys[r].to(self._device, non_blocking=True) if self.return_targets else None
+                    events[r].record(side)
+                current.wait_stream(side)
+                dx.record_stream(current)
+                if dy is not None:
+                    dy.record_stream(current)
+                yield (dx, dy) if self.return_targets else dx
+            r = (r + 1) % ring
+
     def __iter__(self):
         starts = self._start_positions()
         bs = self.batch_size
         resume = self._resume_batches
         self._resume_batches = 0
         self._served = resume
+        if self._pin:
+            yield from self._iter_pinned(starts, resume)
+            return
         for b in range(resume, self.steps_per_epoch):
             self._served += 1
             yield self._gather(starts[b * bs : (b + 1) * bs])

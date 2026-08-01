@@ -93,6 +93,22 @@ def train(loader_kind, tokens, steps, batch_size, seq_len, device):
                     ).long()
                 ep += 1
 
+    elif loader_kind == "turboloader-dev":
+        # device= fast path: one seq_len+1 gather into a pinned ring, H2D on a side
+        # stream overlapped with compute — batches arrive as CUDA tensors.
+        import turboloader as tl
+
+        dl = tl.TokenDataLoader(
+            tokens, seq_len=seq_len, batch_size=batch_size, seed=0, device=device
+        )
+
+        def batches():
+            ep = 0
+            while True:
+                dl.set_epoch(ep)
+                yield from dl
+                ep += 1
+
     else:  # nanoGPT get_batch idiom
 
         def batches():
@@ -107,7 +123,8 @@ def train(loader_kind, tokens, steps, batch_size, seq_len, device):
     # warmup
     for _ in range(10):
         x, y = next(gen)
-        x, y = x.to(device), y.to(device)
+        if not x.is_cuda:
+            x, y = x.to(device), y.to(device)
         opt.zero_grad(set_to_none=True)
         loss = loss_fn(model(x).transpose(1, 2), y)
         loss.backward()
@@ -117,7 +134,8 @@ def train(loader_kind, tokens, steps, batch_size, seq_len, device):
     first = last = None
     for s in range(steps):
         x, y = next(gen)
-        x, y = x.to(device), y.to(device)
+        if not x.is_cuda:
+            x, y = x.to(device), y.to(device)
         opt.zero_grad(set_to_none=True)
         loss = loss_fn(model(x).transpose(1, 2), y)
         loss.backward()
@@ -143,9 +161,16 @@ def main():
     print(f"real corpus: tiny shakespeare, {len(tokens):,} byte-tokens | device={device}")
     steps, bs, sl = 300, 64, 128
     dt_tl, f_tl, l_tl = train("turboloader", tokens, steps, bs, sl, device)
+    dt_dv = None
+    if device == "cuda":
+        dt_dv, f_dv, l_dv = train("turboloader-dev", tokens, steps, bs, sl, device)
+        assert l_dv < f_dv - 0.5, "loss must clearly decrease (real training)"
     dt_np, f_np, l_np = train("get_batch", tokens, steps, bs, sl, device)
     assert l_tl < f_tl - 0.5 and l_np < f_np - 0.5, "loss must clearly decrease (real training)"
-    print(f"pipeline speed: turboloader {steps/dt_tl:.1f} vs get_batch {steps/dt_np:.1f} steps/s")
+    line = f"pipeline speed: turboloader {steps/dt_tl:.1f} vs get_batch {steps/dt_np:.1f} steps/s"
+    if dt_dv is not None:
+        line += f" | turboloader device= {steps/dt_dv:.1f} steps/s"
+    print(line)
 
 
 if __name__ == "__main__":
