@@ -7,8 +7,12 @@ TurboLoader's iterators. Pairs with ``DataLoader(pin_memory=True, ...)``:
 pinned sources make ``non_blocking=True`` genuinely asynchronous (pageable
 memory silently degrades to a synchronous copy and the prefetcher buys nothing).
 
-Measured effect (RTX 3090, ResNet-18/Imagenette e2e): recovers most of the
-~3 ms/batch H2D that previously sat on the compute stream.
+Honest measurement (RTX 3090, ResNet-18/Imagenette e2e, 160px AND 224px):
+NEUTRAL — within noise of the plain pinned non_blocking loop, because on that
+box decode delivery, not the 1.6-3 ms/batch H2D, binds the epoch. Overlap pays
+when transfers are large relative to the step (big batches / high-res / small
+models) or the copy demonstrably sits on the compute stream in a profile;
+measure on your setup before adopting.
 """
 
 import numpy as np
