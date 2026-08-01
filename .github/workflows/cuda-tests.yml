@@ -7,11 +7,20 @@
 # The runner reuses the box's ~/tbl_venv (torch+CUDA preinstalled — a fresh
 # torch install per run would be ~2.5 GB). The extension is built in the
 # checkout and imported via PYTHONPATH, so the box's own editable install of
-# ~/TurboLoader is never touched.
+# ~/TurboLoader is never touched. The runner shell is non-interactive: CUDA
+# env (nvcc PATH + build flags) must be set HERE, not assumed from ~/.bashrc —
+# the first run built silently CUDA-less without these.
 name: CUDA Tests (self-hosted)
 
 on:
   workflow_dispatch:
+
+env:
+  CUDA_HOME: /usr/local/cuda
+  TURBOLOADER_ENABLE_CUDA: "1"
+  TURBOLOADER_ENABLE_NVJPEG: "1"
+  TURBOLOADER_ENABLE_NVIMGCODEC: "1"
+  TURBOLOADER_CUDA_ARCH: native
 
 jobs:
   cuda-tests:
@@ -19,15 +28,20 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # setuptools_scm needs tags for a truthful version
 
       - name: Build CUDA extension in-place
         run: |
+          export PATH="/usr/local/cuda/bin:$PATH"
           ~/tbl_venv/bin/python setup.py build_ext --inplace 2>&1 | tail -3
           PYTHONPATH=$PWD ~/tbl_venv/bin/python -c "
           import turboloader as t
+          assert t.cuda_available(), 'cuda_available() is False'
           f = t.features()
-          assert f.get('cuda'), f
-          print('cuda build OK:', {k: v for k, v in f.items() if v})"
+          assert f.get('gpu_transforms'), f
+          assert hasattr(t, 'cuda_video_clip_yuv420'), 'video kernels missing'
+          print('cuda build OK, version', f['version'])"
 
       - name: CUDA test suite
         run: |
