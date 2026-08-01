@@ -87,9 +87,10 @@ def build_dataset(root):
                     ostream.width, ostream.height = W, H
                     ostream.pix_fmt = "yuv420p"
                     ostream.bit_rate = 4_000_000
-                f = frame.reformat(format="yuv420p")
-                f.pts = None
-                out.mux(ostream.encode(f))
+                # fresh frame from pixels — passing decoded frames straight to
+                # the encoder trips avcodec_send_frame EINVAL on some streams
+                rgb = av.VideoFrame.from_ndarray(frame.to_ndarray(format="rgb24"), format="rgb24")
+                out.mux(ostream.encode(rgb))
                 n += 1
             close(out)
         print(f"  {cls}: {seg + 1} segments of {SEG_FRAMES} frames")
