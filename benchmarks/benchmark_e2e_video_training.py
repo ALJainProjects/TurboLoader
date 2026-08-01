@@ -121,11 +121,10 @@ def bench_pytorch(root, epochs, steps, batch_size, clip_len, size, workers, devi
     from torchvision.transforms import v2 as T
     from torchvision.transforms.v2 import functional as TF
 
+    classes = sorted(d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)))
     items = []
-    for ci, cls in enumerate(sorted(os.listdir(root))):
+    for ci, cls in enumerate(classes):
         cdir = os.path.join(root, cls)
-        if not os.path.isdir(cdir) or cls.startswith("_"):
-            continue
         items += [(os.path.join(cdir, f), ci) for f in sorted(os.listdir(cdir))]
 
     norm = T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])

@@ -1,0 +1,36 @@
+# CUDA test suite on the self-hosted RTX 3090 runner (WSL2).
+#
+# workflow_dispatch ONLY — self-hosted runners must never execute fork-PR code
+# (arbitrary code on the box). Trigger manually from the Actions tab or:
+#     gh workflow run cuda-tests.yml [--ref <branch>]
+#
+# The runner reuses the box's ~/tbl_venv (torch+CUDA preinstalled — a fresh
+# torch install per run would be ~2.5 GB). The extension is built in the
+# checkout and imported via PYTHONPATH, so the box's own editable install of
+# ~/TurboLoader is never touched.
+name: CUDA Tests (self-hosted)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cuda-tests:
+    runs-on: [self-hosted, cuda]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build CUDA extension in-place
+        run: |
+          ~/tbl_venv/bin/python setup.py build_ext --inplace 2>&1 | tail -3
+          PYTHONPATH=$PWD ~/tbl_venv/bin/python -c "
+          import turboloader as t
+          f = t.features()
+          assert f.get('cuda'), f
+          print('cuda build OK:', {k: v for k, v in f.items() if v})"
+
+      - name: CUDA test suite
+        run: |
+          PYTHONPATH=$PWD ~/tbl_venv/bin/python -m pytest -q --timeout=600 \
+            tests/test_cuda.py tests/test_cuda_video.py \
+            tests/test_video_dataset.py tests/test_token_pinned.py
