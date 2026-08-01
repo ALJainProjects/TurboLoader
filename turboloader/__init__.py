@@ -2637,6 +2637,14 @@ try:
     except Exception:
         pass
 
+    # Labeled clip batches from a directory of videos (training-oriented).
+    try:
+        from turboloader.video_dataset import VideoDatasetLoader
+
+        __all__ += ["VideoDatasetLoader"]
+    except Exception:
+        pass
+
     # Torch training utilities (CudaPrefetcher: overlapped H2D double-buffering).
     try:
         from turboloader.torch_utils import CudaPrefetcher
