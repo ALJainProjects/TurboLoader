@@ -47,4 +47,5 @@ jobs:
         run: |
           PYTHONPATH=$PWD ~/tbl_venv/bin/python -m pytest -q --timeout=600 \
             tests/test_cuda.py tests/test_cuda_video.py \
-            tests/test_video_dataset.py tests/test_token_pinned.py
+            tests/test_video_dataset.py tests/test_token_pinned.py \
+            tests/test_tbl_raw.py
