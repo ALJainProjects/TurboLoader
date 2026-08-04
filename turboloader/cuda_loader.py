@@ -450,6 +450,47 @@ class CudaResidentLoader:
         # Upload once; stays resident on the GPU for every epoch.
         self._gpu = torch.from_numpy(arr).cuda().contiguous()
 
+    @classmethod
+    def from_tbl(cls, path, batch_size=64, **kw):
+        """Build from a pre-processed RAW_U8 ``.tbl`` (see ``preprocess_to_tbl``):
+        the decode-all pass disappears — upload reads straight through the mmap.
+        H/W come from the file (RAW serving does not resize)."""
+        from turboloader.tbl import open_raw_view
+
+        view, H, W = open_raw_view(path)
+        if H != W:
+            raise ValueError(f"resident loader needs square samples, file is {W}x{H}")
+        self = cls.__new__(cls)
+        import torch
+
+        import turboloader as t
+
+        if not getattr(t, "cuda_available", lambda: False)() or not hasattr(
+            t, "cuda_normalize_resident"
+        ):
+            raise RuntimeError(
+                "CudaResidentLoader needs a CUDA build with cuda_normalize_resident."
+            )
+        self._t, self._torch = t, torch
+        self._H = self._W = H
+        self.batch_size = int(batch_size)
+        self.mean = list(kw.get("mean", (0.485, 0.456, 0.406)))
+        self.std = list(kw.get("std", (0.229, 0.224, 0.225)))
+        self.drop_last = bool(kw.get("drop_last", True))
+        self.shuffle = bool(kw.get("shuffle", False))
+        self.seed = int(kw.get("seed", 42))
+        self.return_indices = bool(kw.get("return_indices", False))
+        self._epoch = 0
+        self._n = view.shape[0]
+        # Chunked upload through the mmap: peak host memory is one chunk, not
+        # the dataset (and no torch warning about read-only numpy arrays).
+        self._gpu = torch.empty((self._n, H, W, 3), dtype=torch.uint8, device="cuda")
+        step = max(1, (64 << 20) // (H * W * 3))  # ~64 MB chunks
+        for s in range(0, self._n, step):
+            chunk = np.ascontiguousarray(view[s : s + step])
+            self._gpu[s : s + chunk.shape[0]] = torch.from_numpy(chunk)
+        return self
+
     def set_epoch(self, epoch):
         self._epoch = int(epoch)
 

@@ -1138,6 +1138,126 @@ PYBIND11_MODULE(_turboloader, m) {
           "    str: Version string matching the installed package");
 
     m.def(
+        "normalize_u8_batch",
+        [](py::array_t<uint8_t, py::array::c_style> input,
+           py::array_t<float, py::array::c_style> output,
+           py::object mean_obj, py::object std_obj, bool scale01) {
+            auto in = input.unchecked<4>();
+            if (in.shape(3) != 3)
+                throw std::invalid_argument("input must be (N, H, W, 3) uint8");
+            const size_t N = in.shape(0), H = in.shape(1), W = in.shape(2);
+            auto out = output.mutable_unchecked<4>();
+            if (static_cast<size_t>(out.shape(0)) != N || out.shape(1) != 3 ||
+                static_cast<size_t>(out.shape(2)) != H ||
+                static_cast<size_t>(out.shape(3)) != W)
+                throw std::invalid_argument("output must be (N, 3, H, W) float32");
+
+            const bool has_ms = !mean_obj.is_none();
+            if (has_ms == std_obj.is_none())
+                throw std::invalid_argument("pass both mean and std, or neither");
+            std::vector<float> mean, inv_std;
+            if (has_ms) {
+                mean = mean_obj.cast<std::vector<float>>();
+                auto std_vec = std_obj.cast<std::vector<float>>();
+                if (mean.size() != 3 || std_vec.size() != 3)
+                    throw std::invalid_argument("mean/std must have 3 elements");
+                for (float s : std_vec)
+                    inv_std.push_back(s != 0.0f ? 1.0f / s : 1.0f);
+            }
+
+            const uint8_t* src = input.data();
+            float* dst = output.mutable_data();
+            const size_t px = H * W;
+            {
+                // The same fused SIMD primitive the TAR fast path uses — output is
+                // bit-identical to DataLoader(..., ImageNetNormalize()) batches.
+                py::gil_scoped_release release;
+                turboloader::parallel_for(N, [&](size_t i) {
+                    float* img = dst + i * 3 * px;
+                    transforms::simd::deinterleave_hwc_to_chw_f32(
+                        src + i * px * 3, img, img + px, img + 2 * px, px, scale01,
+                        has_ms ? mean.data() : nullptr,
+                        has_ms ? inv_std.data() : nullptr);
+                });
+            }
+        },
+        py::arg("input"), py::arg("output"), py::arg("mean") = py::none(),
+        py::arg("std") = py::none(), py::arg("scale01") = true,
+        "Fused SIMD batch op: (N, H, W, 3) uint8 -> (N, 3, H, W) float32,\n"
+        "optionally scaled to [0,1] and mean/std normalized, in parallel across\n"
+        "the batch with the GIL released. Writes into the caller's preallocated\n"
+        "output (pinned rings welcome). The serve kernel of the TBL-RAW\n"
+        "pre-processed pipeline.\n\n"
+        "Args:\n"
+        "    input: (N, H, W, 3) uint8, C-contiguous\n"
+        "    output: (N, 3, H, W) float32, C-contiguous, written in place\n"
+        "    mean/std: optional 3-element sequences (in [0,1] units when\n"
+        "        scale01=True — pass both or neither)\n"
+        "    scale01: divide by 255 first (default True)");
+
+    m.def(
+        "normalize_u8_gather",
+        [](py::array_t<uint8_t, py::array::c_style> dataset,
+           py::array_t<int64_t, py::array::c_style> indices,
+           py::array_t<float, py::array::c_style> output, py::object mean_obj,
+           py::object std_obj, bool scale01) {
+            auto ds = dataset.unchecked<4>();
+            if (ds.shape(3) != 3)
+                throw std::invalid_argument("dataset must be (N, H, W, 3) uint8");
+            const int64_t N = ds.shape(0);
+            const size_t H = ds.shape(1), W = ds.shape(2);
+            auto idx = indices.unchecked<1>();
+            const size_t B = idx.shape(0);
+            auto out = output.mutable_unchecked<4>();
+            if (static_cast<size_t>(out.shape(0)) != B || out.shape(1) != 3 ||
+                static_cast<size_t>(out.shape(2)) != H ||
+                static_cast<size_t>(out.shape(3)) != W)
+                throw std::invalid_argument("output must be (B, 3, H, W) float32");
+            for (size_t i = 0; i < B; ++i)
+                if (idx(i) < 0 || idx(i) >= N)
+                    throw std::out_of_range("gather index out of range");
+
+            const bool has_ms = !mean_obj.is_none();
+            if (has_ms == std_obj.is_none())
+                throw std::invalid_argument("pass both mean and std, or neither");
+            std::vector<float> mean, inv_std;
+            if (has_ms) {
+                mean = mean_obj.cast<std::vector<float>>();
+                auto std_vec = std_obj.cast<std::vector<float>>();
+                if (mean.size() != 3 || std_vec.size() != 3)
+                    throw std::invalid_argument("mean/std must have 3 elements");
+                for (float s : std_vec)
+                    inv_std.push_back(s != 0.0f ? 1.0f / s : 1.0f);
+            }
+
+            const uint8_t* src = dataset.data();
+            const int64_t* ix = indices.data();
+            float* dst = output.mutable_data();
+            const size_t px = H * W;
+            {
+                // Gather + convert in ONE parallel pass: each worker reads its
+                // sample's u8 rows straight from the (possibly mmap-backed)
+                // dataset and writes normalized CHW floats — no staging copy,
+                // and the page-cache reads parallelize with the compute.
+                py::gil_scoped_release release;
+                turboloader::parallel_for(B, [&](size_t i) {
+                    float* img = dst + i * 3 * px;
+                    transforms::simd::deinterleave_hwc_to_chw_f32(
+                        src + static_cast<size_t>(ix[i]) * px * 3, img, img + px,
+                        img + 2 * px, px, scale01, has_ms ? mean.data() : nullptr,
+                        has_ms ? inv_std.data() : nullptr);
+                });
+            }
+        },
+        py::arg("dataset"), py::arg("indices"), py::arg("output"),
+        py::arg("mean") = py::none(), py::arg("std") = py::none(),
+        py::arg("scale01") = true,
+        "normalize_u8_batch with a fused index gather: rows `indices` of a\n"
+        "(N, H, W, 3) uint8 dataset (mmap views welcome) -> (B, 3, H, W)\n"
+        "float32, one parallel SIMD pass, GIL released. The shuffled-serve\n"
+        "kernel of the TBL-RAW pipeline.");
+
+    m.def(
         "decode_jpeg",
         [](py::bytes data) -> py::array_t<uint8_t> {
             // Copy the bytes into a C++ buffer so the decode can run with the GIL released
@@ -2510,7 +2630,8 @@ PYBIND11_MODULE(_turboloader, m) {
         .value("BMP", formats::SampleFormat::BMP)
         .value("TIFF", formats::SampleFormat::TIFF)
         .value("VIDEO_MP4", formats::SampleFormat::VIDEO_MP4)
-        .value("VIDEO_AVI", formats::SampleFormat::VIDEO_AVI);
+        .value("VIDEO_AVI", formats::SampleFormat::VIDEO_AVI)
+        .value("RAW_U8", formats::SampleFormat::RAW_U8);
 
     // MetadataType enum
     py::enum_<formats::MetadataType>(m, "MetadataType",

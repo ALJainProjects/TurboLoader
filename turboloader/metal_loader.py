@@ -15,6 +15,8 @@ training) before advancing, or ``.copy()`` it.
 Datasets must fit in RAM (unified memory) — for Imagenette-160 that is ~727 MB.
 """
 
+import os
+
 import numpy as np
 
 __all__ = [
@@ -74,6 +76,14 @@ class MetalResidentLoader:
         self._epoch = 0
         self._handle = None
 
+        if (isinstance(source, (str, bytes)) or hasattr(source, "__fspath__")) and os.fspath(
+            source
+        ).lower().endswith(".tbl"):
+            # Pre-processed RAW_U8 .tbl: the mmap view IS the (N,H,W,3) uint8
+            # source — no decode pass; "upload" is one memcpy into unified memory.
+            from turboloader.tbl import open_raw_view
+
+            source, _, _ = open_raw_view(source)
         if isinstance(source, np.ndarray):
             if source.ndim != 4 or source.shape[3] != 3 or source.dtype != np.uint8:
                 raise ValueError("array source must be (N, H, W, 3) uint8")

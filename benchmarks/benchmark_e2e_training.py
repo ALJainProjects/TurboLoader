@@ -195,6 +195,43 @@ def bench_turboloader_prefetcher(tar_path, labels_path, epochs, batch_size, size
     return times
 
 
+def bench_turboloader_tbl(tbl_path, labels_path, epochs, batch_size, device):
+    """Pre-processed TBL-RAW pipeline: mmap, zero decode. Recipe note: hflip only
+    (RandomResizedCrop cannot be applied to pre-resized samples) — the same
+    lighter-recipe caveat as the CudaResidentLoader comparison."""
+    import torch
+
+    import turboloader as tl
+
+    labels = np.load(labels_path)
+    loader = tl.TblRawImageLoader(
+        tbl_path,
+        batch_size=batch_size,
+        shuffle=True,
+        seed=0,
+        drop_last=True,
+        pin_memory=(device == "cuda"),
+        hflip_prob=0.5,
+    )
+    _model, step = make_model_and_step(device)
+    times = []
+    for ep in range(epochs):
+        loader.set_epoch(ep)
+        dev_sync(device)
+        t0 = time.perf_counter()
+        n, last = 0, 0.0
+        for x, meta in loader:
+            xb = (x if hasattr(x, "to") else torch.from_numpy(x)).to(device, non_blocking=True)
+            yb = torch.from_numpy(labels[np.asarray(meta["indices"])]).to(device, non_blocking=True)
+            last = step(xb, yb)
+            n += xb.shape[0]
+        dev_sync(device)
+        dt = time.perf_counter() - t0
+        times.append(dt)
+        print(f"  [tbl-raw] epoch {ep}: {dt:.2f}s  ({n / dt:.0f} img/s)  loss {last:.3f}")
+    return times
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--imagenette-dir", required=True)
@@ -207,6 +244,11 @@ def main():
         "--floor",
         action="store_true",
         help="also measure the pure-GPU floor (same steps, resident batch)",
+    )
+    ap.add_argument(
+        "--tbl",
+        action="store_true",
+        help="also run the TBL-RAW pre-processed pipeline (hflip-only recipe)",
     )
     args = ap.parse_args()
 
@@ -252,6 +294,18 @@ def main():
             f"{time.perf_counter() - t0:.2f}s"
         )
 
+    t_tbl = None
+    if args.tbl:
+        import turboloader as _tl
+
+        tbl_path = os.path.join(args.imagenette_dir, f"imagenette_e2e_{args.size}.tbl")
+        if not os.path.exists(tbl_path):
+            t0 = time.perf_counter()
+            _tl.preprocess_to_tbl(tar_path, tbl_path, image_size=args.size)
+            print(f"preprocess_to_tbl (one-time): {time.perf_counter() - t0:.1f}s")
+        print("== TurboLoader TBL-RAW (mmap, zero decode; hflip-only recipe) ==")
+        t_tbl = bench_turboloader_tbl(tbl_path, labels_path, args.epochs, args.batch_size, device)
+
     print("== TurboLoader (train_aug + pin_memory + prefetch) ==")
     t_tl = bench_turboloader(tar_path, labels_path, args.epochs, args.batch_size, args.size, device)
     t_pf = None
@@ -277,6 +331,12 @@ def main():
         line += (
             f"\nwith CudaPrefetcher: {med(s_pf):.2f}s | "
             f"speedup vs pytorch {med(s_pt) / med(s_pf):.2f}x"
+        )
+    if t_tbl is not None:
+        s_tbl = t_tbl[1:] or t_tbl
+        line += (
+            f"\nTBL-RAW (hflip-only recipe): {med(s_tbl):.2f}s | "
+            f"speedup vs pytorch {med(s_pt) / med(s_tbl):.2f}x"
         )
     print(line)
 
