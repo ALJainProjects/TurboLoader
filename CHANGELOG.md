@@ -8,9 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 End-to-end speed sprint: video training, LLM token fast path, honest re-measurement
-of the ResNet e2e story on fresh hardware states, and platform/CI gaps.
+of the ResNet e2e story on fresh hardware states, platform/CI gaps — and the
+TBL-RAW pre-processed pipeline (decode once, mmap-serve every epoch).
 
 ### Added
+- **TBL-RAW pre-processed pipeline** — the new efficiency frontier for
+  many-epoch training, portably (FFCV's idea without the .beton lock-in):
+  - `SampleFormat.RAW_U8` in TBL v2 (decoded RGB uint8 HWC training samples);
+    uncompressed uniform payloads are contiguous, so
+    `turboloader.tbl.open_raw_view` maps a whole file as one zero-copy
+    `(N, H, W, 3)` array.
+  - `preprocess_to_tbl(tar, tbl, image_size=N)` — one-time parallel
+    decode+resize through the C++ fast path (9,469 Imagenette images in 6 s
+    on an M4 Max), exact uint8 recovery from the [0,1] floats.
+  - `TblRawImageLoader` / `DataLoader('data.tbl')` — serves batches from the
+    mmap through ONE fused parallel SIMD pass (`normalize_u8_gather`: index
+    gather + u8 HWC → normalized f32 CHW, GIL released). Output is
+    **bit-identical** to `DataLoader(tar, ImageNetNormalize())` (tested with
+    `array_equal`). Full loader contract: (seed, epoch) determinism, resume,
+    drop_last, pinned ring, `meta['indices']`, serve-time `hflip_prob` (the
+    one aug this path supports — crop/color must be baked; `train_aug` on a
+    .tbl raises with guidance).
+  - Measured (M4 Max, Imagenette 160px, both consumption levels): **525k
+    img/s produce / 88k np.sum-consumed** vs on-the-fly 33k/31k (**16x/2.8x**)
+    and `cache_decoded=True` 65k/59k (**8x/1.5x**) — faster than the float32
+    RAM cache at BOTH levels while peak-RSS grew +448 MB (file-backed,
+    evictable) vs the cache's +7.8 GB (anonymous). Honest numbers: LZ4 on
+    decoded photos = 1.06x → RAW defaults `compression=False`; the .tbl is
+    larger than the source TAR (727 vs 263 MB) — you trade disk for decode.
+  - GPU-resident ingestion: `MetalResidentLoader('data.tbl')` (upload = one
+    memcpy into unified memory) and `CudaResidentLoader.from_tbl(...)`
+    (chunked upload through the mmap) — the decode-all pass disappears.
+  - `normalize_u8_batch` / `normalize_u8_gather` exported as standalone ops;
+    `benchmarks/benchmark_tbl_raw.py`; e2e benchmark `--tbl` flag; 24 tests.
 - **`VideoDatasetLoader`** (CUDA): labeled clip batches from a DIRECTORY of videos —
   ImageFolder-style `root/class_x/*.mp4` discovery, N PyAV decoder threads with
   per-thread container caches and pts-derived seeking (counting fallback for

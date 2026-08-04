@@ -869,6 +869,7 @@ try:
                     seed=seed,
                     drop_last=drop_last,
                     pin_memory=pin_memory,
+                    prefetch_batches=prefetch_batches,
                 )
                 if image_size is not None:
                     want = (

@@ -35,6 +35,27 @@ or with per-epoch random augmentation):
 (For *TF-native* consumption that stays in tf tensors, `tf.data.cache()` is faster —
 TurboLoader's cache win is for delivering numpy/torch batches.)
 
+**Pre-processed (TBL-RAW)** — decode once (`preprocess_to_tbl`: 9,469 images in
+6 s), then serve every epoch from an mmap through one fused parallel SIMD pass
+(`normalize_u8_gather`), output bit-identical to the TAR pipeline. M4 Max,
+Imagenette, 160px, reported at TWO consumption levels (`benchmark_tbl_raw.py`)
+so under-consumption artifacts are ruled out by construction:
+
+| Pipeline | produce img/s | np.sum-consumed | peak-RSS growth |
+|---|---:|---:|---:|
+| on-the-fly TAR (decode every epoch) | 33,263 | 31,083 | +322 MB |
+| **TBL-RAW mmap (zero decode)** | **525,605** | **88,367** | +448 MB (file-backed, evictable) |
+| `cache_decoded=True` (float32 in RAM) | 65,371 | 58,974 | **+7,843 MB** (anonymous) |
+
+TBL-RAW beats the float32 RAM cache at BOTH consumption levels while the
+"memory" it uses is clean page cache the kernel can drop at any time. Honest
+notes: LZ4 on decoded photos = **1.06x** (why RAW defaults to
+`compression=False` — the real compression is uint8-not-float32, 4x); the .tbl
+is bigger than the JPEG TAR (727 vs 263 MB — disk traded for decode); no
+per-epoch random crop (serve-time hflip only) — full-aug training stays on the
+TAR pipeline. The GPU-resident loaders ingest the same file and skip their
+decode-all pass. Details: [tbl_v2_format.md](../tbl_v2_format.md).
+
 **LLM tokens** (real text, 55M-token memory-mapped corpus, `seq_len=1024`, next-token):
 
 | Loader | sequences/s (median) |

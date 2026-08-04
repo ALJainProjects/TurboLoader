@@ -30,6 +30,7 @@ flowchart LR
 
 - **Fast on CPU**: ~55k img/s on-the-fly (2.0× `tf.data`, 2.7× PyTorch DataLoader); trains a real ResNet-18 **1.05–1.17× faster end-to-end** (run-dependent), ~9% above the pure-GPU floor
 - **Fast on GPU**: beats **NVIDIA DALI** on-the-fly (+12%, RTX 3090) and **FFCV** on pre-processed data (1.6–3.5×); ~757k img/s resident on Apple unified memory
+- **Pre-processed pipeline (TBL-RAW)**: decode once, mmap-serve every epoch — **525k img/s on CPU** (16× on-the-fly, 8× the float32 RAM cache at ~none of the owned memory), bit-identical batches, any hardware
 - **Video**: hardware decode to training batches — **3.9× the best industry standard** on Apple Silicon; CUDA `VideoDatasetLoader` trains a real video classifier **1.16× faster** than the PyTorch+PyAV recipe (first e2e video benchmark)
 - **Train-ready**: fused `train_aug` (torchvision-parity RandomResizedCrop+flip), `state_dict()` mid-epoch resume, pinned-memory rings, DDP sharding
 - **Also tokens & arrays**: memory-mapped `TokenDataLoader` (**1.9× nanoGPT `get_batch` to-device**, zero-alloc pinned ring, `device='cuda'` overlapped H2D), `ArrayDataLoader`, and `MapDataLoader` for any `__getitem__` dataset
@@ -48,9 +49,11 @@ flowchart TD
     S --> ARR["📊 Arrays / tabular"]
     S --> ANY["🐍 Anything with<br/>__getitem__"]
 
-    IMG --> Q1{"Fits in GPU / unified<br/>memory, many epochs?"}
-    Q1 -- yes --> RES["CudaResidentLoader · NVIDIA<br/>MetalResidentLoader · Apple"]
-    Q1 -- no --> Q2{"Where to decode?"}
+    IMG --> Q0{"Many epochs,<br/>resize+flip recipe OK?"}
+    Q0 -- "no (full random aug)" --> Q2{"Where to decode?"}
+    Q0 -- yes --> Q1{"Fits in GPU /<br/>unified memory?"}
+    Q1 -- yes --> RES["CudaResidentLoader · NVIDIA<br/>MetalResidentLoader · Apple<br/>(both ingest .tbl)"]
+    Q1 -- no --> TBL["preprocess_to_tbl once →<br/>DataLoader('data.tbl') · mmap"]
     Q2 -- "CPU fast path (default)" --> DL["DataLoader(output_format='pytorch',<br/>image_size=N)"]
     Q2 -- "NVIDIA GPU" --> CIL["CudaImageLoader(decode='nvimgcodec',<br/>return_indices=True)"]
     VID --> QV{"Training on a labeled<br/>video dataset?"}
@@ -71,7 +74,8 @@ flowchart TD
 | A TAR of JPEGs, training on any hardware | **`DataLoader(..., output_format='pytorch', image_size=N)`** | The default fast path — auto-fused C++ decode+resize+normalize. Start here. |
 | The same, need per-sample dicts (inspection, irregular data) | `DataLoader(...)` (default `output_format='dict'`) | Several times slower; not for training loops. |
 | Labels | derive from `meta['indices']` / `sample['filename']` | Samples carry **no** `label` key; align an external label array by index. |
-| A dataset that fits in GPU/unified memory, many epochs | `CudaResidentLoader` (NVIDIA) / `MetalResidentLoader` (Apple) | Decode once, ~280k / 433–757k img/s per epoch. `return_indices=True` for labels. |
+| A dataset that fits in GPU/unified memory, many epochs | `CudaResidentLoader` (NVIDIA) / `MetalResidentLoader` (Apple) | Decode once, ~280k / 433–757k img/s per epoch. `return_indices=True` for labels. Both ingest `.tbl`. |
+| Many epochs, fixed resize(+hflip) recipe, any hardware | `preprocess_to_tbl` once → `DataLoader('data.tbl')` | mmap serve, zero decode, ~zero owned RAM; bit-identical to the TAR pipeline. No random crop — bake it or use the TAR path. |
 | A pre-processed dataset larger than VRAM (NVIDIA) | `CudaStreamLoader` | Fully-C++ streaming, ~140k img/s. |
 | On-the-fly GPU decode (NVIDIA) | `CudaImageLoader(decode='nvimgcodec', return_indices=True)` | Beats DALI; batches complete OUT of order — align labels via the returned indices. |
 | On-the-fly GPU transforms (Apple) | `MetalImageLoader` (alias of `GpuImageLoader`) | Metal decode+transforms. |
@@ -145,6 +149,7 @@ caveats (and the corrections we published) in [docs/benchmarks](docs/benchmarks/
 | Pre-processed, fits in VRAM | **~280k img/s** | FFCV ~80k (**3.5×**) | RTX 3090 |
 | Pre-processed, streaming > VRAM | **~140k img/s** | FFCV ~85k (**1.6×**) | RTX 3090 |
 | Pre-processed, unified memory | **433–757k img/s** | numpy resident ~3.7k | M4 Max |
+| Pre-processed, CPU mmap (TBL-RAW, any hardware) | **525k img/s** (88k np.sum-consumed) | float32 RAM cache 65k (59k) at 17× the owned RAM | M4 Max |
 | Video → training batches | **2,556 f/s (3.9×)** | OpenCV 657 · PyAV 535 · torchcodec 173 | M4 Max |
 | End-to-end ResNet-18 training | **1.05–1.17×** vs PyTorch recipe | ~9% above the pure-GPU floor | RTX 3090 |
 | End-to-end VIDEO training (r3d_18) | **1.16×** vs PyTorch+PyAV recipe | both decode-bound (honest) | RTX 3090 |

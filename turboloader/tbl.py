@@ -76,6 +76,7 @@ def open_raw_view(path):
 
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
+_DONE = object()  # prefetch-queue end sentinel
 
 
 def preprocess_to_tbl(
@@ -147,6 +148,11 @@ class TblRawImageLoader:
             page-locked buffers (CUDA hosts). LIFETIME: a yielded batch's buffer
             is overwritten ``ring`` batches later. Default (False) yields fresh
             numpy arrays with no reuse contract.
+        prefetch_batches: background-produce this many batches ahead (the SIMD
+            serve releases the GIL, so production overlaps your training step —
+            without it the serve cost sits on the training thread). 0 disables.
+            With ``pin_memory`` the effective depth is clamped to ``ring - 2``
+            so a buffer is never overwritten while you (or the queue) hold it.
     """
 
     def __init__(
@@ -160,8 +166,9 @@ class TblRawImageLoader:
         seed=42,
         drop_last=False,
         pin_memory=False,
-        ring=3,
+        ring=4,
         hflip_prob=0.0,
+        prefetch_batches=2,
     ):
         import turboloader as t
 
@@ -177,7 +184,10 @@ class TblRawImageLoader:
         self.drop_last = bool(drop_last)
         self._pin = bool(pin_memory)
         self._ring = int(ring)
+        if self._pin and self._ring < 3:
+            raise ValueError("ring must be >= 3 with pin_memory (consumer + queue + producer)")
         self.hflip_prob = float(hflip_prob)
+        self._prefetch = max(0, int(prefetch_batches))
         self._epoch = 0
         self._served = 0
         self._resume_batches = 0
@@ -230,7 +240,8 @@ class TblRawImageLoader:
         flip_rng = (
             np.random.default_rng((self.seed, self._epoch, 1)) if self.hflip_prob > 0 else None
         )
-        for b in range(resume, n_batches):
+
+        def make(b):
             idx = order[b * bs : (b + 1) * bs]
             k = len(idx)
             if self._pin:
@@ -251,12 +262,60 @@ class TblRawImageLoader:
                 if sel.size:
                     stage[sel] = stage[sel, :, ::-1]
                 t.normalize_u8_batch(stage[:k], out[:k], mean=self.mean, std=self.std)
-            self._served += 1
             meta = {"indices": idx.copy()}
-            if self._pin:
-                yield (out_t[:k], meta)
-            else:
-                yield (out, meta)
+            return (out_t[:k], meta) if self._pin else (out, meta)
+
+        # Background prefetch: batch b+1 is produced (SIMD ops release the GIL)
+        # while the consumer trains on batch b — without this the whole serve
+        # cost sits on the training thread and e2e is SLOWER than the TAR
+        # pipeline's threaded prefetch (measured on the 3090: 4.51s vs 3.73s
+        # epochs before this thread existed). Depth is clamped so the pinned
+        # ring can never be overwritten while the consumer (or queue) holds it.
+        depth = self._prefetch if not self._pin else min(self._prefetch, self._ring - 2)
+        if depth <= 0:
+            for b in range(resume, n_batches):
+                self._served += 1
+                yield make(b)
+            return
+
+        import queue as _queue
+        import threading
+
+        stop = threading.Event()
+        q = _queue.Queue(maxsize=depth)
+
+        def put(item):
+            while not stop.is_set():
+                try:
+                    q.put(item, timeout=0.25)
+                    return True
+                except _queue.Full:
+                    continue
+            return False
+
+        def producer():
+            try:
+                for b in range(resume, n_batches):
+                    if not put(make(b)):
+                        return
+                put(_DONE)
+            except Exception as e:  # surfaced on the consumer thread
+                put(("__tblraw_err__", repr(e)))
+
+        th = threading.Thread(target=producer, daemon=True, name="tblraw-prefetch")
+        th.start()
+        try:
+            while True:
+                item = q.get()
+                if item is _DONE:
+                    break
+                if isinstance(item[0], str) and item[0] == "__tblraw_err__":
+                    raise RuntimeError(f"TBL-RAW prefetch failed: {item[1]}")
+                self._served += 1
+                yield item
+        finally:
+            stop.set()
+            th.join(timeout=5)
 
     def close(self):  # symmetry with the other loaders; nothing owned
         pass

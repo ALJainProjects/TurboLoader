@@ -281,3 +281,51 @@ class TestGatherOp:
             tl.normalize_u8_gather(ds, np.array([4], dtype=np.int64), out)
         with pytest.raises(Exception, match="range"):
             tl.normalize_u8_gather(ds, np.array([-1], dtype=np.int64), out)
+
+
+class TestPrefetch:
+    def test_prefetch_identical_to_sync(self, tbl_path):
+        sync = tl.TblRawImageLoader(tbl_path, batch_size=8, seed=4, prefetch_batches=0)
+        pre = tl.TblRawImageLoader(tbl_path, batch_size=8, seed=4, prefetch_batches=2)
+        sync.set_epoch(3)
+        pre.set_epoch(3)
+        for (sb, sm), (pb, pm) in zip(sync, pre):
+            assert np.array_equal(sm["indices"], pm["indices"])
+            assert np.array_equal(sb, pb)
+
+    def test_prefetch_hflip_identical_to_sync(self, tbl_path):
+        kw = dict(batch_size=8, seed=4, hflip_prob=0.5)
+        sync = tl.TblRawImageLoader(tbl_path, prefetch_batches=0, **kw)
+        pre = tl.TblRawImageLoader(tbl_path, prefetch_batches=2, **kw)
+        for (sb, _), (pb, _) in zip(sync, pre):
+            assert np.array_equal(sb, pb)
+
+    def test_early_exit_winds_down(self, tbl_path):
+        import threading
+
+        before = {th.name for th in threading.enumerate()}
+        dl = tl.TblRawImageLoader(tbl_path, batch_size=4, prefetch_batches=2)
+        for i, _ in enumerate(dl):
+            if i == 1:
+                break
+        import time
+
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            alive = {th.name for th in threading.enumerate()} - before
+            if not any("tblraw" in n for n in alive):
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"prefetch thread leaked: {alive}")
+
+    def test_resume_with_prefetch(self, tbl_path):
+        a = tl.TblRawImageLoader(tbl_path, batch_size=8, seed=6, prefetch_batches=2)
+        it = iter(a)
+        next(it)
+        sd = a.state_dict()
+        del it
+        b = tl.TblRawImageLoader(tbl_path, batch_size=8, seed=6, prefetch_batches=2)
+        b.load_state_dict(sd)
+        resumed = [m["indices"].tolist() for _, m in b]
+        c = tl.TblRawImageLoader(tbl_path, batch_size=8, seed=6, prefetch_batches=0)
+        assert resumed == [m["indices"].tolist() for _, m in c][1:]
