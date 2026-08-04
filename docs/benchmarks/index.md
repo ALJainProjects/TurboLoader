@@ -35,6 +35,35 @@ or with per-epoch random augmentation):
 (For *TF-native* consumption that stays in tf tensors, `tf.data.cache()` is faster —
 TurboLoader's cache win is for delivering numpy/torch batches.)
 
+**Pre-processed (TBL-RAW)** — decode once (`preprocess_to_tbl`: 9,469 images in
+6 s), then serve every epoch from an mmap through one fused parallel SIMD pass
+(`normalize_u8_gather`), output bit-identical to the TAR pipeline. M4 Max,
+Imagenette, 160px, every configuration in its OWN subprocess (cross-stage
+thread-pool/allocator state measurably contaminates in-process comparisons —
+a lesson re-learned here), reported at TWO consumption levels
+(`benchmark_tbl_raw.py`) so under-consumption artifacts are ruled out:
+
+| Pipeline | produce img/s | np.sum-consumed | peak RSS |
+|---|---:|---:|---:|
+| on-the-fly TAR (decode every epoch) | 32,417 | 31,130 | 519 MB |
+| **TBL-RAW, `prefetch_batches` default (training)** | 144k† | **98,560** | 1,008 MB (file-backed, evictable) |
+| **TBL-RAW, `prefetch_batches=0` (raw serve)** | **531,367** | 88,945 | 931 MB (file-backed, evictable) |
+| `cache_decoded=True` (float32 in RAM) | 62,493 | 59,744 | **8,796 MB** (anonymous) |
+
+† prefetch's produce figure is thread-scheduling noise (a no-op consumer makes
+the producer thread thrash); its stable, honest number is the consumed one —
+which prefetch IMPROVES (98.6k vs 88.9k sync) because production overlaps the
+consumer, which is the whole point for training loops.
+
+TBL-RAW beats the float32 RAM cache at BOTH consumption levels in BOTH modes
+while the "memory" it uses is clean page cache the kernel can drop at any
+time. Honest notes: LZ4 on decoded photos = **1.06x** (why RAW defaults to
+`compression=False` — the real compression is uint8-not-float32, 4x); the .tbl
+is bigger than the JPEG TAR (727 vs 263 MB — disk traded for decode); no
+per-epoch random crop (serve-time hflip only) — full-aug training stays on the
+TAR pipeline. The GPU-resident loaders ingest the same file and skip their
+decode-all pass. Details: [tbl_v2_format.md](../tbl_v2_format.md).
+
 **LLM tokens** (real text, 55M-token memory-mapped corpus, `seq_len=1024`, next-token):
 
 | Loader | sequences/s (median) |

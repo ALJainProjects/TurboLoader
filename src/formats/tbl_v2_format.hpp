@@ -104,6 +104,8 @@ enum class SampleFormat : uint8_t {
     TIFF = 5,
     VIDEO_MP4 = 6,
     VIDEO_AVI = 7,
+    RAW_U8 = 8,  // decoded RGB uint8, HWC — pre-processed training samples
+                 // (size must equal width*height*3; serves without any decode)
     // Add more formats as needed
 };
 
@@ -328,6 +330,7 @@ inline const char* format_to_string_v2(SampleFormat format) {
         case SampleFormat::TIFF: return "TIFF";
         case SampleFormat::VIDEO_MP4: return "MP4";
         case SampleFormat::VIDEO_AVI: return "AVI";
+        case SampleFormat::RAW_U8: return "RAW_U8";
         default: return "Unknown";
     }
 }

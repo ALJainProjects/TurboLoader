@@ -192,6 +192,11 @@ dl = turboloader.CudaResidentLoader(paths, image_size=160, batch_size=64, shuffl
 # "upload" is one memcpy, every GPU-written batch is a zero-copy numpy view)
 dl = turboloader.MetalResidentLoader(paths, image_size=160, batch_size=256, shuffle=True)
 
+# Both ingest a pre-processed RAW .tbl (docs/tbl_v2_format.md) and skip their
+# one-time decode-all pass entirely — build the file once with preprocess_to_tbl:
+dl = turboloader.CudaResidentLoader.from_tbl("imagenet_160.tbl", batch_size=64)
+dl = turboloader.MetalResidentLoader("imagenet_160.tbl", batch_size=256)
+
 # Any-dtype rows (embedding tables, tabular): ~5x numpy fancy-indexing on M4
 ra = turboloader.MetalResidentArrays(embedding_table)   # .gather(idx) -> zero-copy view
 ```

@@ -129,6 +129,9 @@ try:
         TblWriterV2,
         SampleFormat,
         MetadataType,
+        # Fused SIMD batch ops (serve kernels of the TBL-RAW pipeline)
+        normalize_u8_batch,
+        normalize_u8_gather,
         # Smart Batching
         SmartBatchConfig,
         # Transform Composition
@@ -203,6 +206,10 @@ try:
         "TblReaderV2",
         "TblWriterV2",
         "SampleFormat",
+        "normalize_u8_batch",
+        "normalize_u8_gather",
+        "preprocess_to_tbl",
+        "TblRawImageLoader",
         "MetadataType",
         # Smart Batching
         "SmartBatchConfig",
@@ -826,6 +833,60 @@ try:
             self._transform = transform
             self._output_format = output_format
             self._modality = modality
+
+            # Pre-processed TBL-RAW files serve via mmap (zero decode) — same
+            # (batch, meta) contract as the TAR fast path.
+            if (
+                modality == "image"
+                and data_path is not None
+                and (isinstance(data_path, (str, bytes)) or hasattr(data_path, "__fspath__"))
+                and _os.fspath(data_path).lower().endswith(".tbl")
+            ):
+                from turboloader.tbl import TblRawImageLoader
+
+                if train_aug:
+                    raise ValueError(
+                        "train_aug (RandomResizedCrop) needs the TAR pipeline — RAW "
+                        ".tbl samples are already resized. TblRawImageLoader(...,"
+                        " hflip_prob=0.5) offers the one aug this path supports."
+                    )
+                mean = std = None
+                if transform is not None:
+                    if type(transform).__name__ != "ImageNetNormalize":
+                        raise ValueError(
+                            ".tbl serving supports transform=None ([0,1] floats) or "
+                            "ImageNetNormalize(). Other transforms must be baked in at "
+                            "preprocess_to_tbl time; per-epoch random augmentation "
+                            "needs the TAR pipeline (train_aug=True)."
+                        )
+                    mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+                self._delegate = TblRawImageLoader(
+                    data_path,
+                    batch_size=batch_size,
+                    mean=mean,
+                    std=std,
+                    shuffle=shuffle,
+                    seed=seed,
+                    drop_last=drop_last,
+                    pin_memory=pin_memory,
+                    prefetch_batches=prefetch_batches,
+                )
+                if image_size is not None:
+                    want = (
+                        (image_size, image_size)
+                        if isinstance(image_size, int)
+                        else tuple(image_size)
+                    )
+                    got = (self._delegate._h, self._delegate._w)
+                    if got != want:
+                        raise ValueError(
+                            f"this .tbl holds {got[1]}x{got[0]} samples but "
+                            f"image_size={image_size} was requested — re-run "
+                            "preprocess_to_tbl with the size you want (RAW serving "
+                            "does not resize)"
+                        )
+                self._fast = False
+                return
 
             # Non-image modalities delegate to a dedicated loader (single entry point).
             if modality in ("tokens", "token", "text"):
@@ -2650,6 +2711,12 @@ try:
         from turboloader.torch_utils import CudaPrefetcher
 
         __all__ += ["CudaPrefetcher"]
+    except Exception:
+        pass
+
+    # Pre-processed TBL-RAW pipeline (decode once, mmap-serve every epoch).
+    try:
+        from turboloader.tbl import TblRawImageLoader, preprocess_to_tbl
     except Exception:
         pass
 

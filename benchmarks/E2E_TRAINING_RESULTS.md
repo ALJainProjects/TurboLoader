@@ -127,3 +127,37 @@ GPT-2 shape 32x1024, uint16 memmap corpus, delivered TO DEVICE, median of 5):
 **1.9× the standard idiom** — one `seq_len+1` gather feeds both x and y (get_batch
 gathers twice), zero steady-state allocations. `device=` adds ready-on-GPU tensors
 with no lifetime rules at parity throughput.
+
+## TBL-RAW pre-processed pipeline — the fastest input path measured here
+
+Same ResNet-18/Imagenette-160 benchmark, fed from a pre-processed RAW `.tbl`
+(`preprocess_to_tbl` once: ~7s on the 3090 box; serve = mmap + fused SIMD
+normalize + background prefetch + pinned ring). Recipe caveat as with the
+resident-loader section: random hflip only — RandomResizedCrop cannot apply to
+pre-resized samples, so this is a lighter recipe than the augmented rows.
+
+| Input pipeline | median epoch | end-to-end img/s |
+|---|---:|---:|
+| pure-CUDA floor | 3.39 s | — |
+| **TBL-RAW** (`DataLoader('....tbl')`, hflip-only) | **3.64 s** | ~2,570 |
+| TurboLoader TAR (full train_aug) | 3.76 s | ~2,490 |
+| PyTorch DataLoader (full aug) | 3.92 s | ~2,385 |
+
+**7.4% above the pure-GPU floor** — the closest any input pipeline has come on
+this box. Engineering honesty log: the FIRST e2e run measured TBL-RAW at
+4.51 s — SLOWER than TAR — because serving ran synchronously on the training
+thread while the TAR pipeline produces in background C++ threads. The fix
+(stop-aware background prefetch; SIMD ops release the GIL so production
+overlaps the step) is what turned 0.87x into the fastest pipeline, and the
+loader now defaults to it.
+
+Loader-only on the same box (per-stage subprocesses; WSL2, modest CPU memory
+bandwidth — the M4 Max numbers in docs/benchmarks/index.md are ~10x higher):
+TBL-RAW sync 48.6k img/s produce / 26.1k np.sum-consumed vs on-the-fly
+21.9k/21.6k and float32 cache 31.9k/27.6k (cache peak RSS 8.8 GB vs TBL's
+1.1 GB of evictable file pages). Honest nuance: under the np.sum consumer — an
+adversarial pure-CPU reader that HOLDS the GIL — the float32 cache edges
+TBL-RAW on this bandwidth-poor box (27.6k vs 26.1k), yet in the real training
+loop above TBL-RAW is the fastest pipeline: a GPU step releases the GIL, so
+the serve work overlaps it. Pick by workload; both numbers are printed by the
+same script.

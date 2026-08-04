@@ -8,9 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 End-to-end speed sprint: video training, LLM token fast path, honest re-measurement
-of the ResNet e2e story on fresh hardware states, and platform/CI gaps.
+of the ResNet e2e story on fresh hardware states, platform/CI gaps — and the
+TBL-RAW pre-processed pipeline (decode once, mmap-serve every epoch).
 
 ### Added
+- **TBL-RAW pre-processed pipeline** — the new efficiency frontier for
+  many-epoch training, portably (FFCV's idea without the .beton lock-in):
+  - `SampleFormat.RAW_U8` in TBL v2 (decoded RGB uint8 HWC training samples);
+    uncompressed uniform payloads are contiguous, so
+    `turboloader.tbl.open_raw_view` maps a whole file as one zero-copy
+    `(N, H, W, 3)` array.
+  - `preprocess_to_tbl(tar, tbl, image_size=N)` — one-time parallel
+    decode+resize through the C++ fast path (9,469 Imagenette images in 6 s
+    on an M4 Max), exact uint8 recovery from the [0,1] floats.
+  - `TblRawImageLoader` / `DataLoader('data.tbl')` — serves batches from the
+    mmap through ONE fused parallel SIMD pass (`normalize_u8_gather`: index
+    gather + u8 HWC → normalized f32 CHW, GIL released). Output is
+    **bit-identical** to `DataLoader(tar, ImageNetNormalize())` (tested with
+    `array_equal`). Full loader contract: (seed, epoch) determinism, resume,
+    drop_last, pinned ring, `meta['indices']`, serve-time `hflip_prob` (the
+    one aug this path supports — crop/color must be baked; `train_aug` on a
+    .tbl raises with guidance).
+  - Measured (M4 Max, Imagenette 160px, per-stage SUBPROCESSES — in-process
+    stage order measurably contaminated results — at both consumption levels):
+    raw serve **531k img/s produce / 89k np.sum-consumed**, prefetch mode
+    **98.6k consumed** (production overlaps the consumer), vs on-the-fly
+    32k/31k and `cache_decoded=True` 62k/60k with **8.8 GB** peak RSS vs
+    TBL-RAW's ~1 GB of evictable file-backed pages. e2e ResNet-18 on the 3090:
+    **TBL-RAW 3.64s epochs — the fastest input pipeline measured on this
+    benchmark** (TAR 3.76s, PyTorch 3.92s, pure-GPU floor 3.39s; hflip-only
+    recipe caveat documented). Background prefetch was ADDED because the first
+    e2e run was honestly SLOWER than TAR (4.51s — synchronous serve sat on the
+    training thread); the fix is documented alongside the failure. Other
+    honest numbers: LZ4 on decoded photos = 1.06x → RAW defaults
+    `compression=False`; the .tbl is larger than the source TAR (727 vs
+    263 MB) — you trade disk for decode.
+  - GPU-resident ingestion: `MetalResidentLoader('data.tbl')` (upload = one
+    memcpy into unified memory) and `CudaResidentLoader.from_tbl(...)`
+    (chunked upload through the mmap) — the decode-all pass disappears.
+  - `normalize_u8_batch` / `normalize_u8_gather` exported as standalone ops;
+    `benchmarks/benchmark_tbl_raw.py`; e2e benchmark `--tbl` flag; 24 tests.
 - **`VideoDatasetLoader`** (CUDA): labeled clip batches from a DIRECTORY of videos —
   ImageFolder-style `root/class_x/*.mp4` discovery, N PyAV decoder threads with
   per-thread container caches and pts-derived seeking (counting fallback for
