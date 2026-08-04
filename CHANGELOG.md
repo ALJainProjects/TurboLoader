@@ -29,13 +29,20 @@ TBL-RAW pre-processed pipeline (decode once, mmap-serve every epoch).
     drop_last, pinned ring, `meta['indices']`, serve-time `hflip_prob` (the
     one aug this path supports — crop/color must be baked; `train_aug` on a
     .tbl raises with guidance).
-  - Measured (M4 Max, Imagenette 160px, both consumption levels): **525k
-    img/s produce / 88k np.sum-consumed** vs on-the-fly 33k/31k (**16x/2.8x**)
-    and `cache_decoded=True` 65k/59k (**8x/1.5x**) — faster than the float32
-    RAM cache at BOTH levels while peak-RSS grew +448 MB (file-backed,
-    evictable) vs the cache's +7.8 GB (anonymous). Honest numbers: LZ4 on
-    decoded photos = 1.06x → RAW defaults `compression=False`; the .tbl is
-    larger than the source TAR (727 vs 263 MB) — you trade disk for decode.
+  - Measured (M4 Max, Imagenette 160px, per-stage SUBPROCESSES — in-process
+    stage order measurably contaminated results — at both consumption levels):
+    raw serve **531k img/s produce / 89k np.sum-consumed**, prefetch mode
+    **98.6k consumed** (production overlaps the consumer), vs on-the-fly
+    32k/31k and `cache_decoded=True` 62k/60k with **8.8 GB** peak RSS vs
+    TBL-RAW's ~1 GB of evictable file-backed pages. e2e ResNet-18 on the 3090:
+    **TBL-RAW 3.64s epochs — the fastest input pipeline measured on this
+    benchmark** (TAR 3.76s, PyTorch 3.92s, pure-GPU floor 3.39s; hflip-only
+    recipe caveat documented). Background prefetch was ADDED because the first
+    e2e run was honestly SLOWER than TAR (4.51s — synchronous serve sat on the
+    training thread); the fix is documented alongside the failure. Other
+    honest numbers: LZ4 on decoded photos = 1.06x → RAW defaults
+    `compression=False`; the .tbl is larger than the source TAR (727 vs
+    263 MB) — you trade disk for decode.
   - GPU-resident ingestion: `MetalResidentLoader('data.tbl')` (upload = one
     memcpy into unified memory) and `CudaResidentLoader.from_tbl(...)`
     (chunked upload through the mmap) — the decode-all pass disappears.

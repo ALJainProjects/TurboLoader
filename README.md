@@ -30,7 +30,7 @@ flowchart LR
 
 - **Fast on CPU**: ~55k img/s on-the-fly (2.0× `tf.data`, 2.7× PyTorch DataLoader); trains a real ResNet-18 **1.05–1.17× faster end-to-end** (run-dependent), ~9% above the pure-GPU floor
 - **Fast on GPU**: beats **NVIDIA DALI** on-the-fly (+12%, RTX 3090) and **FFCV** on pre-processed data (1.6–3.5×); ~757k img/s resident on Apple unified memory
-- **Pre-processed pipeline (TBL-RAW)**: decode once, mmap-serve every epoch — **525k img/s on CPU** (16× on-the-fly, 8× the float32 RAM cache at ~none of the owned memory), bit-identical batches, any hardware
+- **Pre-processed pipeline (TBL-RAW)**: decode once, mmap-serve every epoch — **531k img/s raw serve on CPU**, beats the float32 RAM cache at every consumption level on ~1/9th the peak RSS, bit-identical batches, any hardware; **fastest e2e input pipeline we've measured** (3.64s epochs vs 3.76 TAR / 3.92 PyTorch, floor 3.39)
 - **Video**: hardware decode to training batches — **3.9× the best industry standard** on Apple Silicon; CUDA `VideoDatasetLoader` trains a real video classifier **1.16× faster** than the PyTorch+PyAV recipe (first e2e video benchmark)
 - **Train-ready**: fused `train_aug` (torchvision-parity RandomResizedCrop+flip), `state_dict()` mid-epoch resume, pinned-memory rings, DDP sharding
 - **Also tokens & arrays**: memory-mapped `TokenDataLoader` (**1.9× nanoGPT `get_batch` to-device**, zero-alloc pinned ring, `device='cuda'` overlapped H2D), `ArrayDataLoader`, and `MapDataLoader` for any `__getitem__` dataset
@@ -149,7 +149,7 @@ caveats (and the corrections we published) in [docs/benchmarks](docs/benchmarks/
 | Pre-processed, fits in VRAM | **~280k img/s** | FFCV ~80k (**3.5×**) | RTX 3090 |
 | Pre-processed, streaming > VRAM | **~140k img/s** | FFCV ~85k (**1.6×**) | RTX 3090 |
 | Pre-processed, unified memory | **433–757k img/s** | numpy resident ~3.7k | M4 Max |
-| Pre-processed, CPU mmap (TBL-RAW, any hardware) | **525k img/s** (88k np.sum-consumed) | float32 RAM cache 65k (59k) at 17× the owned RAM | M4 Max |
+| Pre-processed, CPU mmap (TBL-RAW, any hardware) | **531k img/s** raw serve (99k np.sum-consumed w/ prefetch) | float32 RAM cache 62k (60k) at ~9× the peak RSS | M4 Max |
 | Video → training batches | **2,556 f/s (3.9×)** | OpenCV 657 · PyAV 535 · torchcodec 173 | M4 Max |
 | End-to-end ResNet-18 training | **1.05–1.17×** vs PyTorch recipe | ~9% above the pure-GPU floor | RTX 3090 |
 | End-to-end VIDEO training (r3d_18) | **1.16×** vs PyTorch+PyAV recipe | both decode-bound (honest) | RTX 3090 |
