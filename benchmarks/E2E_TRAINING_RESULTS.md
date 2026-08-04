@@ -151,8 +151,13 @@ thread while the TAR pipeline produces in background C++ threads. The fix
 overlaps the step) is what turned 0.87x into the fastest pipeline, and the
 loader now defaults to it.
 
-Loader-only on the same box (WSL2, modest CPU memory bandwidth — the M4 Max
-numbers in docs/benchmarks/index.md are ~6x higher): TBL-RAW 44.9k img/s
-produce / 25.7k np.sum-consumed vs on-the-fly 22.0k/21.6k and float32 cache
-32.6k/25.4k. The ordering is the same on both machines; the magnitude tracks
-memory bandwidth, honestly stated.
+Loader-only on the same box (per-stage subprocesses; WSL2, modest CPU memory
+bandwidth — the M4 Max numbers in docs/benchmarks/index.md are ~10x higher):
+TBL-RAW sync 48.6k img/s produce / 26.1k np.sum-consumed vs on-the-fly
+21.9k/21.6k and float32 cache 31.9k/27.6k (cache peak RSS 8.8 GB vs TBL's
+1.1 GB of evictable file pages). Honest nuance: under the np.sum consumer — an
+adversarial pure-CPU reader that HOLDS the GIL — the float32 cache edges
+TBL-RAW on this bandwidth-poor box (27.6k vs 26.1k), yet in the real training
+loop above TBL-RAW is the fastest pipeline: a GPU step releases the GIL, so
+the serve work overlaps it. Pick by workload; both numbers are printed by the
+same script.
