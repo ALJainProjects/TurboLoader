@@ -8,17 +8,19 @@ RGB uint8 samples into a ``.tbl`` file (TBL v2, ``SampleFormat.RAW_U8``).
 
   * zero decode per epoch — one fused SIMD op (u8 HWC -> normalized f32 CHW)
     away from a ready batch, bit-identical to the TAR pipeline's output;
+  * serve-time augmentation — ``train_aug=True`` applies torchvision-parity
+    RandomResizedCrop + hflip through a fused crop+resize+normalize SIMD kernel
+    (store samples a little larger than the training size, e.g. 192 for 160);
   * ~zero owned RAM — the OS page cache holds (and evicts) the working set,
     unlike ``cache_decoded=True`` which owns the whole decoded dataset as
     float32 (4x the bytes) in process memory;
+  * ``dtype='float16'`` halves output bytes (and H2D) for AMP training;
+  * ``world_rank``/``world_size`` give disjoint, equal shards per rank;
   * instant startup on re-runs — no decode-all pass, just an mmap.
 
-Honest notes: the file stores uint8 (like FFCV / CudaResidentLoader), so
-augmentation baked at preprocess time is fixed — this pipeline fits the
-resize+normalize recipe, NOT per-epoch RandomResizedCrop (use the TAR path for
-that). LZ4 on decoded photos compresses poorly (~1.0-1.2x, measured in
-benchmarks) — compression defaults OFF for RAW; the real "compression" is
-storing uint8 instead of float32 (4x) and resized instead of full-size.
+Honest notes: LZ4 on decoded photos compresses poorly (~1.06x, measured) —
+compression defaults OFF for RAW; the real "compression" is storing uint8
+instead of float32 (4x) and resized instead of full-size.
 """
 
 import os
@@ -77,6 +79,7 @@ def open_raw_view(path):
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
 _DONE = object()  # prefetch-queue end sentinel
+_DTYPES = {"float32": np.float32, "float16": np.float16}
 
 
 def preprocess_to_tbl(
@@ -94,7 +97,8 @@ def preprocess_to_tbl(
     The uint8 quantization is the same storage semantic as CudaResidentLoader
     and FFCV; serving then normalizes with the same fused SIMD math as the TAR
     fast path, so batches are bit-identical to
-    ``DataLoader(tar, transform=ImageNetNormalize())``.
+    ``DataLoader(tar, transform=ImageNetNormalize())``. For serve-time
+    RandomResizedCrop, store a little larger than you train at (e.g. 192 -> 160).
     """
     import turboloader as t
 
@@ -136,14 +140,24 @@ class TblRawImageLoader:
     """Training batches from a RAW_U8 ``.tbl`` via memory map — zero decode.
 
     Yields ``(batch, meta)`` like the image DataLoader: ``batch`` is
-    ``(B, 3, H, W)`` float32 (ImageNet-normalized by default), ``meta['indices']``
-    aligns external labels. Deterministic per ``(seed, epoch)`` via ``set_epoch``;
-    ``state_dict()``/``load_state_dict()`` resume mid-epoch.
+    ``(B, 3, H, W)`` float32 (or float16), ImageNet-normalized by default;
+    ``meta['indices']`` aligns external labels. Deterministic per
+    ``(seed, epoch)`` via ``set_epoch``; ``state_dict()``/``load_state_dict()``
+    resume mid-epoch.
 
     Args:
         path: RAW_U8 .tbl file (from ``preprocess_to_tbl``).
-        mean/std: normalization (default ImageNet; pass ``mean=None, std=None``
-            for plain [0,1] output).
+        mean/std: normalization (default ImageNet; ``mean=None, std=None`` for
+            plain [0,1] output).
+        image_size: output size (int or (H, W)); default = the file's sample
+            size. A different size is a serve-time bilinear resize.
+        train_aug: torchvision-parity RandomResizedCrop (``scale``, ``ratio``,
+            the shared ``pick_crop`` sampler) + hflip with ``hflip_prob``, fused
+            into one crop+resize+normalize SIMD pass per sample. Store samples
+            larger than ``image_size`` to give the crop room.
+        hflip_prob: horizontal-flip probability (applies with or without
+            ``train_aug``; default 0).
+        dtype: ``'float32'`` (default) or ``'float16'`` output.
         pin_memory: yield torch tensors backed by a reused ring of ``ring``
             page-locked buffers (CUDA hosts). LIFETIME: a yielded batch's buffer
             is overwritten ``ring`` batches later. Default (False) yields fresh
@@ -151,8 +165,10 @@ class TblRawImageLoader:
         prefetch_batches: background-produce this many batches ahead (the SIMD
             serve releases the GIL, so production overlaps your training step —
             without it the serve cost sits on the training thread). 0 disables.
-            With ``pin_memory`` the effective depth is clamped to ``ring - 2``
-            so a buffer is never overwritten while you (or the queue) hold it.
+            With ``pin_memory`` the effective depth is clamped to ``ring - 2``.
+        world_rank/world_size: disjoint, equal-size shard of every epoch's
+            order for this rank (DDP); the per-rank epoch has
+            ``num_samples // world_size`` samples.
     """
 
     def __init__(
@@ -169,6 +185,13 @@ class TblRawImageLoader:
         ring=4,
         hflip_prob=0.0,
         prefetch_batches=2,
+        train_aug=False,
+        scale=(0.08, 1.0),
+        ratio=(3.0 / 4.0, 4.0 / 3.0),
+        image_size=None,
+        dtype="float32",
+        world_rank=0,
+        world_size=1,
     ):
         import turboloader as t
 
@@ -188,17 +211,40 @@ class TblRawImageLoader:
             raise ValueError("ring must be >= 3 with pin_memory (consumer + queue + producer)")
         self.hflip_prob = float(hflip_prob)
         self._prefetch = max(0, int(prefetch_batches))
+        self.train_aug = bool(train_aug)
+        self.scale, self.ratio = tuple(scale), tuple(ratio)
+        if dtype not in _DTYPES:
+            raise ValueError("dtype must be 'float32' or 'float16'")
+        self.dtype = dtype
+        self._np_dtype = _DTYPES[dtype]
+        self.world_rank, self.world_size = int(world_rank), int(world_size)
+        if self.world_size < 1 or not 0 <= self.world_rank < self.world_size:
+            raise ValueError("need 0 <= world_rank < world_size")
         self._epoch = 0
         self._served = 0
         self._resume_batches = 0
 
         self._view, self._h, self._w = open_raw_view(self.path)
         self.num_samples = self._view.shape[0]
+        self.samples_per_rank = self.num_samples // self.world_size
+        if self.samples_per_rank == 0:
+            raise ValueError("fewer samples than ranks")
+        if image_size is None:
+            self._oh, self._ow = self._h, self._w
+        else:
+            oh, ow = (image_size, image_size) if isinstance(image_size, int) else image_size
+            self._oh, self._ow = int(oh), int(ow)
+        # The exact gather path is only for the identity case (no crop/resize/flip,
+        # float32) — it is bit-identical to the TAR pipeline. Everything else goes
+        # through the fused crop kernel (same math as the Metal / CUDA crop kernels).
+        self._resample = (
+            self.train_aug or (self._oh, self._ow) != (self._h, self._w) or dtype == "float16"
+        )
 
     # ------------------------------------------------------------------ api
     def __len__(self):
-        n = self.num_samples // self.batch_size
-        return n if self.drop_last else -(-self.num_samples // self.batch_size)
+        n = self.samples_per_rank
+        return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
 
     def set_epoch(self, epoch):
         self._epoch = int(epoch)
@@ -211,10 +257,31 @@ class TblRawImageLoader:
         self._resume_batches = int(sd["batches_served"])
 
     def _order(self):
-        if not self.shuffle:
-            return np.arange(self.num_samples, dtype=np.int64)
-        rng = np.random.default_rng(self.seed + self._epoch)
-        return rng.permutation(self.num_samples).astype(np.int64)
+        """This rank's epoch order: a disjoint, equal-size slice of the global
+        (seed, epoch) permutation, so all ranks agree on the epoch length."""
+        if self.shuffle:
+            full = np.random.default_rng(self.seed + self._epoch).permutation(self.num_samples)
+        else:
+            full = np.arange(self.num_samples)
+        return full[self.world_rank :: self.world_size][: self.samples_per_rank].astype(np.int64)
+
+    def _epoch_aug(self, n):
+        """Per-sample crop windows + flips for this epoch, drawn up front in
+        sample order so prefetch/resume cannot change them."""
+        crops = np.empty((n, 4), dtype=np.float32)
+        if self.train_aug:
+            from turboloader._augment import pick_crop
+
+            rng = np.random.default_rng((self.seed, self._epoch, 2, self.world_rank))
+            for i in range(n):
+                crops[i] = pick_crop(self._w, self._h, rng, scale=self.scale, ratio=self.ratio)
+        else:
+            crops[:] = (0.0, 0.0, float(self._w), float(self._h))
+        flips = np.zeros(n, dtype=np.uint8)
+        if self.hflip_prob > 0:
+            frng = np.random.default_rng((self.seed, self._epoch, 1, self.world_rank))
+            flips[:] = frng.random(n) < self.hflip_prob
+        return crops, flips
 
     def __iter__(self):
         t = self._t
@@ -224,22 +291,21 @@ class TblRawImageLoader:
         resume = self._resume_batches
         self._resume_batches = 0
         self._served = resume
+        oh, ow = self._oh, self._ow
+        crops, flips = self._epoch_aug(len(order))
+        flip_only = (not self._resample) and self.hflip_prob > 0
 
         if self._pin:
             import torch
 
             if not torch.cuda.is_available():
                 raise RuntimeError("pin_memory=True needs CUDA (page-locked memory)")
+            tdt = torch.float16 if self.dtype == "float16" else torch.float32
             ring = [
-                torch.empty((bs, 3, self._h, self._w), dtype=torch.float32, pin_memory=True)
-                for _ in range(self._ring)
+                torch.empty((bs, 3, oh, ow), dtype=tdt, pin_memory=True) for _ in range(self._ring)
             ]
             ring_np = [r.numpy() for r in ring]
-        stage = np.empty((bs, self._h, self._w, 3), dtype=np.uint8)
-
-        flip_rng = (
-            np.random.default_rng((self.seed, self._epoch, 1)) if self.hflip_prob > 0 else None
-        )
+        stage = np.empty((bs, self._h, self._w, 3), dtype=np.uint8) if flip_only else None
 
         def make(b):
             idx = order[b * bs : (b + 1) * bs]
@@ -248,21 +314,29 @@ class TblRawImageLoader:
                 out_t = ring[b % self._ring]
                 out = ring_np[b % self._ring]
             else:
-                out = np.empty((k, 3, self._h, self._w), dtype=np.float32)
-            if flip_rng is None:
-                # ONE parallel pass: gather rows straight from the mmap and
-                # write normalized CHW float32 — no decode, no staging copy
-                t.normalize_u8_gather(self._view, idx, out[:k], mean=self.mean, std=self.std)
-            else:
-                # flip path stages in uint8 first (flipping the small u8 rows,
-                # not the 4x-larger float output). Crop/color aug must be baked
-                # at preprocess time — use the TAR path for those.
+                out = np.empty((k, 3, oh, ow), dtype=self._np_dtype)
+            sl = slice(b * bs, b * bs + k)
+            if self._resample:
+                # ONE fused pass: gather + RandomResizedCrop/resize + hflip + normalize
+                t.crop_resize_normalize_u8_gather(
+                    self._view, idx, crops[sl], flips[sl], out[:k], mean=self.mean, std=self.std
+                )
+            elif flip_only:
+                # exact path with flips: mirror the small u8 rows, then the
+                # bit-identical normalize (float sampling would add ~1e-5)
                 np.take(self._view, idx, axis=0, out=stage[:k])
-                sel = np.nonzero(flip_rng.random(k) < self.hflip_prob)[0]
+                sel = np.nonzero(flips[sl])[0]
                 if sel.size:
                     stage[sel] = stage[sel, :, ::-1]
                 t.normalize_u8_batch(stage[:k], out[:k], mean=self.mean, std=self.std)
+            else:
+                # identity: gather rows straight from the mmap and write normalized
+                # CHW float32 — bit-identical to DataLoader(tar, ImageNetNormalize())
+                t.normalize_u8_gather(self._view, idx, out[:k], mean=self.mean, std=self.std)
             meta = {"indices": idx.copy()}
+            if self.train_aug:
+                meta["crops"] = crops[sl].copy()
+                meta["flips"] = flips[sl].copy()
             return (out_t[:k], meta) if self._pin else (out, meta)
 
         # Background prefetch: batch b+1 is produced (SIMD ops release the GIL)

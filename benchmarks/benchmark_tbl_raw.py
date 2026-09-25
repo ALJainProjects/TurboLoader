@@ -46,14 +46,27 @@ def build_tar(imagenette_dir, tar_path):
 
 STAGES = {
     "fly": dict(kind="tar"),
+    "fly-aug": dict(kind="tar", train_aug=True),
     "tbl": dict(kind="tbl"),
     "tbl-sync": dict(kind="tbl", prefetch_batches=0),
+    "tbl-aug": dict(kind="tbl-aug"),
     "cache": dict(kind="tar", cache_decoded=True),
 }
 
 
 def make_loader(stage, tar_path, tbl_path, args):
     cfg = STAGES[stage]
+    if cfg["kind"] == "tbl-aug":
+        # serve-time RandomResizedCrop + hflip from a file stored a bit larger
+        return tl.TblRawImageLoader(
+            aug_tbl_path(tbl_path, args),
+            batch_size=args.batch_size,
+            shuffle=True,
+            seed=0,
+            train_aug=True,
+            hflip_prob=0.5,
+            image_size=args.size,
+        )
     if cfg["kind"] == "tbl":
         return tl.DataLoader(
             tbl_path,
@@ -73,7 +86,12 @@ def make_loader(stage, tar_path, tbl_path, args):
         shuffle=True,
         seed=0,
         cache_decoded=cfg.get("cache_decoded", False),
+        train_aug=cfg.get("train_aug", False),
     )
+
+
+def aug_tbl_path(tbl_path, args):
+    return tbl_path.replace(f"_{args.size}.tbl", f"_{args.aug_source_size}.tbl")
 
 
 def consume(loader, full):
@@ -140,6 +158,12 @@ def main():
     ap.add_argument("--size", type=int, default=160)
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument(
+        "--aug-source-size",
+        type=int,
+        default=192,
+        help="stored size for the serve-time-aug stage (crop room above --size)",
+    )
     ap.add_argument("--stage", choices=list(STAGES), help="internal: child-process mode")
     args = ap.parse_args()
 
@@ -155,6 +179,16 @@ def main():
         t0 = time.perf_counter()
         n = tl.preprocess_to_tbl(tar_path, tbl_path, image_size=args.size, num_workers=args.workers)
         print(f"preprocess_to_tbl: {n} images in {time.perf_counter() - t0:.1f}s (one-time)")
+    aug_tbl = aug_tbl_path(tbl_path, args)
+    if not os.path.exists(aug_tbl):
+        t0 = time.perf_counter()
+        n = tl.preprocess_to_tbl(
+            tar_path, aug_tbl, image_size=args.aug_source_size, num_workers=args.workers
+        )
+        print(
+            f"preprocess_to_tbl ({args.aug_source_size}px for serve-time aug): {n} images in "
+            f"{time.perf_counter() - t0:.1f}s (one-time)"
+        )
 
     tar_mb = os.path.getsize(tar_path) / 1e6
     tbl_mb = os.path.getsize(tbl_path) / 1e6
@@ -177,9 +211,24 @@ def main():
 
     print(f"\n{args.size}px, bs={args.batch_size}, per-stage subprocesses, identical consumption:")
     r_fly = bench("fly", "on-the-fly TAR (decode every epoch)", tar_path, tbl_path, args)
+    r_flyaug = bench(
+        "fly-aug", "on-the-fly TAR + train_aug (the full-aug path)", tar_path, tbl_path, args
+    )
     r_tbl = bench("tbl", "TBL-RAW mmap (zero decode, prefetch default)", tar_path, tbl_path, args)
     bench("tbl-sync", "TBL-RAW sync (prefetch_batches=0, raw serve)", tar_path, tbl_path, args)
+    r_tblaug = bench(
+        "tbl-aug",
+        f"TBL-RAW serve-time RandomResizedCrop+flip ({args.aug_source_size}->{args.size})",
+        tar_path,
+        tbl_path,
+        args,
+    )
     r_cache = bench("cache", "cache_decoded=True (float32 in RAM)", tar_path, tbl_path, args)
+    for kind in ("produce", "sum"):
+        print(
+            f"full-aug training path ({kind}): TBL-RAW serve-time aug "
+            f"{r_tblaug[kind] / r_flyaug[kind]:.2f}x vs on-the-fly TAR train_aug"
+        )
 
     for kind in ("produce", "sum"):
         print(

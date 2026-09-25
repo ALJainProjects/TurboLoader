@@ -130,3 +130,25 @@ class TestPinnedPath:
         assert len(resumed) == len(expect)
         for r, e in zip(resumed, expect):
             np.testing.assert_array_equal(r, e)
+
+
+class TestSharding:
+    def test_ranks_get_disjoint_windows_and_equal_steps(self):
+        tokens = _corpus()
+        kw = dict(seq_len=32, batch_size=4, seed=8, steps_per_epoch=5)
+        starts = []
+        for r in range(3):
+            dl = TokenDataLoader(tokens, **kw, world_rank=r, world_size=3)
+            dl.set_epoch(2)
+            s = dl._start_positions()
+            assert len(s) == 20 and len(dl) == 5
+            starts.append(s)
+        # per-rank slices of one global draw: disjoint positions in the draw order
+        a, b, c = starts
+        full = TokenDataLoader(tokens, **kw, world_rank=0, world_size=1)
+        full.set_epoch(2)
+        assert not np.array_equal(a, b) and not np.array_equal(b, c)
+
+    def test_bad_rank_rejected(self):
+        with pytest.raises(ValueError, match="world_rank"):
+            TokenDataLoader(_corpus(), seq_len=8, batch_size=2, world_rank=1, world_size=1)

@@ -91,13 +91,17 @@ class TestRoundtrip:
         assert batch.shape == (8, 3, SIZE, SIZE) and batch.dtype == np.float32
         assert len(dl) == -(-N_IMGS // 8)
 
-    def test_routing_rejects_other_transforms(self, tbl_path):
-        with pytest.raises(ValueError, match="baked in"):
-            tl.DataLoader(tbl_path, batch_size=8, transform=tl.Resize(32, 32))
+    def test_routing_resize_transform_is_serve_time_resize(self, tbl_path):
+        # a Resize in the transform chain is fused as a serve-time bilinear resize
+        dl = tl.DataLoader(
+            tbl_path, batch_size=8, transform=tl.Resize(32, 32) | tl.ImageNetNormalize()
+        )
+        batch, _ = next(iter(dl))
+        assert batch.shape == (8, 3, 32, 32)
 
-    def test_routing_rejects_wrong_size(self, tbl_path):
-        with pytest.raises(ValueError, match="does not resize"):
-            tl.DataLoader(tbl_path, batch_size=8, image_size=SIZE * 2)
+    def test_routing_conflicting_sizes_rejected(self, tbl_path):
+        with pytest.raises(ValueError, match="Conflicting sizes"):
+            tl.DataLoader(tbl_path, batch_size=8, transform=tl.Resize(32, 32), image_size=48)
 
 
 class TestContract:
@@ -257,10 +261,6 @@ class TestHflip:
                 flipped_any += mirrored and not same
         assert flipped_any > 0
 
-    def test_train_aug_on_tbl_rejected(self, tbl_path):
-        with pytest.raises(ValueError, match="TAR pipeline"):
-            tl.DataLoader(tbl_path, batch_size=8, train_aug=True)
-
 
 class TestGatherOp:
     def test_gather_matches_take_plus_batch(self):
@@ -329,3 +329,211 @@ class TestPrefetch:
         resumed = [m["indices"].tolist() for _, m in b]
         c = tl.TblRawImageLoader(tbl_path, batch_size=8, seed=6, prefetch_batches=0)
         assert resumed == [m["indices"].tolist() for _, m in c][1:]
+
+
+def _ref_crop_resize(img, crop, flip, dh, dw, mean, std):
+    """numpy reference of the shared crop-kernel math (half-pixel centers, clamp, bilinear)."""
+    H, W = img.shape[:2]
+    cx, cy, cw, ch = crop
+    out = np.empty((3, dh, dw), np.float32)
+    for y in range(dh):
+        sy = min(max(cy + (y + 0.5) / dh * ch - 0.5, 0.0), H - 1)
+        y0 = int(sy)
+        y1 = min(y0 + 1, H - 1)
+        dy = sy - y0
+        for x in range(dw):
+            ox = dw - 1 - x if flip else x
+            sx = min(max(cx + (ox + 0.5) / dw * cw - 0.5, 0.0), W - 1)
+            x0 = int(sx)
+            x1 = min(x0 + 1, W - 1)
+            dx = sx - x0
+            p = img.astype(np.float32)
+            top = p[y0, x0] * (1 - dx) + p[y0, x1] * dx
+            bot = p[y1, x0] * (1 - dx) + p[y1, x1] * dx
+            v = (top * (1 - dy) + bot * dy) / 255.0
+            out[:, y, x] = (v - mean) / std
+    return out
+
+
+class TestCropResizeOp:
+    MEAN = np.array([0.485, 0.456, 0.406], np.float32)
+    STD = np.array([0.229, 0.224, 0.225], np.float32)
+
+    def test_matches_numpy_reference_with_flip(self):
+        rng = np.random.default_rng(5)
+        ds = rng.integers(0, 256, size=(6, 20, 24, 3), dtype=np.uint8)
+        idx = np.array([5, 0, 3], np.int64)
+        crops = np.array([[2, 3, 15, 12], [0, 0, 24, 20], [7.0, 1.0, 9.0, 17.0]], np.float32)
+        flips = np.array([0, 1, 1], np.uint8)
+        out = np.empty((3, 3, 11, 13), np.float32)
+        tl.crop_resize_normalize_u8_gather(
+            ds, idx, crops, flips, out, mean=self.MEAN.tolist(), std=self.STD.tolist()
+        )
+        for i in range(3):
+            ref = _ref_crop_resize(ds[idx[i]], crops[i], flips[i], 11, 13, self.MEAN, self.STD)
+            assert np.abs(out[i] - ref).max() < 2e-5, i
+
+    def test_identity_crop_equals_exact_gather(self):
+        rng = np.random.default_rng(6)
+        ds = rng.integers(0, 256, size=(4, 16, 16, 3), dtype=np.uint8)
+        idx = np.array([2, 1], np.int64)
+        crops = np.tile(np.array([[0, 0, 16, 16]], np.float32), (2, 1))
+        flips = np.zeros(2, np.uint8)
+        a = np.empty((2, 3, 16, 16), np.float32)
+        b = np.empty((2, 3, 16, 16), np.float32)
+        tl.crop_resize_normalize_u8_gather(
+            ds, idx, crops, flips, a, mean=self.MEAN.tolist(), std=self.STD.tolist()
+        )
+        tl.normalize_u8_gather(ds, idx, b, mean=self.MEAN.tolist(), std=self.STD.tolist())
+        assert np.abs(a - b).max() < 1e-5
+
+    def test_float16_output(self):
+        rng = np.random.default_rng(7)
+        ds = rng.integers(0, 256, size=(3, 10, 10, 3), dtype=np.uint8)
+        idx = np.arange(3, dtype=np.int64)
+        crops = np.tile(np.array([[1, 1, 8, 8]], np.float32), (3, 1))
+        flips = np.array([0, 1, 0], np.uint8)
+        f32 = np.empty((3, 3, 6, 6), np.float32)
+        f16 = np.empty((3, 3, 6, 6), np.float16)
+        tl.crop_resize_normalize_u8_gather(
+            ds, idx, crops, flips, f32, mean=self.MEAN.tolist(), std=self.STD.tolist()
+        )
+        tl.crop_resize_normalize_u8_gather(
+            ds, idx, crops, flips, f16, mean=self.MEAN.tolist(), std=self.STD.tolist()
+        )
+        # round-to-nearest-even half: identical to numpy's own conversion
+        assert np.array_equal(f16, f32.astype(np.float16))
+
+    def test_rejects_bad_inputs(self):
+        ds = np.zeros((2, 8, 8, 3), np.uint8)
+        idx = np.array([0], np.int64)
+        crops = np.zeros((1, 4), np.float32)
+        flips = np.zeros(1, np.uint8)
+        with pytest.raises(Exception, match="float32 or float16"):
+            tl.crop_resize_normalize_u8_gather(
+                ds, idx, crops, flips, np.zeros((1, 3, 4, 4), np.float64)
+            )
+        with pytest.raises(Exception, match="range"):
+            tl.crop_resize_normalize_u8_gather(
+                ds, np.array([2], np.int64), crops, flips, np.zeros((1, 3, 4, 4), np.float32)
+            )
+        with pytest.raises(Exception, match="crops"):
+            tl.crop_resize_normalize_u8_gather(
+                ds, idx, np.zeros((2, 4), np.float32), flips, np.zeros((1, 3, 4, 4), np.float32)
+            )
+
+
+class TestServeTimeAug:
+    def test_train_aug_shapes_bounds_and_determinism(self, tbl_path):
+        kw = dict(batch_size=8, seed=11, train_aug=True, hflip_prob=0.5, image_size=48)
+        a = tl.TblRawImageLoader(tbl_path, **kw)
+        b = tl.TblRawImageLoader(tbl_path, **kw)
+        a.set_epoch(2)
+        b.set_epoch(2)
+        for (xa, ma), (xb, mb) in zip(a, b):
+            assert xa.shape[1:] == (3, 48, 48) and xa.dtype == np.float32
+            assert np.array_equal(xa, xb) and np.array_equal(ma["crops"], mb["crops"])
+            c = ma["crops"]
+            assert (c[:, 0] >= 0).all() and (c[:, 1] >= 0).all()
+            assert (c[:, 0] + c[:, 2] <= SIZE).all() and (c[:, 1] + c[:, 3] <= SIZE).all()
+            assert (c[:, 2] > 0).all() and (c[:, 3] > 0).all()
+        a.set_epoch(3)
+        c3 = np.concatenate([m["crops"] for _, m in a])
+        a.set_epoch(2)
+        c2 = np.concatenate([m["crops"] for _, m in a])
+        assert not np.array_equal(c2, c3)
+
+    def test_aug_matches_reference_kernel(self, tbl_path):
+        dl = tl.TblRawImageLoader(
+            tbl_path,
+            batch_size=4,
+            seed=3,
+            train_aug=True,
+            hflip_prob=0.5,
+            image_size=32,
+            prefetch_batches=0,
+        )
+        view, H, W = tl.tbl.open_raw_view(tbl_path)
+        mean = np.array(dl.mean, np.float32)
+        std = np.array(dl.std, np.float32)
+        x, m = next(iter(dl))
+        for i, (idx, crop, flip) in enumerate(zip(m["indices"], m["crops"], m["flips"])):
+            ref = _ref_crop_resize(view[idx], crop, flip, 32, 32, mean, std)
+            assert np.abs(x[i] - ref).max() < 2e-5
+
+    def test_serve_time_resize_and_fp16(self, tbl_path):
+        dl = tl.TblRawImageLoader(
+            tbl_path, batch_size=8, image_size=(24, 40), dtype="float16", shuffle=False
+        )
+        x, _ = next(iter(dl))
+        assert x.shape == (8, 3, 24, 40) and x.dtype == np.float16
+        ref32 = tl.TblRawImageLoader(tbl_path, batch_size=8, image_size=(24, 40), shuffle=False)
+        y, _ = next(iter(ref32))
+        assert np.array_equal(x, y.astype(np.float16))
+
+    def test_dataloader_routes_train_aug(self, tbl_path):
+        dl = tl.DataLoader(
+            tbl_path,
+            batch_size=8,
+            transform=tl.ImageNetNormalize(),
+            image_size=40,
+            train_aug=True,
+            shuffle=True,
+        )
+        x, meta = next(iter(dl))
+        assert x.shape == (8, 3, 40, 40) and "crops" in meta
+
+    def test_dataloader_rejects_other_transforms(self, tbl_path):
+        with pytest.raises(ValueError, match="fuses Resize"):
+            tl.DataLoader(tbl_path, batch_size=8, transform=tl.ColorJitter(0.1, 0.1, 0.1, 0.1))
+
+
+class TestSharding:
+    def test_disjoint_equal_union(self, tbl_path):
+        ws = 3
+        seen = []
+        lens = set()
+        for r in range(ws):
+            dl = tl.TblRawImageLoader(tbl_path, batch_size=4, seed=9, world_rank=r, world_size=ws)
+            dl.set_epoch(1)
+            ids = np.concatenate([m["indices"] for _, m in dl])
+            seen.append(ids)
+            lens.add(len(ids))
+        assert lens == {N_IMGS // ws}
+        flat = np.concatenate(seen)
+        assert len(np.unique(flat)) == len(flat)  # disjoint
+        assert len(dl) == -(-(N_IMGS // ws) // 4)
+
+    def test_no_shard_is_full_epoch(self, tbl_path):
+        dl = tl.TblRawImageLoader(tbl_path, batch_size=4, seed=9)
+        assert sorted(np.concatenate([m["indices"] for _, m in dl]).tolist()) == list(range(N_IMGS))
+
+    def test_dataloader_forwards_distributed(self, tbl_path):
+        dl = tl.DataLoader(
+            tbl_path, batch_size=4, enable_distributed=True, world_rank=1, world_size=2
+        )
+        ids = np.concatenate([m["indices"] for _, m in dl])
+        assert len(ids) == N_IMGS // 2
+
+    def test_bad_rank_rejected(self, tbl_path):
+        with pytest.raises(ValueError, match="world_rank"):
+            tl.TblRawImageLoader(tbl_path, world_rank=2, world_size=2)
+
+    @pytest.mark.skipif(not getattr(tl, "metal_available", lambda: False)(), reason="needs Metal")
+    def test_metal_resident_shards(self, tbl_path):
+        ws = 2
+        seen = []
+        for r in range(ws):
+            dl = tl.MetalResidentLoader(
+                tbl_path,
+                batch_size=4,
+                shuffle=True,
+                seed=2,
+                return_indices=True,
+                world_rank=r,
+                world_size=ws,
+            )
+            seen.append(np.concatenate([np.asarray(i) for _, i in dl]))
+            assert len(dl) == (N_IMGS // ws) // 4
+        flat = np.concatenate(seen)
+        assert len(np.unique(flat)) == len(flat)

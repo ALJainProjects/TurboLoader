@@ -410,8 +410,21 @@ class CudaResidentLoader:
         shuffle=False,
         seed=42,
         return_indices=False,
+        world_rank=0,
+        world_size=1,
     ):
-        self._setup(image_size, batch_size, mean, std, drop_last, shuffle, seed, return_indices)
+        self._setup(
+            image_size,
+            batch_size,
+            mean,
+            std,
+            drop_last,
+            shuffle,
+            seed,
+            return_indices,
+            world_rank,
+            world_size,
+        )
         from concurrent.futures import ThreadPoolExecutor
 
         from PIL import Image
@@ -431,8 +444,23 @@ class CudaResidentLoader:
         # Upload once; stays resident on the GPU for every epoch.
         self._gpu = self._torch.from_numpy(arr).cuda().contiguous()
 
-    def _setup(self, image_size, batch_size, mean, std, drop_last, shuffle, seed, return_indices):
+    def _setup(
+        self,
+        image_size,
+        batch_size,
+        mean,
+        std,
+        drop_last,
+        shuffle,
+        seed,
+        return_indices,
+        world_rank=0,
+        world_size=1,
+    ):
         """Shared field/capability setup for both constructors (path list, .tbl)."""
+        self.world_rank, self.world_size = int(world_rank), int(world_size)
+        if self.world_size < 1 or not 0 <= self.world_rank < self.world_size:
+            raise ValueError("need 0 <= world_rank < world_size")
         import turboloader as t
         import torch
 
@@ -465,6 +493,8 @@ class CudaResidentLoader:
         shuffle=False,
         seed=42,
         return_indices=False,
+        world_rank=0,
+        world_size=1,
     ):
         """Build from a pre-processed RAW_U8 ``.tbl`` (see ``preprocess_to_tbl``):
         the decode-all pass disappears — upload reads straight through the mmap.
@@ -475,7 +505,18 @@ class CudaResidentLoader:
         if H != W:
             raise ValueError(f"resident loader needs square samples, file is {W}x{H}")
         self = cls.__new__(cls)
-        self._setup(H, batch_size, mean, std, drop_last, shuffle, seed, return_indices)
+        self._setup(
+            H,
+            batch_size,
+            mean,
+            std,
+            drop_last,
+            shuffle,
+            seed,
+            return_indices,
+            world_rank,
+            world_size,
+        )
         self._n = view.shape[0]
         # Chunked upload through the mmap: peak host memory is one chunk, not
         # the dataset (and no torch warning about read-only numpy arrays).
@@ -490,23 +531,34 @@ class CudaResidentLoader:
     def set_epoch(self, epoch):
         self._epoch = int(epoch)
 
+    @property
+    def _n_rank(self):
+        return self._n // self.world_size
+
     def __len__(self):
-        return self._n // self.batch_size if self.drop_last else -(-self._n // self.batch_size)
+        n = self._n_rank
+        return n // self.batch_size if self.drop_last else -(-n // self.batch_size)
 
     def __iter__(self):
         t, torch = self._t, self._torch
         H, W, bs = self._H, self._W, self.batch_size
         stride = H * W * 3
         base = int(self._gpu.data_ptr())
-        end = (self._n // bs) * bs if self.drop_last else self._n
+        n_rank = self._n_rank
+        end = (n_rank // bs) * bs if self.drop_last else n_rank
         perm = None
-        if self.shuffle:
-            perm = torch.from_numpy(
+        if self.shuffle or self.world_size > 1:
+            full = (
                 np.random.default_rng(self.seed + self._epoch).permutation(self._n)
-            ).cuda()
+                if self.shuffle
+                else np.arange(self._n)
+            )
+            # disjoint, equal-size per-rank slice of the global order (DDP)
+            order = full[self.world_rank :: self.world_size][:n_rank]
+            perm = torch.from_numpy(np.ascontiguousarray(order, dtype=np.int64)).cuda()
         gather = getattr(t, "cuda_normalize_resident_gather", None)
         for b in range(0, end, bs):
-            n = min(bs, self._n - b)
+            n = min(bs, n_rank - b)
             if perm is not None and gather is not None:
                 # Fused gather+normalize: no torch gather copy — shuffle at ~full sequential speed.
                 sl = perm[b : b + n]  # GPU int64 index slice (held across the call)

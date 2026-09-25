@@ -51,6 +51,17 @@ a lesson re-learned here), reported at TWO consumption levels
 | `cache_decoded=True` (float32 in RAM) — after the v2.37 rewrite | 137,494 | 101,358 | **3,343 MB** (anonymous) + decode-all startup |
 | `cache_decoded=True` — as shipped in v2.36 | 62,493 | 59,744 | 8,796 MB (anonymous) |
 
+**Full-augmentation recipe** (RandomResizedCrop + hflip, the way you actually train):
+
+| Pipeline | produce img/s | np.sum-consumed | peak RSS |
+|---|---:|---:|---:|
+| on-the-fly TAR `train_aug=True` (decode + fused crop/flip every epoch) | 32,473 | 32,089 | 520 MB |
+| **TBL-RAW serve-time aug** (192px file → 160px batches, fused `crop_resize_normalize_u8_gather`) | **86,913** | **78,200** | 1,274 MB (file-backed, evictable) |
+
+**2.7× (2.4× consumed)** for the same augmentation distribution (the shared torchvision-parity
+`pick_crop` sampler; kernel verified against a numpy reference of the crop math). The 192px file
+is 1.05 GB — store a little larger than you train at to give the crop room.
+
 † prefetch's produce figure is thread-scheduling noise (a no-op consumer makes
 the producer thread thrash); its stable, honest number is the consumed one —
 which prefetch IMPROVES (98.8k vs 91.2k sync) because production overlaps the
@@ -65,10 +76,11 @@ RSS** in file-backed pages the kernel can drop, **no decode-all pass at
 startup** (the cache re-decodes every run), and a 586k raw-serve ceiling.
 Honest notes: LZ4 on decoded photos = **1.06x** (why RAW defaults to
 `compression=False` — the real compression is uint8-not-float32, 4x); the .tbl
-is bigger than the JPEG TAR (727 vs 263 MB — disk traded for decode); no
-per-epoch random crop (serve-time hflip only) — full-aug training stays on the
-TAR pipeline. The GPU-resident loaders ingest the same file and skip their
-decode-all pass. Details: [tbl_v2_format.md](../tbl_v2_format.md).
+is bigger than the JPEG TAR (727 vs 263 MB — disk traded for decode). Since
+2.38, per-epoch RandomResizedCrop + flip is served from the mmap too (table
+above); color jitter still has to be baked or done on the TAR path. The
+GPU-resident loaders ingest the same file and skip their decode-all pass.
+Details: [tbl_v2_format.md](../tbl_v2_format.md).
 
 **LLM tokens** (real text, 55M-token memory-mapped corpus, `seq_len=1024`, next-token):
 

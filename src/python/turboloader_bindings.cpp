@@ -14,6 +14,10 @@
  */
 
 #include <pybind11/pybind11.h>
+#include <vector>
+#include <cstring>
+#include <algorithm>
+#include <cmath>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 #include "../pipeline/pipeline.hpp"
@@ -39,6 +43,8 @@
 #include <thread>
 #include <chrono>
 #include <fstream>
+
+
 
 // Single source of truth for the version: setup.py passes -DTURBOLOADER_VERSION
 // at build time so the native module can never drift from the package version.
@@ -818,6 +824,32 @@ inline std::vector<std::string> list_all_transform_names() {
  * Module is named _turboloader (with underscore) to avoid conflicts
  * with the turboloader package. The Python __init__.py re-exports the API.
  */
+// IEEE binary16 conversion (round-to-nearest-even), portable — no _Float16/F16C
+// dependency (manylinux gcc 10 lacks _Float16). Used by the fp16 output paths.
+static inline uint16_t turboloader_f32_to_f16_bits(float f) {
+    uint32_t x;
+    std::memcpy(&x, &f, sizeof(x));
+    const uint32_t sign = (x >> 16) & 0x8000u;
+    uint32_t mant = x & 0x7fffffu;
+    const uint32_t exp8 = (x >> 23) & 0xffu;
+    if (exp8 == 0xffu) return static_cast<uint16_t>(sign | 0x7c00u | (mant ? 0x200u : 0u));
+    int32_t exp = static_cast<int32_t>(exp8) - 127 + 15;
+    if (exp >= 0x1f) return static_cast<uint16_t>(sign | 0x7c00u);
+    if (exp <= 0) {
+        if (exp < -10) return static_cast<uint16_t>(sign);
+        mant |= 0x800000u;
+        const uint32_t shift = static_cast<uint32_t>(14 - exp);
+        uint32_t half = mant >> shift;
+        const uint32_t rem = mant & ((1u << shift) - 1u), halfway = 1u << (shift - 1);
+        if (rem > halfway || (rem == halfway && (half & 1u))) ++half;
+        return static_cast<uint16_t>(sign | half);
+    }
+    uint32_t half = sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13);
+    const uint32_t rem = mant & 0x1fffu;
+    if (rem > 0x1000u || (rem == 0x1000u && (half & 1u))) ++half;
+    return static_cast<uint16_t>(half);
+}
+
 PYBIND11_MODULE(_turboloader, m) {
     m.doc() = "TurboLoader " TURBOLOADER_VERSION " - High-performance data loading for ML\n\n"
               "PyTorch-compatible DataLoader with a C++20 core.\n\n"
@@ -1256,6 +1288,135 @@ PYBIND11_MODULE(_turboloader, m) {
         "(N, H, W, 3) uint8 dataset (mmap views welcome) -> (B, 3, H, W)\n"
         "float32, one parallel SIMD pass, GIL released. The shuffled-serve\n"
         "kernel of the TBL-RAW pipeline.");
+
+    m.def(
+        "crop_resize_normalize_u8_gather",
+        [](py::array_t<uint8_t, py::array::c_style> dataset,
+           py::array_t<int64_t, py::array::c_style> indices,
+           py::array_t<float, py::array::c_style> crops,
+           py::array_t<uint8_t, py::array::c_style> flips, py::array output,
+           py::object mean_obj, py::object std_obj, bool scale01) {
+            auto ds = dataset.unchecked<4>();
+            if (ds.shape(3) != 3)
+                throw std::invalid_argument("dataset must be (N, H, W, 3) uint8");
+            const int64_t N = ds.shape(0);
+            const int srcH = static_cast<int>(ds.shape(1)), srcW = static_cast<int>(ds.shape(2));
+            auto idx = indices.unchecked<1>();
+            const size_t B = idx.shape(0);
+            auto cr = crops.unchecked<2>();
+            auto fl = flips.unchecked<1>();
+            if (static_cast<size_t>(cr.shape(0)) != B || cr.shape(1) != 4 ||
+                static_cast<size_t>(fl.shape(0)) != B)
+                throw std::invalid_argument("crops must be (B, 4) float32 and flips (B,) uint8");
+            for (size_t i = 0; i < B; ++i)
+                if (idx(i) < 0 || idx(i) >= N)
+                    throw std::out_of_range("gather index out of range");
+            py::buffer_info ob = output.request(true);
+            if (ob.ndim != 4 || static_cast<size_t>(ob.shape[0]) != B || ob.shape[1] != 3)
+                throw std::invalid_argument("output must be (B, 3, dst_h, dst_w)");
+            const int dstH = static_cast<int>(ob.shape[2]), dstW = static_cast<int>(ob.shape[3]);
+            const bool f16 = (ob.format == "e");
+            if (!f16 && ob.format != "f")
+                throw std::invalid_argument("output dtype must be float32 or float16");
+            {
+                const size_t px = static_cast<size_t>(dstH) * dstW;
+                if (ob.strides[3] != static_cast<py::ssize_t>(ob.itemsize) ||
+                    ob.strides[2] != static_cast<py::ssize_t>(ob.itemsize) * dstW ||
+                    ob.strides[1] != static_cast<py::ssize_t>(ob.itemsize * px) ||
+                    ob.strides[0] != static_cast<py::ssize_t>(ob.itemsize * px * 3))
+                    throw std::invalid_argument("output must be C-contiguous");
+            }
+
+            const bool has_ms = !mean_obj.is_none();
+            if (has_ms == std_obj.is_none())
+                throw std::invalid_argument("pass both mean and std, or neither");
+            float mean[3] = {0.f, 0.f, 0.f}, isd[3] = {1.f, 1.f, 1.f};
+            if (has_ms) {
+                auto m = mean_obj.cast<std::vector<float>>();
+                auto s = std_obj.cast<std::vector<float>>();
+                if (m.size() != 3 || s.size() != 3)
+                    throw std::invalid_argument("mean/std must have 3 elements");
+                for (int c = 0; c < 3; ++c) {
+                    mean[c] = m[c];
+                    isd[c] = s[c] != 0.0f ? 1.0f / s[c] : 1.0f;
+                }
+            }
+            const float scale = scale01 ? (1.0f / 255.0f) : 1.0f;
+            const uint8_t* src = dataset.data();
+            const int64_t* ix = indices.data();
+            const float* cp = crops.data();
+            const uint8_t* fp = flips.data();
+            void* dst = ob.ptr;
+            const size_t px = static_cast<size_t>(dstH) * dstW;
+
+            // Same sampling math as the Metal / CUDA crop kernels (half-pixel centers,
+            // flip = mirrored output x, clamp, bilinear), so every backend agrees.
+            auto kernel = [&](size_t i, auto store) {
+                const uint8_t* img = src + static_cast<size_t>(ix[i]) * srcH * srcW * 3;
+                const float cx = cp[i * 4], cy = cp[i * 4 + 1], cw = cp[i * 4 + 2],
+                            ch = cp[i * 4 + 3];
+                const bool flip = fp[i] != 0;
+                thread_local std::vector<int> x0v, x1v;
+                thread_local std::vector<float> dxv;
+                x0v.resize(dstW); x1v.resize(dstW); dxv.resize(dstW);
+                for (int x = 0; x < dstW; ++x) {
+                    const int ox = flip ? (dstW - 1 - x) : x;
+                    float sx = cx + (ox + 0.5f) / static_cast<float>(dstW) * cw - 0.5f;
+                    sx = std::fmin(std::fmax(sx, 0.0f), static_cast<float>(srcW - 1));
+                    const int x0 = static_cast<int>(sx);
+                    x0v[x] = x0; x1v[x] = std::min(x0 + 1, srcW - 1); dxv[x] = sx - x0;
+                }
+                for (int y = 0; y < dstH; ++y) {
+                    float sy = cy + (y + 0.5f) / static_cast<float>(dstH) * ch - 0.5f;
+                    sy = std::fmin(std::fmax(sy, 0.0f), static_cast<float>(srcH - 1));
+                    const int y0 = static_cast<int>(sy), y1 = std::min(y0 + 1, srcH - 1);
+                    const float dy = sy - y0;
+                    const uint8_t* r0 = img + static_cast<size_t>(y0) * srcW * 3;
+                    const uint8_t* r1 = img + static_cast<size_t>(y1) * srcW * 3;
+                    for (int x = 0; x < dstW; ++x) {
+                        const int x0 = x0v[x], x1 = x1v[x];
+                        const float dx = dxv[x];
+                        for (int c = 0; c < 3; ++c) {
+                            const float p00 = r0[x0 * 3 + c], p10 = r0[x1 * 3 + c];
+                            const float p01 = r1[x0 * 3 + c], p11 = r1[x1 * 3 + c];
+                            const float top = p00 * (1 - dx) + p10 * dx;
+                            const float bot = p01 * (1 - dx) + p11 * dx;
+                            const float v = (top * (1 - dy) + bot * dy) * scale;
+                            store(i, c, y, x, (v - mean[c]) * isd[c]);
+                        }
+                    }
+                }
+            };
+            {
+                py::gil_scoped_release release;
+                if (f16) {
+                    uint16_t* d = static_cast<uint16_t*>(dst);
+                    turboloader::parallel_for(B, [&](size_t i) {
+                        kernel(i, [&](size_t ii, int c, int y, int x, float v) {
+                            d[(ii * 3 + c) * px + static_cast<size_t>(y) * dstW + x] =
+                                turboloader_f32_to_f16_bits(v);
+                        });
+                    });
+                } else {
+                    float* d = static_cast<float*>(dst);
+                    turboloader::parallel_for(B, [&](size_t i) {
+                        kernel(i, [&](size_t ii, int c, int y, int x, float v) {
+                            d[(ii * 3 + c) * px + static_cast<size_t>(y) * dstW + x] = v;
+                        });
+                    });
+                }
+            }
+        },
+        py::arg("dataset"), py::arg("indices"), py::arg("crops"), py::arg("flips"),
+        py::arg("output"), py::arg("mean") = py::none(), py::arg("std") = py::none(),
+        py::arg("scale01") = true,
+        "Fused index gather + per-sample crop + bilinear resize + optional hflip +\n"
+        "normalize: rows `indices` of a (N, H, W, 3) uint8 dataset (mmap views\n"
+        "welcome), crop windows (B, 4) as x, y, w, h in source pixels (torchvision\n"
+        "RandomResizedCrop parity via turboloader._augment.pick_crop), flips (B,)\n"
+        "0/1 -> output (B, 3, dst_h, dst_w) float32 OR float16, parallel across\n"
+        "the batch, GIL released. Same sampling math as the Metal / CUDA crop\n"
+        "kernels. The serve-time augmentation kernel of the TBL-RAW pipeline.");
 
     m.def(
         "gather_rows_f32",

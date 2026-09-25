@@ -63,6 +63,8 @@ class MetalResidentLoader:
         shuffle=False,
         seed=42,
         return_indices=False,
+        world_rank=0,
+        world_size=1,
     ):
         t = _require_metal()
         self._t = t
@@ -73,6 +75,9 @@ class MetalResidentLoader:
         self.shuffle = bool(shuffle)
         self.seed = int(seed)
         self.return_indices = bool(return_indices)
+        self.world_rank, self.world_size = int(world_rank), int(world_size)
+        if self.world_size < 1 or not 0 <= self.world_rank < self.world_size:
+            raise ValueError("need 0 <= world_rank < world_size")
         self._epoch = 0
         self._handle = None
 
@@ -115,20 +120,27 @@ class MetalResidentLoader:
     def set_epoch(self, epoch):
         self._epoch = int(epoch)
 
+    @property
+    def _n_rank(self):
+        return self._n // self.world_size
+
     def __len__(self):
-        n, bs = self._n, self.batch_size
+        n, bs = self._n_rank, self.batch_size
         return n // bs if self.drop_last else -(-n // bs)
 
     def __iter__(self):
         t, bs = self._t, self.batch_size
-        end = (self._n // bs) * bs if self.drop_last else self._n
-        order = (
+        n = self._n_rank
+        end = (n // bs) * bs if self.drop_last else n
+        full = (
             np.random.default_rng(self.seed + self._epoch).permutation(self._n)
             if self.shuffle
             else np.arange(self._n)
-        ).astype(np.int32)
+        )
+        # disjoint, equal-size per-rank slice of the global order (DDP)
+        order = full[self.world_rank :: self.world_size][:n].astype(np.int32)
         for b in range(0, end, bs):
-            idx = order[b : b + min(bs, self._n - b)]
+            idx = order[b : b + min(bs, n - b)]
             batch = t.metal_resident_images_gather(
                 self._handle, idx, self._H, self._W, mean=self.mean, std=self.std
             )

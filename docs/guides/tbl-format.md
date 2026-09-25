@@ -1,776 +1,100 @@
-# TBL v2 Binary Format Guide
+<!-- Generated from the project wiki page https://github.com/ALJainProjects/TurboLoader/wiki/TBL-RAW-Preprocessed-Pipeline — edit there. -->
+> Canonical, always-current version: **[TBL RAW Preprocessed Pipeline](https://github.com/ALJainProjects/TurboLoader/wiki/TBL-RAW-Preprocessed-Pipeline)** on the wiki.
 
-**TBL v2 Binary Format**
+# TBL-RAW — decode once, mmap-serve every epoch
 
-TurboLoader features TBL v2 (TurboLoader Binary v2), a custom binary format optimized for ML datasets with **LZ4 compression**, an **O(1) memory streaming writer**, and **zero-copy memory-mapped reads**. Actual space savings are data-dependent (already-compressed JPEGs compress very little; uncompressed or PNG data benefits more).
-
-## Overview
-
-TBL v2 is designed specifically for machine learning workloads where:
-- **Storage efficiency** matters (LZ4 compression; benefit depends on the data)
-- **Fast random access** to samples is required (O(1) lookup)
-- **Data integrity** matters (CRC32/CRC16 checksums)
-- **Memory efficiency** during conversion is essential (O(1) memory, not O(n))
-- **Dimension filtering** without decoding saves compute (cached width/height)
-
-### Key Benefits Over TAR
-
-| Feature | TAR | TBL v2 | Improvement |
-|---------|-----|--------|-------------|
-| **Compression** | None | LZ4 | **Optional space savings (data-dependent)** |
-| **Write Memory** | Sequential | O(1) | **Streaming writer** |
-| **Checksums** | None | CRC32/CRC16 | **Data integrity** |
-| **Image Dimensions** | No | 16-bit cached | **Fast filtering** |
-| **Metadata** | Limited | Rich (JSON/Proto/MP) | **Flexible metadata** |
-| **Random Access** | O(n) | O(1) | **Instant lookup** |
-| **File Size** | baseline | smaller with LZ4 | **Depends on the data** |
-
-### When to Use TBL v2
-
-**Use TBL v2 when:**
-- Storage space is limited (cloud storage costs, disk quotas)
-- Dataset will be read multiple times (amortize conversion cost)
-- Data integrity is critical (checksums validate corruption)
-- You need dimension-based filtering (e.g., only load 224x224 images)
-- Shuffled random access is common (training with shuffle=True)
-
-**Use TAR when:**
-- One-time sequential reads (no conversion overhead)
-- Storage space is unlimited
-- Maximum compatibility needed (standard format)
-
-**Note:** Only TBL v2 is supported in the Python API. TBL v2 provides the best balance of conversion speed, storage efficiency, and data integrity features.
-
-## Format Specification
-
-### File Structure
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    TBL v2 File Structure                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  [Header: 64 bytes, cache-aligned]                           │
-│   - Magic: "TBL\x02" (4 bytes) ← Version 2                   │
-│   - Version: uint32_t (4 bytes)                               │
-│   - Num Samples: uint64_t (8 bytes)                           │
-│   - Compression: uint8_t (1 byte) → 1=LZ4, 2=ZSTD            │
-│   - Index Entry Size: uint32_t (4 bytes)                      │
-│   - Metadata Offset: uint64_t (8 bytes)                       │
-│   - Metadata Size: uint32_t (4 bytes)                         │
-│   - Reserved: 27 bytes                                        │
-│                                                               │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  [Index Table: N × 24 bytes]                                 │
-│   For each sample:                                           │
-│   - Offset: uint64_t (8 bytes)                               │
-│   - Compressed Size: uint32_t (4 bytes)                       │
-│   - Uncompressed Size: uint32_t (4 bytes)                     │
-│   - Format: uint8_t (1 byte) → JPEG/PNG/WebP                │
-│   - Width: uint16_t (2 bytes) ← NEW in v2                    │
-│   - Height: uint16_t (2 bytes) ← NEW in v2                   │
-│   - CRC16: uint16_t (2 bytes) ← NEW in v2 (index checksum)   │
-│   - Reserved: 3 bytes                                        │
-│                                                               │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  [Compressed Sample Data: Variable]                          │
-│   For each sample:                                           │
-│   - LZ4 Compressed Data (compressed_size bytes)              │
-│   - CRC32 Checksum (4 bytes) ← NEW in v2                     │
-│                                                               │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  [Metadata Section: Optional]                                │
-│   - Format: JSON/Protobuf/MessagePack                        │
-│   - Per-sample or global metadata                            │
-│   - Class labels, bounding boxes, captions, etc.             │
-│                                                               │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Header Format (64 bytes)
-
-```cpp
-struct TblV2Header {
-    char magic[4];              // "TBL\x02" (version 2 identifier)
-    uint32_t version;           // Format version (currently 2)
-    uint64_t num_samples;       // Total number of samples
-    uint8_t compression_type;   // 0=None, 1=LZ4, 2=ZSTD
-    uint32_t index_entry_size;  // Size of each index entry (24)
-    uint64_t metadata_offset;   // Byte offset to metadata section
-    uint32_t metadata_size;     // Size of metadata section
-    uint8_t metadata_format;    // 0=None, 1=JSON, 2=Protobuf, 3=MessagePack
-    uint8_t reserved[27];       // Reserved for future use
-} __attribute__((packed, aligned(64)));
-```
-
-### Index Entry Format (24 bytes)
-
-```cpp
-struct IndexEntry {
-    uint64_t offset;            // Byte offset in file to compressed data
-    uint32_t compressed_size;   // Size after LZ4 compression
-    uint32_t uncompressed_size; // Original size before compression
-    uint8_t format;             // SampleFormat enum (JPEG=1, PNG=2, etc.)
-    uint16_t width;             // Image width in pixels (NEW in v2)
-    uint16_t height;            // Image height in pixels (NEW in v2)
-    uint16_t crc16;             // CRC16 checksum of this index entry (NEW in v2)
-    uint8_t reserved[3];        // Padding for alignment
-} __attribute__((packed));
-```
-
-### Sample Formats
-
-```cpp
-enum class SampleFormat : uint8_t {
-    UNKNOWN = 0,
-    JPEG    = 1,
-    PNG     = 2,
-    WEBP    = 3,
-    BMP     = 4,
-    TIFF    = 5
-};
-```
-
-### Compression Types
-
-```cpp
-enum class CompressionType : uint8_t {
-    NONE  = 0,  // No compression (uncompressed mode)
-    LZ4   = 1,  // LZ4 (default, fast compression/decompression)
-    ZSTD  = 2   // Zstandard (future, higher compression ratio)
-};
-```
-
-## Converting TAR to TBL v2
-
-### Using Command-Line Tool
-
-TurboLoader includes a high-performance `tar_to_tbl` converter:
-
-```bash
-# Basic conversion (uses LZ4 compression by default)
-tar_to_tbl input.tar output.tbl
-
-# With progress output and statistics
-tar_to_tbl imagenet_train.tar imagenet_train.tbl --verbose
-
-# Parallel conversion with 8 threads
-tar_to_tbl large_dataset.tar large_dataset.tbl --workers 8
-
-# Without compression (faster, uncompressed mode)
-tar_to_tbl input.tar output.tbl --no-compression
-
-# Measure conversion speed
-time tar_to_tbl dataset.tar dataset.tbl
-```
-
-**Example output (illustrative — actual figures depend on data and hardware):**
-
-```
-Converting TAR to TBL v2 format...
-Input:  imagenet_train.tar  (1,281,167 samples)
-Workers: 8 threads
-Compression: LZ4 (level 1, fast mode)
-
-Processing: [████████████████████] 100% (1,281,167/1,281,167)
-
-Output: imagenet_train.tbl
-Compression ratio: <reported per dataset>   # already-compressed JPEGs compress little
-Completed successfully!
-```
-
-### Using C++ API
-
-```cpp
-#include "writers/tbl_v2_writer.hpp"
-#include "readers/tar_reader.hpp"
-#include "formats/tbl_format.hpp"
-#include "compression/lz4_compressor.hpp"
-
-using namespace turboloader;
-
-// Open TAR file
-readers::TarReader tar_reader("input.tar", 0, 1);
-
-// Create TBL v2 writer with LZ4 compression
-writers::TblV2Writer tbl_writer(
-    "output.tbl",
-    compression::CompressionType::LZ4
-);
-
-// Convert all samples
-const size_t num_samples = tar_reader.num_samples();
-for (size_t i = 0; i < num_samples; ++i) {
-    // Read sample from TAR
-    auto sample_data = tar_reader.get_sample(i);
-    const auto& entry = tar_reader.get_entry(i);
-
-    // Detect format from filename
-    formats::SampleFormat format = formats::extension_to_format(entry.name);
-
-    // Decode to get dimensions (for cached width/height)
-    auto decoded = decode_image(sample_data.data(), sample_data.size());
-    uint16_t width = decoded.width;
-    uint16_t height = decoded.height;
-
-    // Write to TBL v2 (automatic LZ4 compression + CRC32)
-    tbl_writer.add_sample(
-        sample_data.data(),
-        sample_data.size(),
-        format,
-        width,
-        height
-    );
-
-    if ((i + 1) % 1000 == 0) {
-        std::cout << "Processed " << (i + 1) << "/" << num_samples
-                  << " (" << tbl_writer.compression_ratio() << "x)" << std::endl;
-    }
-}
-
-// Finalize (writes index table and metadata)
-tbl_writer.finalize();
-
-std::cout << "Conversion complete!" << std::endl;
-std::cout << "Space savings: " << tbl_writer.space_saved_mb() << " MB" << std::endl;
-```
-
-### Using Python API
+FFCV's core insight, portably and without the `.beton` lock-in: JPEG decode dominates input-pipeline cost, and for many-epoch training you only need to pay it once.
 
 ```python
-import turboloader
+import turboloader as tl
 
-# Convert TAR to TBL v2 (LZ4 compression by default)
-turboloader.convert_tar_to_tbl('input.tar', 'output.tbl')
+# ONE-TIME: parallel decode + resize through the C++ fast path, RGB uint8 samples into TBL v2
+tl.preprocess_to_tbl("imagenet.tar", "imagenet_160.tbl", image_size=160)     # 9,469 Imagenette images: ~6 s on an M4 Max
 
-# With progress callback
-def progress(current, total, throughput):
-    pct = 100 * current / total
-    print(f"Progress: {current}/{total} ({pct:.1f}%) @ {throughput:.0f} img/s")
-
-turboloader.convert_tar_to_tbl(
-    'input.tar',
-    'output.tbl',
-    compression='lz4',      # or 'none', 'zstd'
-    workers=8,              # parallel conversion
-    progress_callback=progress
-)
-
-# No compression (uncompressed mode for faster conversion)
-turboloader.convert_tar_to_tbl(
-    'input.tar',
-    'output_uncompressed.tbl',
-    compression='none'
-)
+# EVERY RUN: serve from a memory map — no decode, instant startup
+loader = tl.DataLoader("imagenet_160.tbl", batch_size=64, transform=tl.ImageNetNormalize(), shuffle=True)
+for batch, meta in loader:            # (64, 3, 160, 160) float32; meta['indices'] aligns labels
+    train_step(batch, labels[meta["indices"]])
 ```
 
-## Reading TBL v2 Files
+## Why this is the efficiency frontier
 
-### C++ API
+- **Zero decode per epoch.** Serving is one fused, parallel, GIL-released SIMD pass (`normalize_u8_gather`): rows are gathered straight from the mmap and written as normalized CHW float32.
+- **Bit-identical output** to `DataLoader(tar, transform=ImageNetNormalize())` — the same uint8 pixels (exact `rint` recovery from the fast path's `[0,1]` floats) through the same fused kernel (`deinterleave_hwc_to_chw_f32`). Tested with `np.array_equal`, not `allclose`.
+- **~Zero owned memory.** The OS page cache holds the working set in file-backed pages — shared between processes, clean, evicted under pressure. Peak RSS ~1 GB for Imagenette-160 vs 3.3 GB anonymous RAM for `cache_decoded=True` (which also re-decodes at every startup).
+- **Insulated from source resolution.** On-the-fly throughput drops with larger source JPEGs; TBL-RAW serve speed depends only on the target size.
 
-```cpp
-#include "readers/tbl_v2_reader.hpp"
+## Measured (M4 Max, Imagenette 160px, each configuration in its own subprocess)
 
-using namespace turboloader::readers;
+| Pipeline | produce img/s | np.sum-consumed | peak RSS |
+|---|---:|---:|---:|
+| on-the-fly TAR (decode every epoch) | 33,493 | 33,157 | 516 MB |
+| **TBL-RAW, `prefetch_batches` default** | 127k† | **98,780** | 1,006 MB (file-backed, evictable) |
+| **TBL-RAW, `prefetch_batches=0` (raw serve)** | **585,992** | 91,160 | 931 MB (file-backed, evictable) |
+| `cache_decoded=True` (float32 in RAM, v2.37) | 137,494 | 101,358 | 3,343 MB (anonymous) + decode-all startup |
 
-// Open TBL v2 file (memory-mapped, automatic LZ4 decompression)
-TblV2Reader reader("dataset.tbl");
+† with a no-op consumer the prefetch thread thrashes; its honest number is the consumed one, which prefetch *improves* (98.8k vs 91.2k) because production overlaps the consumer — the point for training loops.
 
-// Get number of samples
-size_t num_samples = reader.num_samples();
+**End-to-end** (RTX 3090, ResNet-18, Imagenette-160): TBL-RAW **3.64 s/epoch** vs TAR 3.76 s vs PyTorch 3.92 s, pure-GPU floor 3.39 s — the fastest input pipeline this benchmark has measured, with an honesty log: the first run was *slower* (4.51 s) until background prefetch moved serving off the training thread. See [End to End Training Results](https://github.com/ALJainProjects/TurboLoader/wiki/End-to-End-Training-Results).
 
-// Random access to any sample (O(1))
-for (size_t i = 0; i < num_samples; i += 1000) {
-    // Read compressed data + decompress automatically
-    auto sample_data = reader.read_sample(i);
+## Serve-time augmentation (v2.38)
 
-    auto format = reader.get_format(i);
-    auto width = reader.get_width(i);   // Cached, no decode needed!
-    auto height = reader.get_height(i); // Cached, no decode needed!
-
-    std::cout << "Sample " << i << ": "
-              << sample_data.size() << " bytes, "
-              << width << "x" << height << ", "
-              << "format=" << static_cast<int>(format) << std::endl;
-}
-
-// Dimension-based filtering (no decoding!)
-for (size_t i = 0; i < num_samples; ++i) {
-    // Only load 224x224 images
-    if (reader.get_width(i) == 224 && reader.get_height(i) == 224) {
-        auto sample = reader.read_sample(i);
-        // Process sample...
-    }
-}
-```
-
-### Python API
+Store a little larger than you train at, then let the fused crop kernel do torchvision-parity RandomResizedCrop + hflip **per epoch, straight from the mmap**:
 
 ```python
-import turboloader
-
-# Load from TBL v2 file (automatically detects format)
-loader = turboloader.DataLoader(
-    'dataset.tbl',  # Automatically detects TBL v2 and enables LZ4
-    batch_size=64,
-    num_workers=8
-)
-
-for batch in loader:
-    for sample in batch:
-        image = sample['image']  # NumPy array (auto-decompressed)
-        width = sample['width']  # Cached dimension (no decode!)
-        height = sample['height']
-        # Process image...
-
-# Dimension-based filtering
-loader_224 = turboloader.DataLoader(
-    'dataset.tbl',
-    batch_size=64,
-    num_workers=8,
-    filter_fn=lambda meta: meta['width'] == 224 and meta['height'] == 224
-)
+tl.preprocess_to_tbl("imagenet.tar", "imagenet_192.tbl", image_size=192)      # once
+loader = tl.DataLoader("imagenet_192.tbl", batch_size=128, image_size=160,
+                       transform=tl.ImageNetNormalize(), train_aug=True, shuffle=True)
 ```
 
-## Performance Characteristics
+`crop_resize_normalize_u8_gather` gathers the rows, crops, bilinear-resizes, flips and normalizes in ONE parallel SIMD pass — the same sampling math (half-pixel centers, mirrored-x flip, clamp, bilinear) as the Metal/CUDA crop kernels, driven by the shared `pick_crop` sampler.
 
-> **Note:** The figures in this section are illustrative and depend on your data and
-> hardware. They are **not** part of TurboLoader's measured loader benchmark suite, which
-> covers image and token *loading* throughput rather than TBL conversion. Treat them as
-> rough expectations and measure on your own data.
+| Full-aug recipe (M4 Max, per-stage subprocesses) | produce img/s | np.sum-consumed | peak RSS |
+|---|---:|---:|---:|
+| on-the-fly TAR `train_aug=True` | 32,473 | 32,089 | 520 MB |
+| **TBL-RAW serve-time aug** (192px file → 160px batches) | **86,913** | **78,200** | 1,274 MB (evictable) |
 
-### Conversion Performance
+**2.7× (2.4× consumed)** with no decode. `meta['crops']` / `meta['flips']` report what was applied; crops are deterministic per `(seed, epoch, rank)`. Not served: color jitter and other photometric aug (bake them or use the TAR path); the kernel is bilinear, no antialias.
 
-Conversion is parallel and largely I/O-bound: throughput scales with worker threads until
-disk bandwidth saturates, and stays roughly flat as the dataset grows because the writer
-streams to disk with O(1) memory. Run `tar_to_tbl --verbose` to measure on your dataset.
+## API
 
-### Storage Efficiency
+### `preprocess_to_tbl(source, dst, image_size=160, *, batch_size=64, num_workers=8, compression=False)`
+Runs `DataLoader(source, output_format='pytorch', image_size=..., shuffle=False)` and writes each sample as `SampleFormat.RAW_U8` with its dims. Asserts in-order delivery. Returns the sample count. `compression=True` is allowed but pointless for photos (LZ4 measured **1.06×** on decoded images) and disables the mmap fast path.
 
-TBL v2 is usually smaller than the equivalent TAR, but how much depends heavily on the
-data:
+### `TblRawImageLoader(path, batch_size=64, *, mean=IMAGENET, std=IMAGENET, shuffle=True, seed=42, drop_last=False, pin_memory=False, ring=4, hflip_prob=0.0, prefetch_batches=2, train_aug=False, scale=(0.08, 1), ratio=(3/4, 4/3), image_size=None, dtype='float32', world_rank=0, world_size=1)`
+- `mean=None, std=None` → plain `[0,1]` floats.
+- `image_size` — output size; default the file's sample size; a different size is a serve-time bilinear resize.
+- `train_aug` — RandomResizedCrop (`scale`, `ratio`) + hflip (`hflip_prob`) through the fused crop kernel; `hflip_prob` alone (no crop, same size, float32) uses the exact uint8-mirror path.
+- `dtype='float16'` — half-precision output (portable round-to-nearest-even converter; bit-equal to numpy's own conversion), halves pinned-ring bytes and H2D.
+- `world_rank`/`world_size` — disjoint, equal-size per-rank slice of the global `(seed, epoch)` permutation (`num_samples // world_size` per rank).
+- `pin_memory=True` → torch page-locked ring of `ring` buffers (needs CUDA); a yielded batch's buffer is overwritten `ring` batches later. With prefetch the effective depth is clamped to `ring - 2` so nothing is overwritten while you or the queue hold it.
+- `prefetch_batches` — background producer thread (stop-aware; winds down on early exit); `0` = synchronous. Output is identical either way (tested, including the flip and aug paths).
+- `set_epoch`, `state_dict`/`load_state_dict`, `__len__`, `close()`, context manager — the family contract.
 
-1. **LZ4 compression** - Helps most on uncompressed or lightly-compressed data; already-
-   compressed JPEGs (quality 90+) compress very little
-2. **Per-sample compression** - Each image compressed independently (allows random access)
-3. **Efficient index** - 24-byte entries with cached dimensions
-4. **No TAR overhead** - No 512-byte member headers or padding
+`DataLoader('x.tbl', ...)` forwards `batch_size`, `shuffle`, `seed`, `drop_last`, `pin_memory`, `prefetch_batches`, `image_size` (or a `Resize` in `transform`), `train_aug`/`hflip_prob`, and `enable_distributed`/`world_rank`/`world_size`; `transform` may contain `Resize` and `ImageNetNormalize` only.
 
-Use `tar_to_tbl --verbose` to see the actual compression ratio for your dataset.
+### `turboloader.tbl.open_raw_view(path) -> (view, H, W)`
+Validates the file (all `RAW_U8`, uniform dims, uncompressed, `size == W*H*3`, contiguous arithmetic offsets) and returns a zero-copy `(N, H, W, 3)` uint8 memmap view. This is the ingestion primitive the resident loaders use.
 
-### Decompression Performance
-
-LZ4 decompression is extremely fast:
-
-```
-LZ4 decompression speed: 2.5-3.5 GB/s (single-threaded)
-Typical JPEG image: 100 KB → 30 microseconds to decompress
-Batch of 64 images: ~2 milliseconds total LZ4 overhead
-```
-
-**Impact on throughput:** Negligible (<5%) due to fast LZ4 decompression.
-
-### Random Access Performance
-
-```
-TAR format:   O(n) — must scan member headers from the start to reach an arbitrary sample
-TBL v2 (LZ4): O(1) — direct index lookup + on-demand LZ4 decompress
-```
-
-For shuffled training (a random access every step), the O(1) index lookup is the
-structural win over TAR's O(n) scan. The exact speedup depends on dataset size and storage.
-
-### Memory-Mapped I/O
-
-```cpp
-// TBL v2 uses mmap() for zero-copy reads
-TblV2Reader reader("imagenet.tbl");  // large multi-GB file
-
-// This doesn't load the entire file into RAM!
-// Only maps the address space
-auto sample = reader.read_sample(999999);  // O(1), no disk seek
-// LZ4 decompress happens on-demand (2.5 GB/s speed)
-
-// Pages loaded on-demand by OS
-// Minimal memory footprint even for 100+ GB datasets
-```
-
-## TBL v2 Features
-
-### 1. Data Integrity Validation
-
-Every sample has two checksums:
-
-```cpp
-// CRC32 for compressed data (detects corruption during read)
-uint32_t data_crc32 = compute_crc32(compressed_data, compressed_size);
-
-// CRC16 for index entry (detects index table corruption)
-uint16_t entry_crc16 = compute_crc16(&index_entry, 22);  // 22 bytes before crc16
-```
-
-**Validation on read:**
-
-```cpp
-TblV2Reader reader("dataset.tbl");
-
-// Automatically validates CRC32 on each sample read
-auto sample = reader.read_sample(i);  // Throws if CRC32 mismatch
-```
-
-### 2. Cached Image Dimensions
-
-Width and height stored in index for fast filtering:
-
-```cpp
-// Filter by dimension WITHOUT decoding
-std::vector<size_t> indices_224x224;
-for (size_t i = 0; i < reader.num_samples(); ++i) {
-    if (reader.get_width(i) == 224 && reader.get_height(i) == 224) {
-        indices_224x224.push_back(i);
-    }
-}
-// This is INSTANT - no JPEG decoding needed!
-```
-
-**Use cases:**
-- Load only specific resolution images for training
-- Filter out corrupted images (width=0, height=0)
-- Group images by aspect ratio for smart batching
-
-### 3. Rich Metadata Support
-
-Store arbitrary metadata in JSON/Protobuf/MessagePack:
+### GPU-resident ingestion (skips their decode-all pass)
 
 ```python
-# Create TBL with metadata
-metadata = {
-    'dataset': 'ImageNet',
-    'version': '2012',
-    'num_classes': 1000,
-    'samples': [
-        {'id': 0, 'class': 'cat', 'bbox': [10, 20, 100, 200]},
-        {'id': 1, 'class': 'dog', 'bbox': [15, 25, 110, 210]},
-        # ... per-sample metadata
-    ]
-}
-
-turboloader.convert_tar_to_tbl(
-    'input.tar',
-    'output.tbl',
-    metadata=metadata,
-    metadata_format='json'
-)
-
-# Read metadata
-loader = turboloader.DataLoader('output.tbl')
-metadata = loader.get_metadata()
-print(metadata['dataset'])  # 'ImageNet'
-print(metadata['samples'][0]['class'])  # 'cat'
+tl.MetalResidentLoader("imagenet_160.tbl", batch_size=256)          # Apple: "upload" = one memcpy into unified memory
+tl.CudaResidentLoader.from_tbl("imagenet_160.tbl", batch_size=64)   # NVIDIA: ~64 MB chunked upload through the mmap
 ```
 
-### 4. Streaming Writer (O(1) Memory)
+### The ops, exported standalone
+- `normalize_u8_batch(input (N,H,W,3) u8, output (N,3,H,W) f32, mean=None, std=None, scale01=True)`
+- `normalize_u8_gather(dataset (N,H,W,3) u8, indices int64 (B,), output (B,3,H,W) f32, mean=None, std=None, scale01=True)`
+- `crop_resize_normalize_u8_gather(dataset (N,H,W,3) u8, indices int64 (B,), crops (B,4) f32 x,y,w,h, flips (B,) u8, output (B,3,dh,dw) f32|f16, mean=None, std=None, scale01=True)`
 
-TBL v2 writer uses constant memory regardless of dataset size:
+All are parallel, GIL-released, write into caller-provided (optionally pinned) arrays, and reject wrong shapes/dtypes/out-of-range indices instead of copying silently.
 
-```cpp
-// TBL v2: O(1) memory - streams to disk immediately
-TblV2Writer writer_v2("output.tbl");
-for (sample : samples) {
-    writer_v2.add_sample(sample);  // Immediately written to disk
-}
-writer_v2.finalize();  // Only writes index table (24 × n bytes)
-```
+## Honest limits
 
-**Memory usage for ImageNet (1.28M samples):**
-- TBL v2 writer: ~30 MB RAM (streaming)
-- TAR sequential write: Variable (depends on tar implementation)
+- Photometric aug (color jitter etc.) is not served — bake it or use the TAR pipeline; the crop kernel is bilinear without antialias.
+- The `.tbl` is larger than the source TAR (727 MB at 160px, 1.05 GB at 192px, vs 263 MB): disk traded for decode.
+- On a bandwidth-poor host (the WSL2 3090 box) a GIL-holding pure-CPU consumer favors the RAM cache (27.6k vs 26.1k consumed); a real GPU step releases the GIL and TBL-RAW wins e2e. Both numbers are printed by `benchmarks/benchmark_tbl_raw.py`.
+- The e2e proof of the serve-time-aug path on the 3090 is pending that machine's return (loader-only it is 2.7× the TAR `train_aug` path).
 
-## Use Cases
-
-### 1. Cloud Storage Optimization
-
-Cut cloud storage costs when your data compresses well (sizes below are illustrative —
-already-compressed JPEGs save little):
-
-```bash
-# Upload to S3 with TBL v2
-tar_to_tbl imagenet_train.tar imagenet_train.tbl
-aws s3 cp imagenet_train.tbl s3://my-bucket/
-
-# Cost scales linearly with stored size, so any compression directly lowers the bill.
-# Run tar_to_tbl --verbose to see the actual compressed size for your dataset.
-```
-
-> S3/GCS streaming is not built into the published wheel; the `aws s3 cp` step above is a
-> standard upload of the local `.tbl` file.
-
-### 2. Distributed Training with Dimension Filtering
-
-```python
-import turboloader
-
-# Worker 0: Only load 224x224 images from shard 0
-loader_0 = turboloader.DataLoader(
-    'imagenet.tbl',
-    worker_id=0,
-    num_workers=4,
-    batch_size=64,
-    filter_fn=lambda m: m['width'] == 224 and m['height'] == 224
-)
-
-# Worker 1: Only load 224x224 images from shard 1
-loader_1 = turboloader.DataLoader(
-    'imagenet.tbl',
-    worker_id=1,
-    num_workers=4,
-    batch_size=64,
-    filter_fn=lambda m: m['width'] == 224 and m['height'] == 224
-)
-```
-
-### 3. Data Validation with Checksums
-
-```cpp
-// Validate entire dataset
-TblV2Reader reader("dataset.tbl");
-size_t corrupted_samples = 0;
-
-for (size_t i = 0; i < reader.num_samples(); ++i) {
-    try {
-        auto sample = reader.read_sample(i);  // Validates CRC32
-    } catch (const CRCMismatchError& e) {
-        std::cerr << "Sample " << i << " corrupted: " << e.what() << std::endl;
-        corrupted_samples++;
-    }
-}
-
-std::cout << "Validation complete: " << corrupted_samples
-          << " corrupted samples found" << std::endl;
-```
-
-### 4. Multi-Resolution Training
-
-```python
-# Load different resolutions for progressive training
-loader_128 = turboloader.DataLoader(
-    'dataset.tbl',
-    filter_fn=lambda m: m['width'] == 128 and m['height'] == 128
-)
-
-loader_224 = turboloader.DataLoader(
-    'dataset.tbl',
-    filter_fn=lambda m: m['width'] == 224 and m['height'] == 224
-)
-
-loader_512 = turboloader.DataLoader(
-    'dataset.tbl',
-    filter_fn=lambda m: m['width'] == 512 and m['height'] == 512
-)
-
-# Progressive training: 128 → 224 → 512
-train_epochs(model, loader_128, epochs=10)
-train_epochs(model, loader_224, epochs=10)
-train_epochs(model, loader_512, epochs=10)
-```
-
-## Advanced Features
-
-### Parallel Conversion
-
-Convert large TAR files using multiple threads:
-
-```bash
-# Use 16 worker threads for conversion
-tar_to_tbl imagenet.tar imagenet.tbl --workers 16
-
-# Speedup scales with available cores, ultimately bounded by I/O
-```
-
-### Compression Level Tuning
-
-```cpp
-// Fast compression (default, LZ4 level 1)
-TblV2Writer writer_fast("output.tbl", CompressionType::LZ4, 1);
-
-// Balanced compression (LZ4 level 9, slower but smaller)
-TblV2Writer writer_balanced("output.tbl", CompressionType::LZ4, 9);
-
-// Maximum compression (future: Zstandard)
-TblV2Writer writer_max("output.tbl", CompressionType::ZSTD, 19);
-```
-
-### Custom Metadata Schemas
-
-```python
-# Protobuf metadata for structured data
-import turboloader
-import sample_pb2  # Generated from .proto file
-
-metadata = sample_pb2.DatasetMetadata()
-metadata.name = "ImageNet"
-metadata.version = 2012
-
-for i, sample in enumerate(samples):
-    s = metadata.samples.add()
-    s.id = i
-    s.class_label = sample['class']
-    s.bbox.CopyFrom(sample['bbox'])
-
-turboloader.convert_tar_to_tbl(
-    'input.tar',
-    'output.tbl',
-    metadata=metadata.SerializeToString(),
-    metadata_format='protobuf'
-)
-```
-
-## Troubleshooting
-
-### Issue: Conversion slower than expected
-
-**Symptoms:**
-- Throughput < 3,000 img/s
-- High CPU usage during conversion
-
-**Solutions:**
-
-1. Use more workers:
-```bash
-tar_to_tbl input.tar output.tbl --workers 16
-```
-
-2. Use faster storage (NVMe SSD):
-```bash
-# Check I/O speed
-dd if=/dev/zero of=test.dat bs=1M count=10000
-```
-
-3. Disable compression for fastest speed:
-```bash
-tar_to_tbl input.tar output.tbl --no-compression  # Uncompressed mode
-```
-
-### Issue: TBL v2 file larger than expected
-
-**Symptoms:**
-- File barely smaller than TAR
-- Compression ratio < 1.5x
-
-**Cause:**
-- Images already heavily compressed (JPEG quality 95+)
-- Small images (compression overhead)
-
-**Check:**
-```bash
-# Analyze compression ratio
-tar_to_tbl input.tar output.tbl --verbose
-
-# Expected output:
-# Compression ratio: 1.8:1 (good)
-# Compression ratio: 1.1:1 (images already compressed)
-```
-
-### Issue: CRC32 validation errors
-
-**Symptoms:**
-- CRCMismatchError during read_sample()
-- Corrupted samples
-
-**Cause:**
-- Disk corruption
-- Incomplete file transfer
-- Bad storage media
-
-**Solution:**
-```bash
-# Re-convert from original TAR
-tar_to_tbl original.tar dataset_new.tbl
-
-# Validate checksum
-md5sum dataset.tbl
-```
-
-### Issue: Out of memory during conversion
-
-**Symptoms:**
-- OOM killer during tar_to_tbl
-- System hang during conversion
-
-**Cause:**
-- Insufficient system memory
-- Very large individual samples
-
-**Solution:**
-```bash
-# Ensure using latest version with streaming writer
-pip install --upgrade turboloader
-
-# Reduce number of parallel workers if needed
-tar_to_tbl input.tar output.tbl --workers 4
-```
-
-## Creating TBL v2 Datasets
-
-To create TBL v2 datasets from existing data:
-
-```bash
-# Convert from TAR source
-tar_to_tbl original.tar dataset_v2.tbl
-
-# With parallel processing for faster conversion
-tar_to_tbl original.tar dataset_v2.tbl --workers 8
-```
-
-**Python API:**
-```python
-import turboloader
-
-# Load TBL v2 files
-loader = turboloader.DataLoader('dataset.tbl', batch_size=64)
-```
-
-## Best Practices
-
-1. **Convert Once, Use Many Times**: TBL v2 conversion has an up-front cost, but the storage savings and O(1) random access persist for every later read
-
-2. **Use for Large Datasets**: Benefits are most noticeable with >10 GB datasets
-
-3. **Store on Fast Storage**: NVMe SSD recommended for conversion and reading
-
-4. **Enable Checksums in Production**: Validates data integrity (slight overhead worth it)
-
-5. **Cache Dimensions**: Use dimension filtering to avoid unnecessary decoding
-
-6. **Parallel Conversion**: Use --workers flag for faster conversion on multi-core systems
-
-## Performance Comparison
-
-| Operation | TAR | TBL v2 (LZ4) |
-|-----------|-----|--------------|
-| **Sequential Read** | mmap, bounded by SSD bandwidth | mmap + on-demand LZ4 decompress |
-| **Random Read** | O(n) header scan | O(1) index lookup |
-| **File Size** | baseline | smaller (data-dependent) |
-| **Write Memory** | Variable | O(1) streaming |
-| **Data Integrity** | ❌ | ✅ (CRC32/16) |
-| **Cached Dimensions** | ❌ | ✅ |
-| **Compression** | ❌ | ✅ (LZ4) |
-
-## Code Locations
-
-- **Format Spec**: `src/formats/tbl_v2_format.hpp`
-- **Reader**: `src/readers/tbl_v2_reader.hpp`
-- **Writer**: `src/writers/tbl_v2_writer.hpp`
-- **Converter**: `tools/tar_to_tbl.cpp`
-- **Tests**: `tests/test_tbl_v2_format.cpp`
-- **LZ4 Integration**: `src/compression/lz4_compressor.hpp`
-
-## See Also
-
-- [Architecture Documentation](../architecture.md) - TBL v2 pipeline design
-- [Performance Benchmarks](../benchmarks/index.md) - Conversion throughput analysis
-- [AVX-512 SIMD Guide](avx512-simd.md) - SIMD optimizations
-- [CHANGELOG](../../CHANGELOG.md) - Version history and migration guide
+Format details: [TBL v2 Format](https://github.com/ALJainProjects/TurboLoader/wiki/TBL-v2-Format).

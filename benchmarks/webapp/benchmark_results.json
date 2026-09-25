@@ -2,11 +2,12 @@
   "meta": {
     "dataset": "Imagenette-160 (9,469 real ImageNet JPEGs -> 160px)",
     "platform": "Apple M4 Max",
-    "turboloader_version": "2.33.1.dev4+gc5c137331.d20260710",
+    "turboloader_version": "2.37.0",
     "consumption": "real (np.sum / tf.reduce_sum forces materialization)",
     "method": "warmup + median of 3 timed epochs",
     "batch_size": 64,
-    "generated_utc": "2026-07-10T13:19:06+00:00"
+    "generated_utc": "2026-07-10T13:19:06+00:00",
+    "note": "frameworks/workers/cache/tokens/metal_resident measured live by run_benchmark.py (v2.33 era); tbl_raw / e2e / video / tokens_to_device are the v2.36-2.37 published results"
   },
   "frameworks": [
     {
@@ -56,5 +57,82 @@
   "metal_resident": {
     "produced": 649288,
     "consumed": 423037
+  },
+  "tbl_raw": {
+    "platform": "Apple M4 Max, Imagenette 160px, per-stage subprocesses",
+    "rows": [
+      {
+        "name": "on-the-fly TAR",
+        "produce": 33493,
+        "consumed": 33157,
+        "peak_rss_mb": 516
+      },
+      {
+        "name": "TBL-RAW prefetch (training default)",
+        "produce": 127000,
+        "consumed": 98780,
+        "peak_rss_mb": 1006
+      },
+      {
+        "name": "TBL-RAW sync (raw serve)",
+        "produce": 585992,
+        "consumed": 91160,
+        "peak_rss_mb": 931
+      },
+      {
+        "name": "cache_decoded=True (v2.37)",
+        "produce": 137494,
+        "consumed": 101358,
+        "peak_rss_mb": 3343
+      }
+    ]
+  },
+  "e2e": {
+    "platform": "RTX 3090, ResNet-18, Imagenette-160, bs 128, median steady-state epoch (s)",
+    "rows": [
+      {
+        "name": "pure-GPU floor",
+        "epoch_s": 3.39
+      },
+      {
+        "name": "TBL-RAW (hflip-only recipe)",
+        "epoch_s": 3.64
+      },
+      {
+        "name": "TurboLoader TAR (train_aug)",
+        "epoch_s": 3.76
+      },
+      {
+        "name": "PyTorch DataLoader",
+        "epoch_s": 3.92
+      }
+    ],
+    "video": {
+      "model": "r3d_18",
+      "turboloader_s": 4.19,
+      "pytorch_pyav_s": 4.85,
+      "floor_s": 2.11
+    }
+  },
+  "video": {
+    "m4_max_1080p_to_224": {
+      "MetalVideoLoader": 2556,
+      "OpenCV": 657,
+      "PyAV": 535,
+      "torchcodec": 173
+    },
+    "rtx3090_wsl2": {
+      "decord": 604,
+      "CudaVideoLoader_cpu": 371,
+      "OpenCV": 312,
+      "PyAV": 131,
+      "CudaVideoLoader_nvdec": 96
+    }
+  },
+  "tokens_to_device": {
+    "platform": "RTX 3090, 32x1024 uint16 memmap, M tok/s delivered to device",
+    "TokenDataLoader": 168.7,
+    "TokenDataLoader_device_cuda": 168.1,
+    "nanoGPT_get_batch": 88.1
   }
 }
