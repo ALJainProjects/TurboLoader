@@ -411,30 +411,11 @@ class CudaResidentLoader:
         seed=42,
         return_indices=False,
     ):
-        import turboloader as t
-        import torch
-
-        self.return_indices = bool(return_indices)
-        if not getattr(t, "cuda_available", lambda: False)() or not hasattr(
-            t, "cuda_normalize_resident"
-        ):
-            raise RuntimeError(
-                "CudaResidentLoader needs a CUDA build with cuda_normalize_resident."
-            )
+        self._setup(image_size, batch_size, mean, std, drop_last, shuffle, seed, return_indices)
         from concurrent.futures import ThreadPoolExecutor
 
         from PIL import Image
 
-        self._t = t
-        self._torch = torch
-        self._H = self._W = int(image_size)
-        self.batch_size = int(batch_size)
-        self.mean = list(mean)
-        self.std = list(std)
-        self.drop_last = bool(drop_last)
-        self.shuffle = bool(shuffle)
-        self.seed = int(seed)
-        self._epoch = 0
         paths = list(paths)
         self._n = len(paths)
         H = W = self._H
@@ -448,10 +429,43 @@ class CudaResidentLoader:
         with ThreadPoolExecutor(max_workers=max(1, int(num_workers))) as ex:
             list(ex.map(_load, range(self._n)))
         # Upload once; stays resident on the GPU for every epoch.
-        self._gpu = torch.from_numpy(arr).cuda().contiguous()
+        self._gpu = self._torch.from_numpy(arr).cuda().contiguous()
+
+    def _setup(self, image_size, batch_size, mean, std, drop_last, shuffle, seed, return_indices):
+        """Shared field/capability setup for both constructors (path list, .tbl)."""
+        import turboloader as t
+        import torch
+
+        if not getattr(t, "cuda_available", lambda: False)() or not hasattr(
+            t, "cuda_normalize_resident"
+        ):
+            raise RuntimeError(
+                "CudaResidentLoader needs a CUDA build with cuda_normalize_resident."
+            )
+        self._t, self._torch = t, torch
+        self._H = self._W = int(image_size)
+        self.batch_size = int(batch_size)
+        self.mean = list(mean)
+        self.std = list(std)
+        self.drop_last = bool(drop_last)
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.return_indices = bool(return_indices)
+        self._epoch = 0
 
     @classmethod
-    def from_tbl(cls, path, batch_size=64, **kw):
+    def from_tbl(
+        cls,
+        path,
+        batch_size=64,
+        *,
+        mean=(0.485, 0.456, 0.406),
+        std=(0.229, 0.224, 0.225),
+        drop_last=True,
+        shuffle=False,
+        seed=42,
+        return_indices=False,
+    ):
         """Build from a pre-processed RAW_U8 ``.tbl`` (see ``preprocess_to_tbl``):
         the decode-all pass disappears — upload reads straight through the mmap.
         H/W come from the file (RAW serving does not resize)."""
@@ -461,29 +475,11 @@ class CudaResidentLoader:
         if H != W:
             raise ValueError(f"resident loader needs square samples, file is {W}x{H}")
         self = cls.__new__(cls)
-        import torch
-
-        import turboloader as t
-
-        if not getattr(t, "cuda_available", lambda: False)() or not hasattr(
-            t, "cuda_normalize_resident"
-        ):
-            raise RuntimeError(
-                "CudaResidentLoader needs a CUDA build with cuda_normalize_resident."
-            )
-        self._t, self._torch = t, torch
-        self._H = self._W = H
-        self.batch_size = int(batch_size)
-        self.mean = list(kw.get("mean", (0.485, 0.456, 0.406)))
-        self.std = list(kw.get("std", (0.229, 0.224, 0.225)))
-        self.drop_last = bool(kw.get("drop_last", True))
-        self.shuffle = bool(kw.get("shuffle", False))
-        self.seed = int(kw.get("seed", 42))
-        self.return_indices = bool(kw.get("return_indices", False))
-        self._epoch = 0
+        self._setup(H, batch_size, mean, std, drop_last, shuffle, seed, return_indices)
         self._n = view.shape[0]
         # Chunked upload through the mmap: peak host memory is one chunk, not
         # the dataset (and no torch warning about read-only numpy arrays).
+        torch = self._torch
         self._gpu = torch.empty((self._n, H, W, 3), dtype=torch.uint8, device="cuda")
         step = max(1, (64 << 20) // (H * W * 3))  # ~64 MB chunks
         for s in range(0, self._n, step):

@@ -45,19 +45,25 @@ a lesson re-learned here), reported at TWO consumption levels
 
 | Pipeline | produce img/s | np.sum-consumed | peak RSS |
 |---|---:|---:|---:|
-| on-the-fly TAR (decode every epoch) | 32,417 | 31,130 | 519 MB |
-| **TBL-RAW, `prefetch_batches` default (training)** | 144k† | **98,560** | 1,008 MB (file-backed, evictable) |
-| **TBL-RAW, `prefetch_batches=0` (raw serve)** | **531,367** | 88,945 | 931 MB (file-backed, evictable) |
-| `cache_decoded=True` (float32 in RAM) | 62,493 | 59,744 | **8,796 MB** (anonymous) |
+| on-the-fly TAR (decode every epoch) | 33,493 | 33,157 | 516 MB |
+| **TBL-RAW, `prefetch_batches` default (training)** | 127k† | **98,780** | 1,006 MB (file-backed, evictable) |
+| **TBL-RAW, `prefetch_batches=0` (raw serve)** | **585,992** | 91,160 | 931 MB (file-backed, evictable) |
+| `cache_decoded=True` (float32 in RAM) — after the v2.37 rewrite | 137,494 | 101,358 | **3,343 MB** (anonymous) + decode-all startup |
+| `cache_decoded=True` — as shipped in v2.36 | 62,493 | 59,744 | 8,796 MB (anonymous) |
 
 † prefetch's produce figure is thread-scheduling noise (a no-op consumer makes
 the producer thread thrash); its stable, honest number is the consumed one —
-which prefetch IMPROVES (98.6k vs 88.9k sync) because production overlaps the
+which prefetch IMPROVES (98.8k vs 91.2k sync) because production overlaps the
 consumer, which is the whole point for training loops.
 
-TBL-RAW beats the float32 RAM cache at BOTH consumption levels in BOTH modes
-while the "memory" it uses is clean page cache the kernel can drop at any
-time. Honest notes: LZ4 on decoded photos = **1.06x** (why RAW defaults to
+Correction to the 2.36 write-up: the float32 cache was unfairly slow there —
+its build held three full copies at peak and its shuffled serve was
+single-threaded numpy fancy-indexing. Fixed in 2.37 (one allocation, parallel
+C++ row gather), it now **ties TBL-RAW at the consumed level (~100k)** and
+serves 137k produce. TBL-RAW's remaining, real advantages: **3.3x lower peak
+RSS** in file-backed pages the kernel can drop, **no decode-all pass at
+startup** (the cache re-decodes every run), and a 586k raw-serve ceiling.
+Honest notes: LZ4 on decoded photos = **1.06x** (why RAW defaults to
 `compression=False` — the real compression is uint8-not-float32, 4x); the .tbl
 is bigger than the JPEG TAR (727 vs 263 MB — disk traded for decode); no
 per-epoch random crop (serve-time hflip only) — full-aug training stays on the

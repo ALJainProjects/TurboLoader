@@ -41,19 +41,14 @@ Usage:
 # import time — otherwise `import turboloader` crashes when torch isn't installed.
 from __future__ import annotations
 
-import os
-import sys
 import json
 import tarfile
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union, Any, Iterator
+from typing import Callable, Dict, List, Optional, Tuple, Any, Iterator
 from abc import ABC, abstractmethod
-
-import numpy as np
 
 try:
     import torch
-    from torch.utils.data import IterableDataset
 
     TORCH_AVAILABLE = True
 except ImportError:
@@ -62,7 +57,6 @@ except ImportError:
 
 # Import turboloader components
 try:
-    from _turboloader import DataLoader as _DataLoaderBase
     import turboloader
 
     TURBOLOADER_AVAILABLE = True
@@ -721,9 +715,6 @@ class ImageFolderConverter:
         Returns:
             Dict mapping class names to indices
         """
-        from PIL import Image
-        from io import BytesIO
-
         if not hasattr(dataset, "samples"):
             raise ValueError("Dataset must have 'samples' attribute (like ImageFolder)")
 
@@ -909,7 +900,7 @@ class TransformAdapter:
 
             elif name == "Lambda":
                 # Can't convert lambdas - skip with warning
-                print(f"Warning: Cannot convert Lambda transform, skipping")
+                print("Warning: Cannot convert Lambda transform, skipping")
 
             else:
                 print(f"Warning: Unknown transform '{name}', skipping")

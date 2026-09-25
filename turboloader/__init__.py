@@ -122,16 +122,16 @@ try:
     from _turboloader import (
         # Core DataLoader (internal - we wrap this)
         DataLoader as _DataLoaderBase,
-        version as _c_version,
         features as _c_features,
         # TBL v2 Format
         TblReaderV2,
         TblWriterV2,
         SampleFormat,
         MetadataType,
-        # Fused SIMD batch ops (serve kernels of the TBL-RAW pipeline)
+        # Fused SIMD batch ops (serve kernels of the TBL-RAW pipeline / decoded cache)
         normalize_u8_batch,
         normalize_u8_gather,
+        gather_rows_f32 as _gather_rows_f32,
         # Smart Batching
         SmartBatchConfig,
         # Transform Composition
@@ -442,8 +442,13 @@ try:
                 images = cache_X[s : s + batch_size].copy()
                 idx = cache_indices[s : s + batch_size]
             else:
-                sel = order[s : s + batch_size]
-                images = cache_X[sel]
+                sel = np.ascontiguousarray(order[s : s + batch_size], dtype=np.int64)
+                images = np.empty((len(sel),) + cache_X.shape[1:], dtype=cache_X.dtype)
+                fast = globals().get("_gather_rows_f32")
+                if fast is not None and cache_X.dtype == np.float32:
+                    fast(cache_X, sel, images)  # parallel, GIL-released
+                else:
+                    np.take(cache_X, sel, axis=0, out=images)
                 idx = cache_indices[sel]
             return images, {"indices": idx.tolist(), "batch_size": int(images.shape[0])}
 
@@ -555,24 +560,40 @@ try:
             return -(-n // self._batch_size)
 
         def _populate_cache(self):
-            """Decode the whole dataset once into a contiguous, index-sorted cache."""
+            """Decode the whole dataset once into a contiguous, index-sorted cache.
+
+            Allocates the cache ONCE and scatters each decoded batch straight to its
+            index positions. The previous chunk-list -> concatenate -> argsort-reorder
+            build held THREE full copies at peak (measured 8.8 GB peak RSS for a
+            2.9 GB Imagenette-160 cache); peak is now the cache plus one batch."""
             self._core.begin_epoch(0)
-            chunks, idxs = [], []
+            n = self._core.num_samples()
+            X = seen = None
+            filled = 0
             while True:
                 r = self._core.next_batch()
                 if r is None:
                     break
                 images, meta = r
-                chunks.append(np.array(images, copy=True))  # independent of yielded buffer
-                idxs.append(np.asarray(meta["indices"]))
-            if chunks:
-                X = np.concatenate(chunks, axis=0)
-                I = np.concatenate(idxs, axis=0)
-                order = np.argsort(I, kind="stable")  # store in original-index order
-                self._cache_X = X[order]
-                self._cache_indices = I[order]
-            else:
+                idx = np.asarray(meta["indices"], dtype=np.int64)
+                if X is None:
+                    X = np.empty((n,) + tuple(images.shape[1:]), dtype=np.float32)
+                    seen = np.zeros(n, dtype=bool)
+                X[idx] = images  # copy out of the yielded (reused) buffer, in place
+                seen[idx] = True
+                filled += len(idx)
+            if X is None:
                 self._cache_X = self._cache_indices = None
+            else:
+                if filled != n or not seen.all():
+                    # Never trust a partial decode silently: drop rows never delivered
+                    # (a failed sample) instead of serving uninitialized memory.
+                    keep = np.nonzero(seen)[0]
+                    X = X[keep]
+                    self._cache_indices = keep
+                else:
+                    self._cache_indices = np.arange(n, dtype=np.int64)
+                self._cache_X = X
             self._cache_populated = True
 
         def __iter__(self):

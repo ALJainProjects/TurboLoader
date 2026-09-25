@@ -5,6 +5,41 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Cleanliness + efficiency pass: the decoded cache's memory spike, dead code, CI
+hygiene, and a second audit-driven correction to our own published numbers.
+
+### Changed
+- **`cache_decoded=True` builds in ONE allocation** — batches are scattered
+  straight into their index positions. The old chunk-list → concatenate →
+  argsort-reorder build held three full copies at peak: measured **8,796 MB →
+  3,343 MB peak RSS** for the 2.9 GB Imagenette-160 cache (M4 Max, per-stage
+  subprocess). A partial decode (failed sample) now drops undelivered rows
+  instead of ever serving uninitialized memory.
+- **Cached shuffled serve uses a parallel C++ row gather** (`gather_rows_f32`,
+  GIL released) instead of single-threaded numpy fancy indexing: **62k → 137k
+  img/s produce, 60k → 101k np.sum-consumed**. Honest consequence for our own
+  docs: the float32 cache now TIES TBL-RAW's prefetch mode at the consumed level
+  (~100k) — TBL-RAW's remaining edge is 3.3x lower RSS (evictable file pages vs
+  anonymous RAM), no decode-all pass at startup, and the 586k raw-serve ceiling.
+  README / benchmarks index / tbl_v2_format corrected accordingly.
+- `CudaResidentLoader.from_tbl` shares the constructor's setup (`_setup`) —
+  the duplicated field/capability block is gone; `from_tbl` now takes explicit
+  keyword args instead of an opaque `**kw`.
+- Dead code removed: unused `_c_version` import (version is single-sourced from
+  `__version__`), `math` in gpu_loader, `os`/`sys`/`Union`/`numpy`/
+  `IterableDataset`/`_DataLoaderBase`/`PIL.Image`/`BytesIO` in pytorch_compat,
+  an f-string without placeholders, and the ambiguous `I` name.
+- CI: flake8's syntax/undefined-name gate now also covers `examples/` and
+  `benchmarks/` (the class of bug that shipped a broken quickstart in 2.35);
+  all actions bumped off Node-20-deprecated majors (checkout v7, setup-python
+  v7, upload-artifact v7, download-artifact v8, cibuildwheel v4.2.1, codecov
+  v5); the wheel workflow dry-run validated via workflow_dispatch before the tag.
+- Tests: `test_cache_populate.py` pins cache == on-the-fly sample-for-sample,
+  index order, contiguity, deterministic shuffle completeness, and the gather
+  op vs numpy.
+
 ## [2.36.0] - 2026-08-03
 
 End-to-end speed sprint: video training, LLM token fast path, honest re-measurement
