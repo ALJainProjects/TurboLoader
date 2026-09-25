@@ -34,7 +34,10 @@ incl. an np.sum-consumed variant in [docs/benchmarks](benchmarks/index.md)):
 - **~Zero owned memory.** The OS page cache holds the working set in
   file-backed pages — shared, clean, evicted under pressure.
   `cache_decoded=True` owns the whole decoded dataset as float32 anonymous RAM
-  (4x the bytes of the uint8 file, unevictable) and still serves slower.
+  (4x the bytes of the uint8 file, unevictable — 3.3 GB vs 1.0 GB peak RSS on
+  Imagenette-160) and re-decodes everything at every startup; since 2.37 it
+  serves about as fast under a real consumer, so the choice is memory and
+  startup, not speed.
 - **Insulated from source resolution.** On-the-fly throughput drops when the
   source JPEGs are large (more decode work); TBL-RAW serve speed depends only
   on the target size.

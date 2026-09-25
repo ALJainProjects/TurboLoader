@@ -1258,6 +1258,46 @@ PYBIND11_MODULE(_turboloader, m) {
         "kernel of the TBL-RAW pipeline.");
 
     m.def(
+        "gather_rows_f32",
+        [](py::array_t<float, py::array::c_style> dataset,
+           py::array_t<int64_t, py::array::c_style> indices,
+           py::array_t<float, py::array::c_style> output) {
+            if (dataset.ndim() < 2 || output.ndim() != dataset.ndim())
+                throw std::invalid_argument("dataset/output must be (N, ...) with matching ndim");
+            const int64_t N = dataset.shape(0);
+            size_t row = 1;
+            for (int d = 1; d < dataset.ndim(); ++d) {
+                if (output.shape(d) != dataset.shape(d))
+                    throw std::invalid_argument("output row shape must match dataset");
+                row *= static_cast<size_t>(dataset.shape(d));
+            }
+            auto idx = indices.unchecked<1>();
+            const size_t B = idx.shape(0);
+            if (static_cast<size_t>(output.shape(0)) != B)
+                throw std::invalid_argument("output must have len(indices) rows");
+            for (size_t i = 0; i < B; ++i)
+                if (idx(i) < 0 || idx(i) >= N)
+                    throw std::out_of_range("gather index out of range");
+            const float* src = dataset.data();
+            const int64_t* ix = indices.data();
+            float* dst = output.mutable_data();
+            {
+                // Parallel row copies: numpy fancy-indexing a float32 (N, C, H, W)
+                // cache is single-threaded and memory-bound; spreading the rows
+                // across the pool turns the decoded-cache serve into a bandwidth
+                // problem instead of a one-core problem.
+                py::gil_scoped_release release;
+                turboloader::parallel_for(B, [&](size_t i) {
+                    std::memcpy(dst + i * row, src + static_cast<size_t>(ix[i]) * row,
+                                row * sizeof(float));
+                });
+            }
+        },
+        py::arg("dataset"), py::arg("indices"), py::arg("output"),
+        "Parallel row gather: output[i] = dataset[indices[i]] for a float32\n"
+        "(N, ...) array, GIL released. Serve kernel of cache_decoded=True.");
+
+    m.def(
         "decode_jpeg",
         [](py::bytes data) -> py::array_t<uint8_t> {
             // Copy the bytes into a C++ buffer so the decode can run with the GIL released

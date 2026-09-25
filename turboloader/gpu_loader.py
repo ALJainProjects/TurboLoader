@@ -11,7 +11,6 @@ arm64 build with the Metal path (``turboloader.metal_available()``).
 
 from __future__ import annotations
 
-import math
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
