@@ -16,6 +16,22 @@ import subprocess
 # here to pass to the C++ extension as -DTURBOLOADER_VERSION so the native module's
 # version()/features() always match the package (this skew once shipped as 2.5.0 vs
 # 2.25.0). Resolve from scm (git checkout) or the generated _version.py (sdist).
+
+def _target_arch():
+    """Architecture we are compiling FOR (not the host): cibuildwheel cross-builds set
+    ARCHFLAGS="-arch x86_64" / _PYTHON_HOST_PLATFORM=macosx-11.0-x86_64 on arm64 runners.
+    Every SIMD / Metal decision keys off this, never platform.machine()."""
+    import platform as _p
+    import re as _re
+
+    m = _re.search(r"-arch\s+(\S+)", os.environ.get("ARCHFLAGS", ""))
+    if m:
+        return m.group(1).lower()
+    hp = os.environ.get("_PYTHON_HOST_PLATFORM", "")
+    if hp:
+        return hp.rsplit("-", 1)[-1].lower()
+    return _p.machine().lower()
+
 def _resolve_version():
     # 1. Honor the pretend-version env (set in CI) so the C++ macro matches the wheel
     #    metadata exactly — the wheel smoke-test asserts version() == __version__.
@@ -396,7 +412,7 @@ def get_extensions():
     extra_libs = []
     if (
         _macos
-        and _plat.machine().lower() in ("arm64", "aarch64")
+        and _target_arch() in ("arm64", "aarch64")
         and os.environ.get("TURBOLOADER_ENABLE_METAL", "1") == "1"
     ):
         extra_sources.append("src/metal/metal_transforms.mm")
@@ -503,7 +519,7 @@ class BuildExt(build_ext):
         import re
 
         ct = self.compiler.compiler_type
-        arch = platform.machine().lower()
+        arch = _target_arch()  # target, not host (cross-compiled Intel-Mac wheels)
         system = platform.system().lower()
 
         # Teach distutils to accept Objective-C++ (.mm) sources on macOS (the Metal
@@ -653,6 +669,8 @@ class BuildExt(build_ext):
                         link_opts.append("-mmacosx-version-min=11.0")
                     if "arm64" in arch:
                         opts.append("-mcpu=native")
+                    elif "x86" in arch:
+                        opts.append("-msse4.2")  # portable Intel-Mac baseline
                     # Add rpath for Homebrew libraries on macOS
                     for lib_dir in ext.library_dirs:
                         if lib_dir and os.path.exists(lib_dir):

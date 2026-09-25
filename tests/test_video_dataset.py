@@ -161,3 +161,17 @@ class TestLoader:
         for i, _ in enumerate(dl):
             if i == 1:
                 break  # generator close must wind down feeder + workers
+
+
+@cuda_video
+class TestSharding:
+    def test_ranks_disjoint_plans(self, two_class_root):
+        kw = dict(clip_len=4, batch_size=4, image_size=64, workers=2, seed=5, steps_per_epoch=3)
+        plans = []
+        for r in range(2):
+            dl = tl.VideoDatasetLoader(two_class_root, **kw, world_rank=r, world_size=2)
+            dl.set_epoch(1)
+            vid, start = dl._plan()
+            assert len(vid) == 12
+            plans.append(list(zip(vid.tolist(), start.tolist())))
+        assert plans[0] != plans[1]

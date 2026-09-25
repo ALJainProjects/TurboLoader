@@ -131,6 +131,7 @@ try:
         # Fused SIMD batch ops (serve kernels of the TBL-RAW pipeline / decoded cache)
         normalize_u8_batch,
         normalize_u8_gather,
+        crop_resize_normalize_u8_gather,
         gather_rows_f32 as _gather_rows_f32,
         # Smart Batching
         SmartBatchConfig,
@@ -208,6 +209,7 @@ try:
         "SampleFormat",
         "normalize_u8_batch",
         "normalize_u8_gather",
+        "crop_resize_normalize_u8_gather",
         "preprocess_to_tbl",
         "TblRawImageLoader",
         "MetadataType",
@@ -770,15 +772,24 @@ try:
         and SIMD-accelerated transforms.
 
         Args:
-            data_path (str): Path to data (TAR, video, CSV, Parquet).
-                            Supports: local files, http://, https://, s3://, gs://
+            data_path (str): TAR of JPEGs (local; http/s3/gcs TAR readers per
+                            features()) or a RAW_U8 .tbl from preprocess_to_tbl.
             batch_size (int): Samples per batch (default: 32)
-            num_workers (int): Worker threads (default: 4)
-            shuffle (bool): Shuffle samples within each worker (default: False).
-                          Use set_epoch() for reproducible shuffling across epochs.
+            num_workers (int): Worker threads for the per-sample dict path. The
+                          array fast path is one process-wide C++ pool already
+                          saturated at one worker (raising this does not scale it).
+            shuffle (bool): Shuffle samples (default: False). Order is a function
+                          of (seed, epoch): call set_epoch() every epoch.
             transform: Transform or composed transforms to apply to images.
                       Use pipe operator: Resize(224, 224) | ImageNetNormalize()
-                      Or Compose([Resize(224, 224), ImageNetNormalize()])
+                      Or Compose([Resize(224, 224), ImageNetNormalize()]).
+                      On the fast path Resize / Normalize fuse into the C++ pass.
+            image_size (int | (H, W)): fixed output size; enables the fast path.
+            output_format (str): 'dict' (per-sample), 'pytorch' (N,3,H,W float32),
+                      'numpy_chw', 'numpy' / 'tensorflow' (N,H,W,3 float32).
+            cache_decoded (bool): decode the dataset once into a contiguous float32
+                      cache (one allocation) and serve epochs from RAM.
+            antialias (bool): torchvision-parity antialiased downscale.
             enable_distributed (bool): Enable distributed training (default: False)
             world_rank (int): Rank of this process (default: 0)
             world_size (int): Total number of processes (default: 1)
@@ -788,7 +799,7 @@ try:
             cache_l1_mb (int): L1 memory cache size in MB (default: 512)
             cache_l2_gb (int): L2 disk cache size in GB (default: 0)
             cache_dir (str): L2 cache directory (default: /tmp/turboloader_cache)
-            auto_smart_batching (bool): Auto-detect smart batching (default: True)
+            auto_smart_batching (bool): Auto-detect smart batching (default: False)
             enable_smart_batching (bool): Manual smart batching override (default: False)
             prefetch_batches (int): Batches to prefetch (default: 4)
             pin_memory (bool): Stream batches through a RING of recycled pinned
@@ -865,22 +876,34 @@ try:
             ):
                 from turboloader.tbl import TblRawImageLoader
 
-                if train_aug:
-                    raise ValueError(
-                        "train_aug (RandomResizedCrop) needs the TAR pipeline — RAW "
-                        ".tbl samples are already resized. TblRawImageLoader(...,"
-                        " hflip_prob=0.5) offers the one aug this path supports."
-                    )
                 mean = std = None
+                target = image_size
                 if transform is not None:
-                    if type(transform).__name__ != "ImageNetNormalize":
+                    from_resize = _resize_target_from_transform(transform)
+                    steps = list(_flatten_transforms(transform))
+                    unsupported = [
+                        type(s).__name__
+                        for s in steps
+                        if type(s).__name__ not in ("ImageNetNormalize", "Resize")
+                    ]
+                    if unsupported:
                         raise ValueError(
-                            ".tbl serving supports transform=None ([0,1] floats) or "
-                            "ImageNetNormalize(). Other transforms must be baked in at "
-                            "preprocess_to_tbl time; per-epoch random augmentation "
-                            "needs the TAR pipeline (train_aug=True)."
+                            f".tbl serving fuses Resize / ImageNetNormalize (got {unsupported}). "
+                            "Other transforms must be baked in at preprocess_to_tbl time; "
+                            "train_aug=True gives serve-time RandomResizedCrop + hflip."
                         )
-                    mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+                    if any(type(s).__name__ == "ImageNetNormalize" for s in steps):
+                        mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+                    if from_resize is not None:
+                        if target is not None:
+                            want = (target, target) if isinstance(target, int) else tuple(target)
+                            if tuple(from_resize) != want:
+                                raise ValueError(
+                                    "Conflicting sizes: transform contains Resize%s but "
+                                    "image_size=%r. Pass ONE of them (they must agree)."
+                                    % ((from_resize[1], from_resize[0]), image_size)
+                                )
+                        target = tuple(from_resize)
                 self._delegate = TblRawImageLoader(
                     data_path,
                     batch_size=batch_size,
@@ -891,21 +914,12 @@ try:
                     drop_last=drop_last,
                     pin_memory=pin_memory,
                     prefetch_batches=prefetch_batches,
+                    image_size=target,
+                    train_aug=train_aug,
+                    hflip_prob=hflip_prob if train_aug else 0.0,
+                    world_rank=world_rank if enable_distributed else 0,
+                    world_size=world_size if enable_distributed else 1,
                 )
-                if image_size is not None:
-                    want = (
-                        (image_size, image_size)
-                        if isinstance(image_size, int)
-                        else tuple(image_size)
-                    )
-                    got = (self._delegate._h, self._delegate._w)
-                    if got != want:
-                        raise ValueError(
-                            f"this .tbl holds {got[1]}x{got[0]} samples but "
-                            f"image_size={image_size} was requested — re-run "
-                            "preprocess_to_tbl with the size you want (RAW serving "
-                            "does not resize)"
-                        )
                 self._fast = False
                 return
 
@@ -1859,7 +1873,7 @@ try:
             cache_l1_mb (int): L1 memory cache size in MB (default: 512)
             cache_l2_gb (int): L2 disk cache size in GB (default: 0)
             cache_dir (str): L2 cache directory (default: /tmp/turboloader_cache)
-            auto_smart_batching (bool): Auto-detect smart batching (default: True)
+            auto_smart_batching (bool): Auto-detect smart batching (default: False)
             enable_smart_batching (bool): Manual smart batching override (default: False)
             prefetch_batches (int): Batches to prefetch (default: 4)
 
@@ -2228,7 +2242,7 @@ try:
             cache_l1_mb (int): L1 memory cache size in MB (default: 512)
             cache_l2_gb (int): L2 disk cache size in GB (default: 0)
             cache_dir (str): L2 cache directory (default: /tmp/turboloader_cache)
-            auto_smart_batching (bool): Auto-detect smart batching (default: True)
+            auto_smart_batching (bool): Auto-detect smart batching (default: False)
             enable_smart_batching (bool): Manual smart batching override (default: False)
             prefetch_batches (int): Batches to prefetch (default: 4)
             max_memory_mb (int): Memory budget for memory_efficient loader (default: 512)

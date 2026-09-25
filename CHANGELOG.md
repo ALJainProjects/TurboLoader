@@ -5,6 +5,59 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Roadmap sprint: the fastest pipeline now serves full augmentation, every loader
+shards for DDP, fp16 output, Intel-Mac wheels, the docs debt paid, and the web app
+refreshed. (The CUDA build box is still offline: cu13 wheels for 2.37/2.38 and the
+C++ libav frame loop remain deferred — see the wiki Roadmap.)
+
+### Added
+- **Serve-time RandomResizedCrop for TBL-RAW** — `TblRawImageLoader(train_aug=True,
+  scale=, ratio=, hflip_prob=, image_size=)` and `DataLoader('x.tbl', train_aug=True,
+  image_size=N)`: a new fused SIMD kernel `crop_resize_normalize_u8_gather` (index
+  gather + per-sample crop window + bilinear resize + hflip + normalize, one parallel
+  GIL-released pass, the SAME sampling math as the Metal/CUDA crop kernels and the
+  shared torchvision-parity `pick_crop` sampler). Store samples a little larger than
+  you train at (`preprocess_to_tbl(..., image_size=192)` → train at 160). A plain
+  `Resize` in the transform chain (or `image_size` ≠ file size) is a serve-time
+  resize through the same kernel. Verified against a numpy reference of the crop
+  math (2e-5), identity crop == the exact gather path (1e-5), crops in-bounds,
+  deterministic per `(seed, epoch, rank)`, `meta['crops']`/`meta['flips']` reported.
+  **Measured (M4 Max, per-stage subprocesses, 192px file → 160px batches): 86,913
+  img/s produce / 78,200 np.sum-consumed vs the TAR `train_aug` path's 32,473 /
+  32,089 — 2.68× / 2.44× for the full-augmentation recipe, no decode**; peak RSS
+  1,274 MB of evictable page cache (the 192px file is 1.05 GB).
+- **`dtype='float16'`** on `TblRawImageLoader` (fp16 output via a portable
+  round-to-nearest-even converter — no `_Float16`/F16C dependency, so manylinux gcc 10
+  builds it): halves output bytes, pinned-ring bytes and H2D for AMP training.
+  Bit-equal to numpy's own float32→float16 conversion.
+- **DDP sharding parameters** `world_rank`/`world_size` on `TblRawImageLoader`,
+  `TokenDataLoader`, `VideoDatasetLoader`, `CudaResidentLoader` (+`from_tbl`) and
+  `MetalResidentLoader`: disjoint, equal-size per-rank slices of one global
+  `(seed, epoch)` order (`num_samples // world_size` per rank; token/video ranks keep
+  their `steps_per_epoch`). `DataLoader('x.tbl', enable_distributed=True, ...)`
+  forwards them. Tested: disjoint union, equal lengths, determinism (Metal resident
+  under Metal, video under CUDA).
+- **Intel-Mac wheels**: a `macos-x86_64` leg cross-compiled on the arm64 runner
+  (deps script + setup.py honor `ARCH`/`ARCHFLAGS`; wheel tests run under Rosetta),
+  best-effort like the arm64 leg. Validated locally with `cibuildwheel --archs x86_64`
+  before the release.
+- Benchmark stages: `fly-aug` (TAR `train_aug`) vs `tbl-aug` (serve-time aug from a
+  192px file) in `benchmark_tbl_raw.py`.
+
+### Changed
+- **Docs debt paid**: `docs/quickstart.md`, `installation.md`, `distributed.md`,
+  `TROUBLESHOOTING.md`, `api/pipeline.md`, `guides/tbl-format.md` are now generated
+  from the project wiki (single source of truth; banner + canonical link on each);
+  `getting-started.md`, `index.md`, `api/index.md`, `guides/pytorch-integration.md`,
+  `guides/tensorflow-integration.md` rewritten from the live API. Gone: "no video
+  support", `sample['label']`, `prefetch_factor`, `compression=`, "macOS wheels being
+  added", Python ≤3.13, libpng/libwebp requirements. `DataLoader` docstring `Args`
+  brought in line with the signature (`auto_smart_batching` default, sources, formats).
+- **Benchmarks web app** refreshed to v2.37 (TBL-RAW, e2e image + video, tokens-to-
+  device sections in `benchmark_results.json`; headline table rows).
+
 ## [2.37.0] - 2026-09-25
 
 Cleanliness + efficiency pass: the decoded cache's memory spike, dead code, CI

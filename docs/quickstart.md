@@ -1,491 +1,98 @@
-# Quick Start Guide
+<!-- Generated from the project wiki page https://github.com/ALJainProjects/TurboLoader/wiki/Quickstart — edit there. -->
+> Canonical, always-current version: **[Quickstart](https://github.com/ALJainProjects/TurboLoader/wiki/Quickstart)** on the wiki.
 
-Get up and running with TurboLoader in 5 minutes.
+# Quickstart
 
-## The fast path (start here)
+## 1. The training fast path (start here)
 
-The loader you want for training is the array fast path — one contiguous,
-normalized tensor per batch, assembled in parallel C++:
-
-```python
-import turboloader
-
-loader = turboloader.DataLoader(
-    "data.tar",                    # TAR archive of JPEGs
-    batch_size=64,
-    image_size=224,                # fixed size => contiguous batches
-    output_format="pytorch",       # (N, 3, H, W) float32, CHW
-    transform=turboloader.ImageNetNormalize(),
-    shuffle=True,
-)
-for images, meta in loader:        # images: numpy (N,3,H,W); meta["indices"] aligns labels
-    ...
-```
-
-The dict examples below are the flexible per-sample path — several times slower;
-use them for inspection or irregular data, not the training loop.
-
-## Installation
-
-```bash
-pip install turboloader
-```
-
-Prebuilt manylinux wheels are published for Linux x86_64 and aarch64 (plus an
-sdist); portable macOS wheels built from source are being added. PyTorch is
-**optional** - add it only if you need PyTorch tensor output:
-
-```bash
-pip install turboloader[torch]
-```
-
-Verify installation:
+Your data is a TAR of JPEGs (any layout; WebDataset-style `000000.jpg` works). The loader you want for training returns **one contiguous normalized tensor per batch**, assembled in parallel C++:
 
 ```python
-import turboloader
-print(turboloader.__version__)  # Should print "2.33.0" or later
-```
-
----
-
-## Basic Usage
-
-### Load Data from TAR Archive
-
-```python
-import turboloader
-
-# Create DataLoader
-loader = turboloader.DataLoader(
-    'imagenet.tar',  # Path to TAR archive
-    batch_size=32,    # Samples per batch
-    num_workers=4,    # Parallel worker threads
-    shuffle=True      # Shuffle data
-)
-
-# Iterate over batches
-for batch in loader:
-    print(f"Batch size: {len(batch)}")
-
-    # Access first sample
-    sample = batch[0]
-    image = sample['image']  # NumPy array (H, W, C)
-    # Samples carry NO 'label' key (a TAR is a flat archive): derive labels from
-    # sample['filename'] or align an external label array via sample['index'].
-    label = int(sample['index'])  # placeholder: replace with your label source
-
-    print(f"Image shape: {image.shape}")
-    print(f"Label: {label}")
-    break  # Just show first batch
-```
-
----
-
-## Shuffling Data
-
-Enable data shuffling for training:
-
-```python
-import turboloader
-
-# Create DataLoader with shuffle enabled
-loader = turboloader.DataLoader(
-    'imagenet.tar',
-    batch_size=32,
-    num_workers=4,
-    shuffle=True  # Enable shuffling
-)
-
-# For reproducible shuffling across epochs
-for epoch in range(10):
-    loader.set_epoch(epoch)  # Different order each epoch, reproducible
-    for batch in loader:
-        train(batch)
-```
-
-**How it works:**
-- Each worker shuffles its own shard of data using Fisher-Yates algorithm
-- `set_epoch()` ensures reproducible shuffling with different orderings per epoch
-- Matches PyTorch DataLoader's distributed shuffling behavior
-
----
-
-## Data Augmentation
-
-Apply transforms for data augmentation:
-
-```python
-import turboloader
-
-# Create transform pipeline
-transforms = turboloader.Compose([
-    turboloader.Resize(256, 256),              # Resize to 256x256
-    turboloader.RandomCrop(224, 224),          # Random crop 224x224
-    turboloader.RandomHorizontalFlip(0.5),     # Flip with 50% probability
-    turboloader.ColorJitter(0.2, 0.2, 0.2, 0.1), # Color augmentation
-    turboloader.ImageNetNormalize()            # Normalize to ImageNet stats
-])
-
-# Create DataLoader
-loader = turboloader.DataLoader('imagenet.tar', batch_size=32, num_workers=4)
-
-# Apply transforms
-for batch in loader:
-    for sample in batch:
-        # Apply all transforms in pipeline
-        image = transforms.apply(sample['image'])
-        print(f"Transformed image shape: {image.shape}")
-    break
-```
-
----
-
-## PyTorch Integration
-
-Use with PyTorch for training:
-
-```python
-import turboloader
-import torch
-import torch.nn as nn
-
-# Create model
-model = nn.Sequential(
-    nn.Conv2d(3, 64, 3),
-    nn.ReLU(),
-    nn.AdaptiveAvgPool2d(1),
-    nn.Flatten(),
-    nn.Linear(64, 10)
-)
-
-# Create transforms
-transforms = turboloader.Compose([
-    turboloader.Resize(224, 224),
-    turboloader.ImageNetNormalize(),
-    turboloader.ToTensor()  # Convert to tensor format (C, H, W)
-])
-
-# Create DataLoader
-loader = turboloader.DataLoader('data.tar', batch_size=64, num_workers=8)
-
-# Training loop
-optimizer = torch.optim.Adam(model.parameters())
-criterion = nn.CrossEntropyLoss()
-
-for epoch in range(10):
-    for batch in loader:
-        # Convert batch to tensors
-        images = []
-        labels = []
-
-        for sample in batch:
-            img = transforms.apply(sample['image'])
-            images.append(torch.from_numpy(img).float())
-            labels.append(label_of(sample['filename']))  # labels come from YOUR mapping — samples have no 'label' key
-
-        images = torch.stack(images)
-        labels = torch.tensor(labels, dtype=torch.long)
-
-        # Forward pass
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
-        break  # Just show one batch
-    break
-```
-
----
-
-## TensorFlow Integration
-
-Use with TensorFlow/Keras:
-
-```python
-import turboloader
-import tensorflow as tf
-from tensorflow import keras
-
-# Create model
-model = keras.Sequential([
-    keras.layers.Conv2D(64, 3, activation='relu', input_shape=(224, 224, 3)),
-    keras.layers.GlobalAveragePooling2D(),
-    keras.layers.Dense(10, activation='softmax')
-])
-
-model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-
-# Create transforms
-transforms = turboloader.Compose([
-    turboloader.Resize(224, 224),
-    turboloader.ImageNetNormalize(),
-    turboloader.ToTensor(turboloader.TensorFormat.TENSORFLOW_HWC)
-])
-
-# Create DataLoader
-loader = turboloader.DataLoader('data.tar', batch_size=64, num_workers=8)
-
-# Generator for TensorFlow
-def data_generator():
-    for batch in loader:
-        images = []
-        labels = []
-        for sample in batch:
-            img = transforms.apply(sample['image'])
-            images.append(tf.convert_to_tensor(img, dtype=tf.float32))
-            labels.append(label_of(sample['filename']))  # labels come from YOUR mapping — samples have no 'label' key
-
-        yield tf.stack(images), tf.constant(labels)
-
-# Create TensorFlow dataset
-dataset = tf.data.Dataset.from_generator(
-    data_generator,
-    output_signature=(
-        tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
-        tf.TensorSpec(shape=(None,), dtype=tf.int32)
-    )
-)
-
-# Train
-model.fit(dataset, epochs=10, steps_per_epoch=100)
-```
-
----
-
-## Beyond Images: Tokens and Arrays
-
-TurboLoader is multi-modal. The same fast pipeline also streams LLM tokens and
-generic N-dimensional arrays. See the [API Reference](api/index.md) for the full
-set of options on each loader.
-
-### LLM Token Streams
-
-```python
-import turboloader
-
-# Stream fixed-length sequences from a tokenized corpus
-token_loader = turboloader.TokenDataLoader(
-    'corpus.bin',     # memmapped token file
-    seq_len=1024,
-    batch_size=32
-)
-
-for inputs, targets in token_loader:
-    # inputs, targets: (batch_size, seq_len) int64; targets = inputs shifted by one
-    # (pass return_targets=False to yield just inputs)
-    train_step(inputs, targets)
-```
-
-On Apple Silicon `TokenDataLoader` reached ~441M tokens/s, about 2.7x the
-NumPy memmap idiom (~163M tokens/s).
-
-### Generic Arrays
-
-```python
-import turboloader
-
-# Iterate batches over any (N, ...) array or memmapped array file
-array_loader = turboloader.ArrayDataLoader(
-    features,         # NumPy array or path, shape (N, ...)
-    batch_size=256,
-    shuffle=True
-)
-
-for batch in array_loader:
-    train_step(batch)
-```
-
----
-
-## Available Transforms
-
-TurboLoader provides 19 SIMD-accelerated transforms:
-
-### Geometric Transforms
-- `Resize(width, height)` - Resize image
-- `CenterCrop(width, height)` - Center crop
-- `RandomCrop(width, height)` - Random crop
-- `RandomHorizontalFlip(p)` - Horizontal flip
-- `RandomVerticalFlip(p)` - Vertical flip
-- `RandomRotation(degrees)` - Random rotation
-- `RandomAffine(...)` - Affine transformation
-- `RandomPerspective(...)` - Perspective transformation
-- `Pad(...)` - Padding
-
-### Color Transforms
-- `ColorJitter(brightness, contrast, saturation, hue)` - Color augmentation
-- `Normalize(mean, std)` - Normalization
-- `ImageNetNormalize()` - ImageNet normalization
-- `Grayscale()` - Convert to grayscale
-
-### Augmentation Transforms
-- `RandomErasing(...)` - Random erasing (Cutout)
-- `GaussianBlur(...)` - Gaussian blur
-- `RandomPosterize(...)` - Posterization
-- `RandomSolarize(...)` - Solarization
-- `AutoAugment(policy)` - Learned augmentation
-
-### Tensor Conversion
-- `ToTensor(format)` - Convert to tensor format (PyTorch/TensorFlow)
-
-See [Transforms API](api/transforms.md) for complete documentation.
-
----
-
-## Training-loop features (v2.33.0)
-
-```python
-loader = turboloader.DataLoader(
-    "train.tar", batch_size=128, output_format="pytorch", image_size=160,
-    transform=turboloader.ImageNetNormalize(),
+import turboloader as tl
+
+loader = tl.DataLoader(
+    "imagenette_train.tar",
+    batch_size=128,
+    output_format="pytorch",          # (N, 3, H, W) float32, CHW
+    image_size=160,                   # fixed size => one contiguous batch
+    transform=tl.ImageNetNormalize(),
     shuffle=True, seed=0,
-    train_aug=True,        # fused RandomResizedCrop + horizontal flip in the C++ pass
-    pin_memory=True,       # recycled pinned torch buffers -> async .to(device, non_blocking=True)
-    prefetch_batches=4,    # decode-ahead: the loader works while your GPU trains
+    train_aug=True,                   # fused RandomResizedCrop + hflip inside the C++ pass
+    pin_memory=True,                  # recycled pinned torch buffers (async H2D)
+    prefetch_batches=4,               # decode-ahead while your GPU trains
 )
 
 for epoch in range(epochs):
-    loader.set_epoch(epoch)           # reproducible, different shuffle+crops per epoch
-    for x, meta in loader:            # x: torch.FloatTensor (N, 3, H, W)
+    loader.set_epoch(epoch)           # reproducible, different shuffle + crops per epoch
+    for x, meta in loader:            # x: torch tensor (pinned) or numpy; meta['indices']: sample ids
         x = x.to("cuda", non_blocking=True)
-        train_step(x)
-
-# exact mid-epoch checkpoint/resume (decode-free skip):
-sd = loader.state_dict()              # {'epoch': e, 'batches_served': k}
-loader.load_state_dict(sd)            # a fresh loader continues byte-exactly
+        y = torch.from_numpy(labels[meta["indices"]]).to("cuda", non_blocking=True)
+        train_step(x, y)
 ```
 
-Measured end-to-end (real ResNet-18 on Imagenette, RTX 3090): **1.17x faster than the
-PyTorch DataLoader recipe** — see `benchmarks/E2E_TRAINING_RESULTS.md`.
+Things to know on day one:
 
-## Performance Tips
+- **Labels come from you.** A TAR is a flat archive; samples carry **no `label` key**. Build an aligned label array once (e.g. from folder names when you write the TAR) and index it with `meta["indices"]`. `benchmarks/benchmark_e2e_training.py` shows the pattern (`build_labeled_tar` writes an aligned `.npy`).
+- `image_size` and a `Resize` transform are two ways to say the same thing; passing both with different sizes raises `ValueError("Conflicting sizes...")` rather than silently training on the wrong size.
+- With `pin_memory=True`, yielded tensors come from a **reused ring** — consume (`.to(device)`) before `prefetch_batches + 1` more batches arrive, or `.clone()`. See [Memory and Lifetime Contracts](https://github.com/ALJainProjects/TurboLoader/wiki/Memory-and-Lifetime-Contracts).
+- `num_workers` does **not** scale the fast path the way PyTorch's does: it is one process-wide C++ thread pool, already saturated at one worker.
 
-### 1. Optimal Worker Count
-
-Benchmark different worker counts:
+## 2. Resume mid-epoch, exactly
 
 ```python
-import time
-
-for num_workers in [1, 2, 4, 8, 16]:
-    loader = turboloader.DataLoader(
-        'data.tar',
-        batch_size=32,
-        num_workers=num_workers
-    )
-
-    start = time.time()
-    count = 0
-    for batch in loader:
-        count += len(batch)
-        if count >= 1000:
-            break
-
-    elapsed = time.time() - start
-    throughput = count / elapsed
-    print(f"Workers: {num_workers}, Throughput: {throughput:.1f} img/s")
+sd = loader.state_dict()             # {'epoch': e, 'batches_served': k}
+new_loader.load_state_dict(sd)       # continues byte-exactly, decode-free skip to batch k
 ```
 
-### 2. Use TBL Format
+## 3. Decode once, serve every epoch (TBL-RAW)
 
-Convert TAR to TBL for faster loading:
+If your recipe is resize (+ hflip) + normalize, pay the JPEG decode **once**:
 
 ```python
-# Convert TAR to TBL
-writer = turboloader.TblWriterV2('output.tbl', compression=True)
+tl.preprocess_to_tbl("imagenette_train.tar", "imagenette_160.tbl", image_size=160)   # ~6 s for 9,469 images (M4)
 
-reader = turboloader.DataLoader('input.tar', batch_size=1, num_workers=1)
-
-for batch in reader:
-    for sample in batch:
-        writer.add_sample(
-            data=sample['image'],
-            format=turboloader.SampleFormat.JPEG,
-            metadata={'label': sample.get('label', 0)}
-        )
-
-writer.finalize()
-
-# Load from TBL (40-60% faster)
-loader = turboloader.DataLoader('output.tbl', batch_size=64, num_workers=8)
+loader = tl.DataLoader("imagenette_160.tbl", batch_size=128, transform=tl.ImageNetNormalize(), shuffle=True)
 ```
 
-### 3. Use the Direct-Batch Fast Path with Caching
+Batches are bit-identical to the TAR path, served from a memory map through one fused SIMD pass: 586k img/s raw serve on an M4 Max and the fastest end-to-end epochs we've measured on the 3090. Random crop can't be applied to pre-resized samples — keep `train_aug=True` on the TAR path when you need it. Full details: [TBL RAW Preprocessed Pipeline](https://github.com/ALJainProjects/TurboLoader/wiki/TBL-RAW-Preprocessed-Pipeline).
 
-`FastDataLoader` is the FFCV / `tf.data`-style fast path: it decodes, resizes, and
-normalizes in one parallel pass straight into the output batch buffer and yields
-ready-made batches instead of per-sample dicts. For multi-epoch training, set
-`cache_decoded=True` to reuse decoded arrays after the first pass:
+## 4. Other modalities, same ergonomics
 
 ```python
-import turboloader
+# LLM tokens (memmap of uint16 GPT-2 BPE ids) -> (B, seq_len) int64 x, y (y = x shifted by one)
+for x, y in tl.TokenDataLoader("train.bin", seq_len=1024, batch_size=32, device="cuda"):
+    loss = model(x, y)
 
-# FastDataLoader with decoded tensor caching
-loader = turboloader.FastDataLoader(
-    'imagenet.tar',
-    batch_size=64,
-    num_workers=8,
-    cache_decoded=True  # Cache decoded arrays in memory
-)
+# Any (N, ...) arrays / memmaps, aligned
+for feats, labels in tl.ArrayDataLoader(features, labels, batch_size=256, shuffle=True):
+    ...
 
-for epoch in range(10):
-    for images, metadata in loader:
-        # First epoch decodes from the archive;
-        # later epochs serve from the in-memory cache
-        train_step(images)
+# Anything with __len__/__getitem__ (torch Dataset protocol) — flexibility, not the C++ fast path
+for xb, yb in tl.MapDataLoader(MyDataset(), batch_size=64, num_workers=8):
+    ...
 
-    if loader.cache_populated:
-        print(f"Cache size: {loader.cache_size_mb:.1f} MB")
-
-# Clear cache when done
-loader.clear_cache()
+# Video (Apple: hardware decode, in the wheel; NVIDIA: CUDA build)
+for batch in tl.MetalVideoLoader("clip.mp4", image_size=224, batch_size=32):
+    ...
 ```
 
-**Performance (Apple Silicon, Imagenette-160, batch 64, `output_format='pytorch'`):**
-- On-the-fly decode: ~39,100 img/s
-- Cached epochs (`cache_decoded=True`): ~65,499 img/s
+See [Tokens and Arrays](https://github.com/ALJainProjects/TurboLoader/wiki/Tokens-and-Arrays) and [Video](https://github.com/ALJainProjects/TurboLoader/wiki/Video).
 
-The fast path runs on one process-wide C++ thread pool, so it is already saturated
-at a single worker and does not depend on a high `num_workers` to scale.
-
-### 4. Use Larger Batch Sizes
-
-Larger batches = better throughput (if GPU memory allows):
+## 5. Inspect samples (the slow, flexible path)
 
 ```python
-# Good for large GPUs
-loader = turboloader.DataLoader('data.tar', batch_size=256, num_workers=8)
+loader = tl.DataLoader("data.tar", batch_size=8)      # output_format='dict' (default)
+for batch in loader:
+    for s in batch:
+        s["image"]        # (H, W, 3) uint8 numpy, original size
+        s["filename"]     # TAR member name
+        s["index"]        # sample index
 ```
 
----
+The dict path stacks nothing and is several times slower — use it for inspection or irregular data, never for the training loop.
 
-## Next Steps
+## 6. Clean up
 
-Now that you have the basics:
+Loaders are context managers and have `close()`; abandoned loaders are also cleaned up at interpreter exit. Use `with tl.DataLoader(...) as loader:` in scripts that create many loaders.
 
-1. **Explore Examples**: Check [examples/](../examples/) for complete scripts
-   - [ImageNet ResNet50 Training](../examples/imagenet_resnet50.py)
-   - [PyTorch DDP](../examples/distributed_ddp.py)
-   - [PyTorch Lightning](../examples/pytorch_lightning_example.py)
-
-2. **Read Integration Guides**:
-   - [PyTorch Integration](guides/pytorch-integration.md)
-   - [TensorFlow Integration](guides/tensorflow-integration.md)
-
-3. **API Reference**: [API Documentation](api/index.md)
-
-4. **Benchmarks**: See [Benchmarks](benchmarks/index.md) for performance analysis
-
----
-
-## Getting Help
-
-- **Troubleshooting**: [Troubleshooting Guide](TROUBLESHOOTING.md)
-- **Issues**: [GitHub Issues](https://github.com/ALJainProjects/TurboLoader/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/ALJainProjects/TurboLoader/discussions)
-- **Verify Installation**: Run `python scripts/verify_installation.py`
+Next: [Which Loader Do I Use](https://github.com/ALJainProjects/TurboLoader/wiki/Which-Loader-Do-I-Use) · [Image DataLoader API](https://github.com/ALJainProjects/TurboLoader/wiki/Image-DataLoader-API).

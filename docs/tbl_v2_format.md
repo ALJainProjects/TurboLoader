@@ -43,20 +43,40 @@ incl. an np.sum-consumed variant in [docs/benchmarks](benchmarks/index.md)):
   on the target size.
 - **Instant startup.** No decode-all pass on re-runs; an mmap is O(1).
 
+## Serve-time augmentation (v2.38)
+
+Store a little larger than you train at, then let the fused crop kernel do
+torchvision-parity RandomResizedCrop + hflip per epoch straight from the mmap:
+
+```python
+tl.preprocess_to_tbl('imagenet.tar', 'imagenet_192.tbl', image_size=192)     # once
+loader = tl.DataLoader('imagenet_192.tbl', batch_size=128, image_size=160,
+                       transform=tl.ImageNetNormalize(), train_aug=True, shuffle=True)
+# or the class directly, with every knob:
+tl.TblRawImageLoader('imagenet_192.tbl', image_size=160, train_aug=True, hflip_prob=0.5,
+                     scale=(0.08, 1.0), ratio=(3/4, 4/3), dtype='float16',
+                     world_rank=rank, world_size=world_size, pin_memory=True)
+```
+
+`crop_resize_normalize_u8_gather` gathers the rows, crops, bilinear-resizes,
+flips and normalizes in ONE parallel SIMD pass — the same sampling math as the
+Metal/CUDA crop kernels and the shared `pick_crop` sampler. M4 Max: **86.9k
+img/s (78.2k np.sum-consumed) vs 32.5k for the on-the-fly TAR `train_aug` path
+— 2.7×** for the full-augmentation recipe. `meta['crops']`/`meta['flips']`
+report what was applied.
+
 More paths consume the same file:
 
 ```python
 # GPU-resident, skipping their decode-all pass entirely:
 tl.MetalResidentLoader('imagenet_160.tbl')            # Apple: upload = 1 memcpy
 tl.CudaResidentLoader.from_tbl('imagenet_160.tbl')    # NVIDIA: chunked mmap upload
-
-# Direct class (adds hflip, the one aug this path supports):
-tl.TblRawImageLoader('imagenet_160.tbl', hflip_prob=0.5, pin_memory=True)
 ```
 
-**Honest limits.** Samples are stored post-resize, so per-epoch
-`RandomResizedCrop`/color aug is impossible — bake it or use the TAR pipeline
-(`train_aug=True`) when aug matters; random hflip IS supported at serve time.
+**Honest limits.** Color jitter and other photometric aug are not served (bake
+them, or use the TAR pipeline); the crop kernel is bilinear (no antialias); the
+identity path (no crop/resize/flip, float32) is the bit-identical one — the
+crop kernel matches it to ~1e-5.
 LZ4 on decoded photos measured **1.06x** (high-entropy data) — RAW defaults to
 `compression=False`; the real "compression" is uint8-instead-of-float32 (4x)
 and resized-instead-of-full-size. The .tbl is larger than the source TAR

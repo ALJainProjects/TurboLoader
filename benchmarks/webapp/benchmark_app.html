@@ -419,6 +419,22 @@
                             <td><strong>757k produced / 433k consumed img/s</strong></td><td>numpy resident ~3.7k</td><td>Apple M4 Max</td>
                         </tr>
                         <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">Pre-processed, CPU mmap (TBL-RAW, any hardware)</td>
+                            <td><strong>586k img/s raw serve</strong> (99k np.sum-consumed w/ prefetch)</td><td>float32 RAM cache 137k at 3.3× the peak RSS</td><td>Apple M4 Max</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">End-to-end ResNet-18 training (epoch)</td>
+                            <td><strong>TBL-RAW 3.64 s</strong> · TAR 3.76 s</td><td>PyTorch DataLoader 3.92 s; pure-GPU floor 3.39 s</td><td>RTX 3090</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">End-to-end video training (r3d_18, epoch)</td>
+                            <td><strong>4.19 s (1.16×)</strong></td><td>PyTorch DataLoader + PyAV 4.85 s; floor 2.11 s</td><td>RTX 3090</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
+                            <td style="padding:8px;">LLM tokens delivered to device (32×1024)</td>
+                            <td><strong>168M tok/s (1.9×)</strong></td><td>nanoGPT get_batch 88M</td><td>RTX 3090</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e9ecef;">
                             <td style="padding:8px;">Video: 1080p H.264 → 224px training batches (hardware decode)</td>
                             <td><strong>2,556 frames/s (3.9×)</strong></td><td>OpenCV 657; PyAV 535; torchcodec 173</td><td>Apple M4 Max</td>
                         </tr>
@@ -477,7 +493,7 @@
         </div>
 
         <footer>
-            <p><span id="footer-version">TurboLoader v2.33+</span> | C++20 Implementation | MIT License</p>
+            <p><span id="footer-version">TurboLoader v2.37</span> | C++20 Implementation | MIT License</p>
             <p style="margin-top: 10px;">Measured on Apple Silicon over Imagenette-160
                 (9,469 real ImageNet JPEGs → 160px, <code>output_format='pytorch'</code>);
                 median img/s. See the README benchmarks for methodology.</p>
@@ -491,11 +507,12 @@
 
     <script>
         // REAL measured results (run_benchmark.py over Imagenette-160, Apple M4 Max,
-        // TurboLoader v2.33.1.dev, 2026-07-10; real consumption via np.sum). Embedded so
+        // TurboLoader v2.33.1.dev, 2026-07-10; real consumption via np.sum; static v2.36-2.37
+        // rows below come from the published result docs). Embedded so
         // the dashboard works offline; when served over http it also tries to fetch a
         // fresh benchmark_results.json. Re-generate by running run_benchmark.py.
         const EMBEDDED = {
-            meta: { platform: 'Apple M4 Max', turboloader_version: '2.33+' },
+            meta: { platform: 'Apple M4 Max', turboloader_version: '2.37' },
             frameworks: [
                 { name: 'TurboLoader (cached)', throughput: 75103 },
                 { name: 'TurboLoader', throughput: 58809 },

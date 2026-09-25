@@ -20,7 +20,9 @@ jobs:
     # Cap run time so a wedged build can't block the publish (which waits on every wheel
     # leg). This covers execution, NOT runner-queue time — which is why we don't build on
     # the scarce macos-13 (Intel) runners: they can sit queued 70+ min and stall the
-    # release. Intel-Mac users install the sdist (which builds fine on their machine).
+    # release. Intel-Mac wheels are instead CROSS-COMPILED on the arm64 runner (the deps
+    # script and setup.py honor ARCH/ARCHFLAGS; cibuildwheel runs the wheel tests under
+    # Rosetta) — best-effort like the arm64 leg, the sdist always covers macOS.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -29,6 +31,7 @@ jobs:
           - { name: linux-x86_64,   os: ubuntu-latest,    archs: x86_64 }
           - { name: linux-aarch64,  os: ubuntu-24.04-arm, archs: aarch64 }
           - { name: macos-arm64,    os: macos-14,         archs: arm64,  optional: true }
+          - { name: macos-x86_64,   os: macos-14,         archs: x86_64, optional: true }
 
     steps:
       - uses: actions/checkout@v7

@@ -79,6 +79,8 @@ class VideoDatasetLoader:
             frame once on average).
         shuffle/seed/set_epoch: reproducible sampling, matching the other
             TurboLoader loaders.
+        world_rank/world_size: disjoint per-rank slice of every epoch's clip
+            plan (DDP); each rank still yields ``steps_per_epoch`` batches.
     """
 
     def __init__(
@@ -98,9 +100,14 @@ class VideoDatasetLoader:
         shuffle=True,
         seed=42,
         steps_per_epoch=None,
+        world_rank=0,
+        world_size=1,
     ):
         import turboloader as t
 
+        self.world_rank, self.world_size = int(world_rank), int(world_size)
+        if self.world_size < 1 or not 0 <= self.world_rank < self.world_size:
+            raise ValueError("need 0 <= world_rank < world_size")
         if not getattr(t, "cuda_available", lambda: False)() or not hasattr(
             t, "cuda_video_clip_yuv420"
         ):
@@ -153,13 +160,15 @@ class VideoDatasetLoader:
         window in the dataset (frame-weighted, so long videos are not
         under-sampled the way per-video sampling would)."""
         rng = np.random.default_rng((self.seed, self._epoch))
-        n = self.steps_per_epoch * self.batch_size
+        per_rank = self.steps_per_epoch * self.batch_size
+        n = per_rank * self.world_size
         if self.shuffle:
             g = rng.integers(0, self._total_windows, size=n)
         else:
             g = (np.arange(n, dtype=np.int64) * (self.clip_len * self.frame_step)) % (
                 self._total_windows
             )
+        g = g[self.world_rank :: self.world_size][:per_rank]  # disjoint per-rank slice
         vid = np.searchsorted(self._cum, g, side="right") - 1
         start = g - self._cum[vid]
         return vid.astype(np.int64), start.astype(np.int64)

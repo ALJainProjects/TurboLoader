@@ -1,389 +1,91 @@
-# Installation Guide
+<!-- Generated from the project wiki page https://github.com/ALJainProjects/TurboLoader/wiki/Installation — edit there. -->
+> Canonical, always-current version: **[Installation](https://github.com/ALJainProjects/TurboLoader/wiki/Installation)** on the wiki.
 
-Complete installation instructions for TurboLoader on all supported platforms.
+# Installation
 
-## Quick Install
-
-```bash
-pip install turboloader
-```
-
-That's it! On Linux this installs a prebuilt wheel; on other platforms pip falls
-back to the source distribution (see below).
-
-PyTorch is an **optional** dependency. Install the extra only if you want the
-PyTorch helpers / `output_format='pytorch'` convenience integration:
+## PyPI (recommended)
 
 ```bash
-pip install turboloader[torch]
+pip install turboloader            # CPU (SIMD) + Metal on Apple Silicon
+pip install "turboloader[torch]"   # adds PyTorch for output_format='pytorch' helpers / pinned rings
 ```
 
-TurboLoader itself works framework-agnostically with NumPy and also outputs
-TensorFlow-style HWC arrays, so `torch` is not required for the core loader.
+Every release publishes **16 files**: wheels for CPython **3.10, 3.11, 3.12, 3.13, 3.14** on **Linux x86_64** (manylinux_2_27/2_28), **Linux aarch64**, and **macOS arm64** (`macosx_11_0_arm64`), plus a source distribution. Wheels are fully self-contained (libjpeg-turbo, lz4, curl are bundled; the macOS wheel includes the Metal kernels and the AVFoundation/VideoToolbox video path with no FFmpeg dependency).
 
----
+| Platform | What you get |
+|---|---|
+| Linux x86_64 / aarch64 | prebuilt wheel, CPU SIMD (AVX2/AVX-512 or NEON) |
+| macOS Apple Silicon (11.0+) | prebuilt wheel, CPU NEON + **Metal** GPU paths + **hardware video decode** |
+| macOS Intel | prebuilt `macosx_11_0_x86_64` wheel since v2.38 (cross-compiled on the arm64 runner, tested under Rosetta; best-effort leg like arm64 — the sdist always covers it). No Metal path on Intel. |
+| Windows | not supported natively — use WSL2 (the CUDA build is developed on WSL2) |
+| NVIDIA CUDA | **not in the PyPI wheels** — build from source (below) or use a CUDA-13 wheel from a GitHub Release |
 
-## System Requirements
+PyTorch is optional: the core loaders, SIMD transforms, numpy and TensorFlow-HWC outputs work without it. `torch` is required for `pin_memory=True`, `TokenDataLoader(device=...)`, `CudaPrefetcher`, and all CUDA loaders.
 
-### Supported Platforms
+### Verify what you actually got
 
-- **Linux**: Ubuntu 20.04+, Debian 10+, RHEL/CentOS 8+, Amazon Linux 2 —
-  prebuilt **manylinux** wheels for `x86_64` and `aarch64`.
-- **macOS**: 11+ (Big Sur and later) — portable wheels built from the source
-  distribution; self-contained portable binary wheels are being added.
-- **Windows**: Not officially supported yet (use WSL2).
+```python
+import turboloader as t
+print(t.__version__)          # e.g. 2.37.0
+print(t.features())           # the source of truth for compiled-in capabilities
+print(t.metal_available())    # True on the macOS arm64 wheel
+print(t.cuda_available())     # True only on a CUDA build
+```
 
-A source distribution (sdist) is also published for platforms without a
-matching prebuilt wheel.
+`features()` reports honestly: `png_decode` and `webp_decode` are **False** (the shipped image pipeline is JPEG-only), `gpu_transforms`/`nvjpeg_decode` are False on PyPI wheels, `metal_gpu_transforms` is True on Apple Silicon. Cloud/HDF5/TFRecord/Zarr backends were removed in v2.35 and report False.
 
-### Python Versions
+## CUDA (NVIDIA) — build from source
 
-- Python 3.10, 3.11, 3.12, 3.13
-
-### Compilers (for building from source)
-
-- **GCC**: 11.0+ (Linux)
-- **Clang**: 14.0+ (macOS)
-- **MSVC**: 19.29+ (Windows, experimental)
-
----
-
-## Installation Methods
-
-### Method 1: PyPI (Recommended)
-
-Install the latest stable release:
+The CUDA path needs the CUDA toolkit and a GPU at build time, so it cannot ship on PyPI.
 
 ```bash
-pip install turboloader
-```
-
-Install a specific version (latest published on PyPI is `2.33.0`):
-
-```bash
-pip install turboloader==2.33.0
-```
-
-Upgrade to latest:
-
-```bash
-pip install --upgrade turboloader
-```
-
-With the optional PyTorch integration:
-
-```bash
-pip install "turboloader[torch]"
-```
-
-### Method 2: From Source
-
-Clone and install in development mode:
-
-```bash
-# Clone repository
-git clone https://github.com/ALJainProjects/TurboLoader.git
-cd TurboLoader
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Install in editable mode
-pip install -e .
-```
-
----
-
-## Platform-Specific Instructions
-
-### Ubuntu / Debian
-
-```bash
-# Install system dependencies
-sudo apt-get update
-sudo apt-get install -y \
-    build-essential \
-    cmake \
-    libjpeg-turbo8-dev \
-    libpng-dev \
-    libwebp-dev \
-    liblz4-dev \
-    libcurl4-openssl-dev
-
-# Install TurboLoader
-pip install turboloader
-```
-
-### RHEL / CentOS / Fedora
-
-```bash
-# Install system dependencies
-sudo yum install -y \
-    gcc-c++ \
-    cmake \
-    libjpeg-turbo-devel \
-    libpng-devel \
-    libwebp-devel \
-    lz4-devel \
-    libcurl-devel
-
-# Install TurboLoader
-pip install turboloader
-```
-
-### macOS
-
-```bash
-# Install Homebrew if not already installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Install dependencies
-brew install jpeg-turbo libpng webp lz4 cmake
-
-# Install TurboLoader
-pip install turboloader
-```
-
-### Windows (WSL2)
-
-Windows is not officially supported yet. Use WSL2 (Windows Subsystem for Linux):
-
-```powershell
-# In PowerShell (Administrator)
-wsl --install
-
-# Then follow Ubuntu instructions inside WSL2
-```
-
----
-
-## Optional Dependencies
-
-### PyTorch integration
-
-PyTorch is optional. Install the extra to enable the PyTorch helpers and the
-`output_format='pytorch'` (CHW tensor) path:
-
-```bash
-pip install "turboloader[torch]"
-```
-
-The core loader, SIMD transforms, and the NumPy / TensorFlow-HWC output paths
-work without PyTorch installed.
-
-### GPU image loader (NVIDIA CUDA) — build from source
-
-> **Prebuilt CUDA wheel (no compile):** Linux x86_64 / Python 3.10 / CUDA 13.x runtime —
-> attached to the [GitHub Release](https://github.com/ALJainProjects/TurboLoader/releases/tag/v2.35.0):
-> ```bash
-> pip install https://github.com/ALJainProjects/TurboLoader/releases/download/v2.35.0/turboloader-2.35.0+cu13-cp310-cp310-linux_x86_64.whl
-> pip install nvidia-nvimgcodec-cu12
-> ```
-> Other Pythons/CUDA versions: build from source below.
-
-
-> **Not in the published wheels** (they are portable CPU/Metal; CUDA needs a toolkit + GPU at
-> build time). Built from source on a CUDA box, `CudaImageLoader(decode="nvimgcodec")` is an
-> end-to-end GPU loader on **nvImageCodec** that **beats DALI** on a 3090 (~28.5k vs ~25.5k
-> img/s). Build with `nvcc` + the CUDA toolkit (gcc 10+ for C++20):
-
-```bash
-pip install nvidia-nvimgcodec-cu12      # nvImageCodec runtime + header (auto-discovered)
+pip install nvidia-nvimgcodec-cu12         # nvImageCodec runtime + header (header is auto-discovered)
 
 CUDA_HOME=/usr/local/cuda \
-TURBOLOADER_ENABLE_CUDA=1 \             # transform kernels + cudart
-TURBOLOADER_ENABLE_NVJPEG=1 \          # nvJPEG decoder (decode="gpu")
-TURBOLOADER_ENABLE_NVIMGCODEC=1 \      # nvImageCodec pipeline (decode="nvimgcodec")
-TURBOLOADER_CUDA_ARCH=native \         # required on CUDA 13+; or sm_86 (3090) / sm_87 (Orin)
+TURBOLOADER_ENABLE_CUDA=1 \                 # transform + video + resident kernels (cudart)
+TURBOLOADER_ENABLE_NVJPEG=1 \               # nvJPEG decoder (CudaImageLoader decode="gpu")
+TURBOLOADER_ENABLE_NVIMGCODEC=1 \           # nvImageCodec pipeline (decode="nvimgcodec", beats DALI)
+TURBOLOADER_CUDA_ARCH=native \              # required on CUDA 13+; or sm_86 (3090), sm_87 (Orin)
   pip install -e . --no-build-isolation
 ```
 
-> `turboloader.cuda_available()` then returns `True`. The header for
-> `TURBOLOADER_ENABLE_NVIMGCODEC` is auto-discovered from the installed `nvidia-nvimgcodec-cu12`
-> wheel (override with `TURBOLOADER_NVIMGCODEC_INCLUDE`). The CPU decode path remains
-> libjpeg-turbo + SIMD (NEON / AVX2 / AVX-512) with automatic DCT scaled decode. See
-> [GPU acceleration](GPU_ACCELERATION.md) for the full guide and benchmarks.
+Notes:
+- `TURBOLOADER_ENABLE_NVIMGCODEC=1` finds `nvimgcodec.h` inside the installed `nvidia-nvimgcodec-cu12` wheel **of the interpreter you build with** — a fresh venv without that wheel fails with `nvimgcodec.h: No such file` (override with `TURBOLOADER_NVIMGCODEC_INCLUDE=<dir>`).
+- Jetson / non-standard layouts: `TURBOLOADER_CUDA_INCLUDE`, `TURBOLOADER_CUDA_LIB`; leave nvJPEG off on Jetson (tegra variant).
+- Video on CUDA needs `pip install av` (PyAV) for the default CPU decode backend, and `PyNvVideoCodec` for `decode="nvdec"`.
+- After building, `t.cuda_available()` must be True and `t.features()['gpu_transforms']` True — the self-hosted CI gate asserts exactly that.
 
-### Cloud / specialized storage (source-only / optional)
+### Prebuilt CUDA-13 wheels (no compile)
 
-Cloud and specialized storage backends (S3, GCS, Azure, HDF5, Zarr, TFRecord)
-are **not bundled in the prebuilt wheel**. Where supported they are optional,
-source-only integrations that require their own client libraries and
-credentials. The built-in loaders read local files and WebDataset-style TAR
-archives. If you need object storage today, stage data to a local path (or an
-NFS mount) and point TurboLoader at it.
+Attached to GitHub Releases (Linux x86_64, CUDA 13.x runtime, nvJPEG + nvImageCodec + video/clip kernels), built and fresh-venv verified on an RTX 3090:
 
----
-
-## Verification
-
-Verify your installation:
+- v2.36.0: `cp310` and `cp312` — https://github.com/ALJainProjects/TurboLoader/releases/tag/v2.36.0
+- v2.35.0 / v2.34.1: `cp310`
+- **v2.37.0: deferred** — the build machine was offline at release time; they will be attached when it returns (see [Roadmap](https://github.com/ALJainProjects/TurboLoader/wiki/Roadmap)). Nothing in 2.37 changed the CUDA kernels; the 2.36.0 cu13 wheels remain valid.
 
 ```bash
-# Run verification script
-python scripts/verify_installation.py
+pip install https://github.com/ALJainProjects/TurboLoader/releases/download/v2.36.0/turboloader-2.36.0+cu13-cp312-cp312-linux_x86_64.whl
+pip install nvidia-nvimgcodec-cu12
 ```
 
-Or test manually:
-
-```python
-import turboloader
-import numpy as np
-
-print(f"TurboLoader version: {turboloader.__version__}")
-
-# Test basic functionality
-img = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
-resize = turboloader.Resize(224, 224)
-output = resize.apply(img)
-
-print(f"✓ Transform test passed: {output.shape}")
-```
-
----
-
-## Building from Source
-
-### Prerequisites
-
-Install build tools:
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install -y build-essential cmake git
-```
-
-**macOS:**
-```bash
-xcode-select --install
-brew install cmake
-```
-
-### Build Steps
+## Building from source (CPU / Metal)
 
 ```bash
-# Clone repository
-git clone https://github.com/ALJainProjects/TurboLoader.git
-cd TurboLoader
-
-# Create build directory
-mkdir build
-cd build
-
-# Configure with CMake
-cmake ..
-
-# Build
-make -j$(nproc)
-
-# Install Python package
-cd ..
-pip install -e .
+git clone https://github.com/ALJainProjects/TurboLoader.git && cd TurboLoader
+pip install pybind11 setuptools_scm numpy
+pip install -e .            # setup.py builds the extension; Metal is compiled automatically on macOS arm64
 ```
 
-### Build Options
+Requirements: a C++20 compiler (GCC 10+ / Clang 14+ / Apple Clang from a recent Xcode), `libjpeg-turbo`, `lz4`, `libcurl` dev headers (`brew install jpeg-turbo lz4` · `apt install libjpeg-turbo8-dev liblz4-dev libcurl4-openssl-dev`). `libpng`/`libwebp` are **not** needed (removed in v2.35). Opt out of Metal with `TURBOLOADER_ENABLE_METAL=0`. The version comes from the git tag via `setuptools_scm` — a shallow clone without tags will report a `0.1.dev` or stale-looking version; clone with tags or set `SETUPTOOLS_SCM_PRETEND_VERSION`.
 
-```bash
-# Build with AVX-512 support
-cmake -DUSE_AVX512=ON ..
-
-# Release build (optimized)
-cmake -DCMAKE_BUILD_TYPE=Release ..
-```
-
----
+Local reproduction of the release wheels: `cibuildwheel --platform macos` (much faster than CI cycles; see [Development and CI](https://github.com/ALJainProjects/TurboLoader/wiki/Development-and-CI)).
 
 ## Docker
 
-Use TurboLoader in Docker:
-
 ```dockerfile
-FROM python:3.11
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    libjpeg-turbo8 \
-    libpng16-16 \
-    libwebp7 \
-    liblz4-1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install TurboLoader
+FROM python:3.12
 RUN pip install turboloader
-
-# Verify installation
-RUN python -c "import turboloader; print(turboloader.__version__)"
+RUN python -c "import turboloader as t; print(t.__version__, t.features()['simd_acceleration'])"
 ```
 
-Build and run:
-
-```bash
-docker build -t my-turboloader-app .
-docker run -it my-turboloader-app
-```
-
----
-
-## Troubleshooting
-
-### "No module named 'turboloader'"
-
-**Solution:** Ensure you're using the correct Python environment:
-
-```bash
-which python
-pip list | grep turboloader
-```
-
-### "ImportError: cannot import name..."
-
-**Solution:** Version mismatch. Reinstall:
-
-```bash
-pip uninstall turboloader
-pip install turboloader
-```
-
-### "Library not loaded" (macOS)
-
-**Solution:** Install system dependencies:
-
-```bash
-brew install jpeg-turbo libpng webp lz4
-```
-
-### Build errors when installing from source
-
-**Solution:** Ensure you have C++20 compiler:
-
-```bash
-# Check compiler version
-gcc --version  # Should be 11.0+
-clang --version  # Should be 14.0+
-```
-
-If compiler is too old, install from PyPI instead (Linux gets a prebuilt
-manylinux wheel; other platforms build from the sdist):
-
-```bash
-pip install turboloader
-```
-
----
-
-## Next Steps
-
-After installation:
-
-1. **Quick Start**: Read [Quick Start Guide](quickstart.md)
-2. **Examples**: Check [examples/](../examples/) directory
-3. **API Docs**: See [API Reference](api/index.md)
-4. **Verification**: Run `python scripts/verify_installation.py`
-
----
-
-## Getting Help
-
-- **Issues**: [GitHub Issues](https://github.com/ALJainProjects/TurboLoader/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/ALJainProjects/TurboLoader/discussions)
-- **Troubleshooting**: [Troubleshooting Guide](TROUBLESHOOTING.md)
+No system libraries are needed for the wheel.

@@ -43,6 +43,8 @@ class TokenDataLoader:
             compute, and pinned-buffer reuse is guarded with CUDA events — no lifetime
             rules for you to track. Yields device tensors ready for the current stream.
         ring: pinned buffer pairs in flight (default 4).
+        world_rank/world_size: disjoint per-rank slice of every epoch's windows
+            (DDP); each rank still yields ``steps_per_epoch`` batches.
 
     Example:
         >>> dl = TokenDataLoader("train.bin", seq_len=1024, batch_size=8)
@@ -64,7 +66,12 @@ class TokenDataLoader:
         pin_memory=False,
         device=None,
         ring=4,
+        world_rank=0,
+        world_size=1,
     ):
+        self.world_rank, self.world_size = int(world_rank), int(world_size)
+        if self.world_size < 1 or not 0 <= self.world_rank < self.world_size:
+            raise ValueError("need 0 <= world_rank < world_size")
         if isinstance(source, (str, bytes)) or hasattr(source, "__fspath__"):
             self._tokens = np.memmap(source, dtype=np.dtype(dtype), mode="r")
         else:
@@ -119,12 +126,17 @@ class TokenDataLoader:
         self._epoch = int(epoch)
 
     def _start_positions(self):
+        """This rank's window starts: a disjoint slice of the global
+        (seed, epoch) draw so ranks never see each other's windows."""
         rng = np.random.default_rng(self.seed + self._epoch)
-        total = self.steps_per_epoch * self.batch_size
+        per_rank = self.steps_per_epoch * self.batch_size
+        total = per_rank * self.world_size
         if self.shuffle:
-            return rng.integers(0, self._max_start, size=total, dtype=np.int64)
-        # contiguous, non-overlapping windows (wraps if corpus < requested span)
-        return (np.arange(total, dtype=np.int64) * self.seq_len) % self._max_start
+            g = rng.integers(0, self._max_start, size=total, dtype=np.int64)
+        else:
+            # contiguous, non-overlapping windows (wraps if corpus < requested span)
+            g = (np.arange(total, dtype=np.int64) * self.seq_len) % self._max_start
+        return g[self.world_rank :: self.world_size][:per_rank]
 
     def _gather(self, starts):
         # Vectorized gather: (B, seq_len) index matrix -> one fancy-index read.
