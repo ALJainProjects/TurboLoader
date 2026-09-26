@@ -159,9 +159,12 @@ class TblRawImageLoader:
             ``train_aug``; default 0).
         dtype: ``'float32'`` (default) or ``'float16'`` output.
         pin_memory: yield torch tensors backed by a reused ring of ``ring``
-            page-locked buffers (CUDA hosts). LIFETIME: a yielded batch's buffer
-            is overwritten ``ring`` batches later. Default (False) yields fresh
-            numpy arrays with no reuse contract.
+            page-locked buffers (CUDA hosts). LIFETIME: with background prefetch
+            the batch you hold is never overwritten, but the previous one may be
+            recycled as soon as you take the next batch (the depth is clamped to
+            ``ring - 2`` so held + queued + in-flight fill the ring); with
+            ``prefetch_batches=0`` a slot is reused ``ring`` batches later.
+            Default (False) yields fresh numpy arrays with no reuse contract.
         prefetch_batches: background-produce this many batches ahead (the SIMD
             serve releases the GIL, so production overlaps your training step —
             without it the serve cost sits on the training thread). 0 disables.

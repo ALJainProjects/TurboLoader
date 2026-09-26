@@ -664,9 +664,12 @@ try:
             supports it, so ``.to(device, non_blocking=True)`` is a genuinely async H2D
             copy — with pageable numpy memory it silently degrades to a blocking copy.
 
-            CONTRACT: a yielded tensor's memory is reused after ``ring - 1`` further
-            batches (ring = prefetch + 2, min 3). Consume it (``.to(device)`` / ``.copy_``)
-            before then — the same lifetime rule as DALI pipeline outputs.
+            CONTRACT: the ring is ``prefetch + 2`` buffers (min 3): the one the consumer
+            holds, ``prefetch`` queued, and one being filled. So the batch you HOLD is
+            never overwritten, but the previous one may be recycled as soon as you take
+            the next batch (the producer refills slot j once batch j + 1 has been taken).
+            Consume it (``.to(device)`` / ``.copy_``) before calling ``next()`` again, the
+            same lifetime rule as DALI pipeline outputs.
             """
             import torch
 
@@ -697,7 +700,9 @@ try:
                 return bufs[k % ring][: meta["batch_size"]], meta
 
             if prefetch:
-                # queue maxsize = prefetch < ring-1: the consumer's batch is never clobbered
+                # queue maxsize = prefetch = ring - 2: held + queued + one in flight fill the
+                # ring, so the consumer's batch is never clobbered (the previous one is
+                # already being refilled once the next batch is taken)
                 for r in _prefetched(_fill, prefetch):
                     self._maybe_warn_decode_failures(r[1])
                     yield r
@@ -803,12 +808,15 @@ try:
             enable_smart_batching (bool): Manual smart batching override (default: False)
             prefetch_batches (int): Batches to prefetch (default: 4)
             pin_memory (bool): Stream batches through a RING of recycled pinned
-                torch buffers (fast async H2D). LIFETIME CONTRACT: a yielded
-                tensor's memory is REUSED after ``prefetch_batches + 1`` further
-                batches — consume it (``.to(device)`` / ``.copy_()``) before
-                then, or hold a ``.clone()``. Holding raw references across the
-                ring silently yields another batch's pixels (same rule as DALI
-                pipeline outputs). Default False (fresh arrays every batch).
+                torch buffers (fast async H2D). LIFETIME CONTRACT: the batch you
+                hold is never overwritten, but the previous one may be recycled
+                as soon as you take the next batch (the ring is
+                ``prefetch_batches + 2`` buffers: yours, the queued ones, and one
+                being filled). Consume it (``.to(device)`` / ``.copy_()``) before
+                calling ``next()`` again, or hold a ``.clone()``. Holding raw
+                references across the ring silently yields another batch's
+                pixels (same rule as DALI pipeline outputs). Default False (fresh
+                arrays every batch).
             train_aug (bool): Fused RandomResizedCrop + horizontal flip inside
                 the C++ pass (torchvision-parity distribution; ~3% overhead).
 

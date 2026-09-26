@@ -34,7 +34,7 @@ Things to know on day one:
 
 - **Labels come from you.** A TAR is a flat archive; samples carry **no `label` key**. Build an aligned label array once (e.g. from folder names when you write the TAR) and index it with `meta["indices"]`. `benchmarks/benchmark_e2e_training.py` shows the pattern (`build_labeled_tar` writes an aligned `.npy`).
 - `image_size` and a `Resize` transform are two ways to say the same thing; passing both with different sizes raises `ValueError("Conflicting sizes...")` rather than silently training on the wrong size.
-- With `pin_memory=True`, yielded tensors come from a **reused ring** — consume (`.to(device)`) before `prefetch_batches + 1` more batches arrive, or `.clone()`. See [Memory and Lifetime Contracts](https://github.com/ALJainProjects/TurboLoader/wiki/Memory-and-Lifetime-Contracts).
+- With `pin_memory=True`, yielded tensors come from a **reused ring** — consume (`.to(device)`) or `.clone()` a batch before taking the next one; the batch you hold is safe, the previous one may already be recycled. See [Memory and Lifetime Contracts](https://github.com/ALJainProjects/TurboLoader/wiki/Memory-and-Lifetime-Contracts).
 - `num_workers` does **not** scale the fast path the way PyTorch's does: it is one process-wide C++ thread pool, already saturated at one worker.
 
 ## 2. Resume mid-epoch, exactly

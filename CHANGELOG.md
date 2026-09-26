@@ -5,6 +5,17 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Docs: the `pin_memory=True` lifetime contract was overstated. The ring is
+  `prefetch_batches + 2` buffers (the consumer's, the queued ones, one being filled),
+  so the batch you hold is never clobbered but the previous one may be recycled as soon
+  as you take the next batch; earlier text said "`prefetch_batches + 1` further batches"
+  (counted in producer terms). Same correction for `TblRawImageLoader(pin_memory=True)`
+  with background prefetch. Verified against the real producer loop; a test now pins the
+  "held batch is never clobbered" guarantee. No behavior change.
+
 ## [2.38.0] - 2026-09-25
 
 Roadmap sprint: the fastest pipeline now serves full augmentation, every loader

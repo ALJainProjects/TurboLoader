@@ -48,7 +48,7 @@ The fast path **requires a fixed size**: pass `image_size=N` or `(H, W)`, or a `
 
 ### Training-loop features
 - **`train_aug`** — fused RandomResizedCrop (torchvision-parity distribution incl. the aspect-clamped central-crop fallback) + horizontal flip with probability **`hflip_prob`** (default 0.5), inside the C++ pass (~3% overhead). Per-epoch randomness follows `(seed, epoch)`.
-- **`pin_memory`** — stream batches through a **ring of recycled page-locked torch buffers** for async `.to(device, non_blocking=True)`. LIFETIME: a yielded tensor's memory is reused after `prefetch_batches + 1` further batches — consume or `.clone()` before then. Requires torch + CUDA.
+- **`pin_memory`** — stream batches through a **ring of recycled page-locked torch buffers** for async `.to(device, non_blocking=True)`. LIFETIME: the batch you hold is never overwritten, but the previous one may be recycled as soon as you take the next batch (the ring is `prefetch_batches + 2` buffers: yours, the queued ones, and one being filled). Consume (`.to(device)`) or `.clone()` before calling `next()` again. Requires torch + CUDA.
 - **`prefetch_batches`** — decode-ahead depth (default 4). The loader keeps working while your step runs.
 - **`cache_decoded`** — decode the whole dataset once into a contiguous float32 cache (index-ordered, one allocation as of v2.37), then serve every epoch from RAM with a parallel C++ row gather. Costs 4× the uint8 bytes as anonymous RAM and a decode-all pass at every process start — for many-epoch training prefer TBL-RAW, which keeps uint8 in evictable page cache. Numbers: [Benchmarks](https://github.com/ALJainProjects/TurboLoader/wiki/Benchmarks).
 
