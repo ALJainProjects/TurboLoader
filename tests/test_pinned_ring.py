@@ -6,10 +6,13 @@ The default path allocates a fresh ~20-40 MB numpy array per batch under the GIL
 supports pinning, ``.to(device, non_blocking=True)`` becomes a genuinely async H2D copy.
 
 Contract pinned here: values/order identical to the numpy path; the ring actually recycles
-(bounded distinct data_ptrs); a yielded tensor is safe until ring-1 further batches.
+(bounded distinct data_ptrs); the batch the consumer HOLDS is never clobbered, however far
+ahead the producer runs (ring = held + queued + one in flight), while the previous batch
+may be recycled as soon as the next one is taken.
 """
 
 import tarfile
+import time
 
 import numpy as np
 import pytest
@@ -65,6 +68,18 @@ def test_ring_actually_recycles(tar40):
     loader = _mk(tar40, prefetch_batches=2, pin_memory=True)
     ptrs = {x.data_ptr() for x, _m in loader}
     assert len(ptrs) <= 4, f"expected <= ring(4) distinct buffers, saw {len(ptrs)} (no recycling?)"
+
+
+def test_held_batch_is_never_clobbered(tar40):
+    """The real lifetime rule: with prefetch + 2 buffers (the consumer's, `prefetch` queued,
+    one being filled) the batch you hold stays intact however far ahead the producer runs;
+    only after you take the next batch may it be recycled."""
+    ref = [np.asarray(x).copy() for x, _ in _mk(tar40, prefetch_batches=0)]
+    it = iter(_mk(tar40, prefetch_batches=2, pin_memory=True))
+    for xr in ref:
+        xt, _ = next(it)
+        time.sleep(0.02)  # let the producer run as far ahead as the queue allows
+        assert np.allclose(xt.numpy(), xr, atol=1e-6)
 
 
 def test_pinned_serial_path_too(tar40):

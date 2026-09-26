@@ -20,7 +20,7 @@ for epoch in range(epochs):
         loss = criterion(model(x), y); loss.backward(); opt.step(); opt.zero_grad(set_to_none=True)
 ```
 
-Rules that matter: samples carry **no label key** (align by `meta['indices']`); with `pin_memory=True` a yielded tensor's buffer is reused after `prefetch_batches + 1` more batches — move it to the device (or `.clone()`) before then; call `set_epoch` every epoch; `torch.set_num_threads(1)` for GPU-bound training so torch's intraop pool doesn't fight the decode threads.
+Rules that matter: samples carry **no label key** (align by `meta['indices']`); with `pin_memory=True` a yielded tensor's buffer may be recycled as soon as you take the next batch — move it to the device (or `.clone()`) before calling `next()` again; call `set_epoch` every epoch; `torch.set_num_threads(1)` for GPU-bound training so torch's intraop pool doesn't fight the decode threads.
 
 ## Many epochs, fixed recipe: TBL-RAW
 
