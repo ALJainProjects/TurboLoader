@@ -826,28 +826,10 @@ inline std::vector<std::string> list_all_transform_names() {
  */
 // IEEE binary16 conversion (round-to-nearest-even), portable — no _Float16/F16C
 // dependency (manylinux gcc 10 lacks _Float16). Used by the fp16 output paths.
+// Scalar float32 -> float16 (round to nearest even). The bulk path lives in
+// simd_utils.hpp (f32_to_f16_bulk) and falls back to the same scalar routine.
 static inline uint16_t turboloader_f32_to_f16_bits(float f) {
-    uint32_t x;
-    std::memcpy(&x, &f, sizeof(x));
-    const uint32_t sign = (x >> 16) & 0x8000u;
-    uint32_t mant = x & 0x7fffffu;
-    const uint32_t exp8 = (x >> 23) & 0xffu;
-    if (exp8 == 0xffu) return static_cast<uint16_t>(sign | 0x7c00u | (mant ? 0x200u : 0u));
-    int32_t exp = static_cast<int32_t>(exp8) - 127 + 15;
-    if (exp >= 0x1f) return static_cast<uint16_t>(sign | 0x7c00u);
-    if (exp <= 0) {
-        if (exp < -10) return static_cast<uint16_t>(sign);
-        mant |= 0x800000u;
-        const uint32_t shift = static_cast<uint32_t>(14 - exp);
-        uint32_t half = mant >> shift;
-        const uint32_t rem = mant & ((1u << shift) - 1u), halfway = 1u << (shift - 1);
-        if (rem > halfway || (rem == halfway && (half & 1u))) ++half;
-        return static_cast<uint16_t>(sign | half);
-    }
-    uint32_t half = sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13);
-    const uint32_t rem = mant & 0x1fffu;
-    if (rem > 0x1000u || (rem == 0x1000u && (half & 1u))) ++half;
-    return static_cast<uint16_t>(half);
+    return turboloader::transforms::simd::f32_to_f16_bits_scalar(f);
 }
 
 PYBIND11_MODULE(_turboloader, m) {
@@ -1230,9 +1212,8 @@ PYBIND11_MODULE(_turboloader, m) {
     m.def(
         "normalize_u8_gather",
         [](py::array_t<uint8_t, py::array::c_style> dataset,
-           py::array_t<int64_t, py::array::c_style> indices,
-           py::array_t<float, py::array::c_style> output, py::object mean_obj,
-           py::object std_obj, bool scale01) {
+           py::array_t<int64_t, py::array::c_style> indices, py::array output,
+           py::object mean_obj, py::object std_obj, bool scale01) {
             auto ds = dataset.unchecked<4>();
             if (ds.shape(3) != 3)
                 throw std::invalid_argument("dataset must be (N, H, W, 3) uint8");
@@ -1240,11 +1221,27 @@ PYBIND11_MODULE(_turboloader, m) {
             const size_t H = ds.shape(1), W = ds.shape(2);
             auto idx = indices.unchecked<1>();
             const size_t B = idx.shape(0);
-            auto out = output.mutable_unchecked<4>();
-            if (static_cast<size_t>(out.shape(0)) != B || out.shape(1) != 3 ||
-                static_cast<size_t>(out.shape(2)) != H ||
-                static_cast<size_t>(out.shape(3)) != W)
-                throw std::invalid_argument("output must be (B, 3, H, W) float32");
+            py::buffer_info ob = output.request(true);
+            if (ob.ndim != 4 || static_cast<size_t>(ob.shape[0]) != B)
+                throw std::invalid_argument(
+                    "output must be (B, 3, H, W) or (B, H, W, 3), float32 or float16");
+            // Layout from the shape: (B,3,H,W) is CHW, (B,H,W,3) is NHWC (channels_last).
+            const bool nhwc = (ob.shape[3] == 3 && static_cast<size_t>(ob.shape[1]) == H &&
+                               static_cast<size_t>(ob.shape[2]) == W && !(ob.shape[1] == 3 && H == 3));
+            if (!nhwc && (ob.shape[1] != 3 || static_cast<size_t>(ob.shape[2]) != H ||
+                          static_cast<size_t>(ob.shape[3]) != W))
+                throw std::invalid_argument(
+                    "output must be (B, 3, H, W) or (B, H, W, 3), float32 or float16");
+            const bool f16 = (ob.format == "e");
+            if (!f16 && ob.format != "f")
+                throw std::invalid_argument("output dtype must be float32 or float16");
+            {
+                const py::ssize_t it = ob.itemsize;
+                if (ob.strides[3] != it || ob.strides[2] != it * ob.shape[3] ||
+                    ob.strides[1] != it * ob.shape[3] * ob.shape[2] ||
+                    ob.strides[0] != it * ob.shape[3] * ob.shape[2] * ob.shape[1])
+                    throw std::invalid_argument("output must be C-contiguous");
+            }
             for (size_t i = 0; i < B; ++i)
                 if (idx(i) < 0 || idx(i) >= N)
                     throw std::out_of_range("gather index out of range");
@@ -1264,29 +1261,79 @@ PYBIND11_MODULE(_turboloader, m) {
 
             const uint8_t* src = dataset.data();
             const int64_t* ix = indices.data();
-            float* dst = output.mutable_data();
             const size_t px = H * W;
             {
                 // Gather + convert in ONE parallel pass: each worker reads its
                 // sample's u8 rows straight from the (possibly mmap-backed)
-                // dataset and writes normalized CHW floats — no staging copy,
-                // and the page-cache reads parallelize with the compute.
+                // dataset and writes normalized floats — no staging copy, and
+                // the page-cache reads parallelize with the compute.
                 py::gil_scoped_release release;
-                turboloader::parallel_for(B, [&](size_t i) {
-                    float* img = dst + i * 3 * px;
-                    transforms::simd::deinterleave_hwc_to_chw_f32(
-                        src + static_cast<size_t>(ix[i]) * px * 3, img, img + px,
-                        img + 2 * px, px, scale01, has_ms ? mean.data() : nullptr,
-                        has_ms ? inv_std.data() : nullptr);
-                });
+                if (!f16 && !nhwc) {
+                    // float32 CHW: the SIMD deinterleave, bit-identical to the TAR path.
+                    float* dst = static_cast<float*>(ob.ptr);
+                    turboloader::parallel_for(B, [&](size_t i) {
+                        float* img = dst + i * 3 * px;
+                        transforms::simd::deinterleave_hwc_to_chw_f32(
+                            src + static_cast<size_t>(ix[i]) * px * 3, img, img + px,
+                            img + 2 * px, px, scale01, has_ms ? mean.data() : nullptr,
+                            has_ms ? inv_std.data() : nullptr);
+                    });
+                } else {
+                    // float16 and/or NHWC: per-element convert. NHWC needs no
+                    // deinterleave at all (the source is already HWC), and float16
+                    // halves the bytes written; the inner loop autovectorizes.
+                    const float scale = scale01 ? (1.0f / 255.0f) : 1.0f;
+                    const float m0 = has_ms ? mean[0] : 0.f, m1 = has_ms ? mean[1] : 0.f,
+                                m2 = has_ms ? mean[2] : 0.f;
+                    const float i0 = has_ms ? inv_std[0] : 1.f, i1 = has_ms ? inv_std[1] : 1.f,
+                                i2 = has_ms ? inv_std[2] : 1.f;
+                    auto convert = [&](size_t i, auto&& store) {
+                        const uint8_t* s = src + static_cast<size_t>(ix[i]) * px * 3;
+                        for (size_t p = 0; p < px; ++p) {
+                            const float r = (s[p * 3] * scale - m0) * i0;
+                            const float g = (s[p * 3 + 1] * scale - m1) * i1;
+                            const float b = (s[p * 3 + 2] * scale - m2) * i2;
+                            if (nhwc) {
+                                store(i * 3 * px + p * 3, r);
+                                store(i * 3 * px + p * 3 + 1, g);
+                                store(i * 3 * px + p * 3 + 2, b);
+                            } else {
+                                store(i * 3 * px + p, r);
+                                store(i * 3 * px + px + p, g);
+                                store(i * 3 * px + 2 * px + p, b);
+                            }
+                        }
+                    };
+                    if (f16) {
+                        // Normalize into a per-thread float32 image, then one vectorized
+                        // float32 -> float16 pass (NEON vcvt / F16C); the scalar converter
+                        // per element was 4x slower than the float32 path.
+                        uint16_t* d = static_cast<uint16_t*>(ob.ptr);
+                        turboloader::parallel_for(B, [&](size_t i) {
+                            thread_local std::vector<float> tmp;
+                            tmp.resize(3 * px);
+                            float* t = tmp.data();
+                            const size_t base = i * 3 * px;
+                            convert(i, [&](size_t o, float v) { t[o - base] = v; });
+                            transforms::simd::f32_to_f16_bulk(t, d + base, 3 * px);
+                        });
+                    } else {
+                        float* d = static_cast<float*>(ob.ptr);
+                        turboloader::parallel_for(B, [&](size_t i) {
+                            convert(i, [&](size_t o, float v) { d[o] = v; });
+                        });
+                    }
+                }
             }
         },
         py::arg("dataset"), py::arg("indices"), py::arg("output"),
         py::arg("mean") = py::none(), py::arg("std") = py::none(),
         py::arg("scale01") = true,
         "normalize_u8_batch with a fused index gather: rows `indices` of a\n"
-        "(N, H, W, 3) uint8 dataset (mmap views welcome) -> (B, 3, H, W)\n"
-        "float32, one parallel SIMD pass, GIL released. The shuffled-serve\n"
+        "(N, H, W, 3) uint8 dataset (mmap views welcome) -> output, one parallel\n"
+        "pass, GIL released. output is (B, 3, H, W) [CHW] or (B, H, W, 3)\n"
+        "[NHWC / channels_last], float32 or float16; float32 CHW uses the SIMD\n"
+        "deinterleave and is bit-identical to the TAR path. The shuffled-serve\n"
         "kernel of the TBL-RAW pipeline.");
 
     m.def(
@@ -1312,18 +1359,22 @@ PYBIND11_MODULE(_turboloader, m) {
                 if (idx(i) < 0 || idx(i) >= N)
                     throw std::out_of_range("gather index out of range");
             py::buffer_info ob = output.request(true);
-            if (ob.ndim != 4 || static_cast<size_t>(ob.shape[0]) != B || ob.shape[1] != 3)
-                throw std::invalid_argument("output must be (B, 3, dst_h, dst_w)");
-            const int dstH = static_cast<int>(ob.shape[2]), dstW = static_cast<int>(ob.shape[3]);
+            if (ob.ndim != 4 || static_cast<size_t>(ob.shape[0]) != B)
+                throw std::invalid_argument("output must be (B, 3, dst_h, dst_w) or (B, dst_h, dst_w, 3)");
+            // Layout from the shape: (B,3,h,w) is CHW; (B,h,w,3) is NHWC (channels_last).
+            const bool nhwc = (ob.shape[3] == 3 && ob.shape[1] != 3);
+            if (!nhwc && ob.shape[1] != 3)
+                throw std::invalid_argument("output must be (B, 3, dst_h, dst_w) or (B, dst_h, dst_w, 3)");
+            const int dstH = static_cast<int>(nhwc ? ob.shape[1] : ob.shape[2]);
+            const int dstW = static_cast<int>(nhwc ? ob.shape[2] : ob.shape[3]);
             const bool f16 = (ob.format == "e");
             if (!f16 && ob.format != "f")
                 throw std::invalid_argument("output dtype must be float32 or float16");
             {
-                const size_t px = static_cast<size_t>(dstH) * dstW;
-                if (ob.strides[3] != static_cast<py::ssize_t>(ob.itemsize) ||
-                    ob.strides[2] != static_cast<py::ssize_t>(ob.itemsize) * dstW ||
-                    ob.strides[1] != static_cast<py::ssize_t>(ob.itemsize * px) ||
-                    ob.strides[0] != static_cast<py::ssize_t>(ob.itemsize * px * 3))
+                const py::ssize_t it = ob.itemsize;
+                if (ob.strides[3] != it || ob.strides[2] != it * ob.shape[3] ||
+                    ob.strides[1] != it * ob.shape[3] * ob.shape[2] ||
+                    ob.strides[0] != it * ob.shape[3] * ob.shape[2] * ob.shape[1])
                     throw std::invalid_argument("output must be C-contiguous");
             }
 
@@ -1389,19 +1440,29 @@ PYBIND11_MODULE(_turboloader, m) {
             };
             {
                 py::gil_scoped_release release;
+                // Element offset for (image, channel, y, x) in the requested layout.
+                auto at = [&](size_t ii, int c, int y, int x) -> size_t {
+                    return nhwc ? (ii * px + static_cast<size_t>(y) * dstW + x) * 3 + c
+                                : (ii * 3 + c) * px + static_cast<size_t>(y) * dstW + x;
+                };
                 if (f16) {
+                    // Per-thread float32 image, then one vectorized float32 -> float16 pass.
                     uint16_t* d = static_cast<uint16_t*>(dst);
                     turboloader::parallel_for(B, [&](size_t i) {
+                        thread_local std::vector<float> tmp;
+                        tmp.resize(3 * px);
+                        float* t = tmp.data();
+                        const size_t base = i * 3 * px;
                         kernel(i, [&](size_t ii, int c, int y, int x, float v) {
-                            d[(ii * 3 + c) * px + static_cast<size_t>(y) * dstW + x] =
-                                turboloader_f32_to_f16_bits(v);
+                            t[at(ii, c, y, x) - base] = v;
                         });
+                        transforms::simd::f32_to_f16_bulk(t, d + base, 3 * px);
                     });
                 } else {
                     float* d = static_cast<float*>(dst);
                     turboloader::parallel_for(B, [&](size_t i) {
                         kernel(i, [&](size_t ii, int c, int y, int x, float v) {
-                            d[(ii * 3 + c) * px + static_cast<size_t>(y) * dstW + x] = v;
+                            d[at(ii, c, y, x)] = v;
                         });
                     });
                 }
@@ -1414,9 +1475,10 @@ PYBIND11_MODULE(_turboloader, m) {
         "normalize: rows `indices` of a (N, H, W, 3) uint8 dataset (mmap views\n"
         "welcome), crop windows (B, 4) as x, y, w, h in source pixels (torchvision\n"
         "RandomResizedCrop parity via turboloader._augment.pick_crop), flips (B,)\n"
-        "0/1 -> output (B, 3, dst_h, dst_w) float32 OR float16, parallel across\n"
-        "the batch, GIL released. Same sampling math as the Metal / CUDA crop\n"
-        "kernels. The serve-time augmentation kernel of the TBL-RAW pipeline.");
+        "0/1 -> output (B, 3, dst_h, dst_w) [CHW] or (B, dst_h, dst_w, 3) [NHWC],\n"
+        "float32 OR float16, parallel across the batch, GIL released. Same\n"
+        "sampling math as the Metal / CUDA crop kernels. The serve-time\n"
+        "augmentation kernel of the TBL-RAW pipeline.");
 
     m.def(
         "gather_rows_f32",
@@ -1480,6 +1542,60 @@ PYBIND11_MODULE(_turboloader, m) {
         py::arg("data"),
         "Decode a JPEG (bytes) to an HxWx3 uint8 RGB numpy array (CPU, libjpeg-turbo). "
         "Releases the GIL, so it parallelizes across a thread pool.");
+
+    m.def(
+        "decode_jpeg_scaled",
+        [](py::bytes data, int target_w, int target_h) -> py::array_t<uint8_t> {
+            std::string buf = data;
+            static thread_local turboloader::JPEGDecoder decoder;
+            std::vector<uint8_t> out;
+            int w = 0, h = 0, c = 0;
+            {
+                py::gil_scoped_release rel;
+                std::span<const uint8_t> sp(reinterpret_cast<const uint8_t*>(buf.data()),
+                                            buf.size());
+                decoder.decode_scaled(sp, out, target_w, target_h, w, h, c);
+            }
+            auto arr = py::array_t<uint8_t>({(py::ssize_t)h, (py::ssize_t)w, (py::ssize_t)c});
+            std::memcpy(arr.mutable_data(), out.data(), out.size());
+            return arr;
+        },
+        py::arg("data"), py::arg("target_w"), py::arg("target_h"),
+        "Decode a JPEG at the DCT scale the fast path would pick for (target_w, target_h): "
+        "the smallest libjpeg-turbo ratio whose output still covers the target. Returns the "
+        "scaled HxWx3 uint8 image (the exact resize is a separate step).");
+
+    m.def(
+        "decode_jpeg_region",
+        [](py::bytes data, int target_w, int target_h, int x, int y, int w, int h) -> py::tuple {
+            // The crop-window decode of the train_aug fast path: begin_scaled() reports
+            // the scaled size, read_region() decodes only rows [y, y+h) of the
+            // iMCU-aligned span covering [x, x+w). Returns (strip, strip_x, scaled_w,
+            // scaled_h); strip is h x strip_w x 3 and the window starts at column x - strip_x.
+            std::string buf = data;
+            static thread_local turboloader::JPEGDecoder decoder;
+            std::vector<uint8_t> strip;
+            int sw = 0, sh = 0, c = 0, strip_x = 0, strip_w = 0;
+            {
+                py::gil_scoped_release rel;
+                std::span<const uint8_t> sp(reinterpret_cast<const uint8_t*>(buf.data()),
+                                            buf.size());
+                decoder.begin_scaled(sp, target_w, target_h, sw, sh, c);
+                if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > sw || y + h > sh) {
+                    decoder.read_region(strip, 0, 0, 1, 1, strip_x, strip_w);  // resets cinfo
+                    throw std::invalid_argument("window outside the scaled image");
+                }
+                decoder.read_region(strip, x, y, w, h, strip_x, strip_w);
+            }
+            auto arr = py::array_t<uint8_t>({(py::ssize_t)h, (py::ssize_t)strip_w, (py::ssize_t)3});
+            std::memcpy(arr.mutable_data(), strip.data(), strip.size());
+            return py::make_tuple(arr, strip_x, sw, sh);
+        },
+        py::arg("data"), py::arg("target_w"), py::arg("target_h"), py::arg("x"), py::arg("y"),
+        py::arg("w"), py::arg("h"),
+        "Crop-window decode (what train_aug uses): decode only rows [y, y+h) of the "
+        "iMCU-aligned column span covering [x, x+w) at the DCT scale picked for the target. "
+        "Returns (strip h x strip_w x 3, strip_x, scaled_w, scaled_h).");
 
 #ifdef TURBOLOADER_METAL
     m.def("metal_available", []() { return turboloader::metal::available(); },
@@ -1674,27 +1790,33 @@ PYBIND11_MODULE(_turboloader, m) {
     m.def(
         "metal_resident_images_gather",
         [](int handle, py::array_t<int32_t, py::array::c_style | py::array::forcecast> idx,
-           int h, int w, std::array<float, 3> mean,
-           std::array<float, 3> std_) -> py::array_t<float> {
+           int h, int w, std::array<float, 3> mean, std::array<float, 3> std_,
+           int fmt) -> py::array {
             if (idx.ndim() != 1 || idx.shape(0) < 1)
                 throw std::runtime_error("idx must be a 1-D int32 array");
+            if (fmt < 0 || fmt > 3) throw std::invalid_argument("fmt must be 0..3");
             const size_t b = (size_t)idx.shape(0);
-            const float* out;
+            const void* out;
             {
                 py::gil_scoped_release rel;
                 out = turboloader::metal::resident_images_gather(handle, idx.data(), b,
-                                                                 mean.data(), std_.data());
+                                                                 mean.data(), std_.data(), fmt);
             }
             if (!out) throw std::runtime_error("metal_resident_images_gather failed");
-            return py::array_t<float>({(py::ssize_t)b, (py::ssize_t)3, (py::ssize_t)h,
-                                       (py::ssize_t)w},
-                                      out, py::capsule(out, [](void*) {}));
+            const bool f16 = (fmt & 1) != 0, nhwc = (fmt & 2) != 0;
+            std::vector<py::ssize_t> shape =
+                nhwc ? std::vector<py::ssize_t>{(py::ssize_t)b, (py::ssize_t)h, (py::ssize_t)w, 3}
+                     : std::vector<py::ssize_t>{(py::ssize_t)b, 3, (py::ssize_t)h, (py::ssize_t)w};
+            // Zero-copy view of the double-buffered output (base capsule = no-op).
+            return py::array(py::dtype(f16 ? "float16" : "float32"), shape, out,
+                             py::capsule(out, [](void*) {}));
         },
         py::arg("handle"), py::arg("idx"), py::arg("h"), py::arg("w"),
         py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
-        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
-        "Fused gather+normalize epoch batch: (B,3,H,W) float32 zero-copy view, valid until "
-        "the next gather on this handle.");
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f}, py::arg("fmt") = 0,
+        "Fused gather+normalize epoch batch as a zero-copy view, valid until the next gather "
+        "on this handle. fmt: 0 = (B,3,H,W) float32, 1 = float16, 2 = (B,H,W,3) float32 "
+        "(channels_last), 3 = (B,H,W,3) float16.");
     m.def("metal_resident_images_destroy", &turboloader::metal::resident_images_destroy,
           py::arg("handle"), "Free a resident image dataset (invalidates its views).");
     m.def(
@@ -1866,23 +1988,25 @@ PYBIND11_MODULE(_turboloader, m) {
     m.def(
         "cuda_normalize_resident",
         [](uintptr_t src_dev, int N, int H, int W, std::array<float, 3> mean,
-           std::array<float, 3> std_) -> uintptr_t {
+           std::array<float, 3> std_, int fmt) -> uintptr_t {
+            if (fmt < 0 || fmt > 3) throw std::invalid_argument("fmt must be 0..3");
             uintptr_t out;
             {
                 py::gil_scoped_release rel;
                 out = turboloader::cuda::normalize_resident_batch(src_dev, N, H, W, mean.data(),
-                                                                  std_.data());
+                                                                  std_.data(), fmt);
             }
             if (!out) throw std::runtime_error("cuda_normalize_resident failed");
             return out;
         },
         py::arg("src_dev"), py::arg("N"), py::arg("H"), py::arg("W"),
         py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
-        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f}, py::arg("fmt") = 0,
         "Normalize an ALREADY-DEVICE-RESIDENT, pre-resized NHWC uint8 batch (device pointer "
-        "src_dev, N images of H*W, contiguous) -> device pointer (int) of (N,3,H,W) float32, in "
-        "ONE kernel launch — no resize, no H2D. For a GPU-resident pre-processed dataset. Wrap "
-        "zero-copy via __cuda_array_interface__.");
+        "src_dev, N images of H*W, contiguous) -> device pointer (int) of the normalized batch, in "
+        "ONE kernel launch — no resize, no H2D. fmt: 0 = (N,3,H,W) float32, 1 = float16, "
+        "2 = (N,H,W,3) float32 (channels_last), 3 = (N,H,W,3) float16. For a GPU-resident "
+        "pre-processed dataset. Wrap zero-copy via __cuda_array_interface__.");
     m.def(
         "cuda_video_yuv420_batch",
         [](std::vector<uintptr_t> y_ptrs, std::vector<uintptr_t> cb_ptrs,
@@ -1937,21 +2061,23 @@ PYBIND11_MODULE(_turboloader, m) {
     m.def(
         "cuda_normalize_resident_gather",
         [](uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W, std::array<float, 3> mean,
-           std::array<float, 3> std_) -> uintptr_t {
+           std::array<float, 3> std_, int fmt) -> uintptr_t {
+            if (fmt < 0 || fmt > 3) throw std::invalid_argument("fmt must be 0..3");
             uintptr_t out;
             {
                 py::gil_scoped_release rel;
-                out = turboloader::cuda::normalize_resident_gather_batch(src_dev, sel_dev, N, H, W,
-                                                                        mean.data(), std_.data());
+                out = turboloader::cuda::normalize_resident_gather_batch(
+                    src_dev, sel_dev, N, H, W, mean.data(), std_.data(), fmt);
             }
             if (!out) throw std::runtime_error("cuda_normalize_resident_gather failed");
             return out;
         },
         py::arg("src_dev"), py::arg("sel_dev"), py::arg("N"), py::arg("H"), py::arg("W"),
         py::arg("mean") = std::array<float, 3>{0.485f, 0.456f, 0.406f},
-        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f},
+        py::arg("std") = std::array<float, 3>{0.229f, 0.224f, 0.225f}, py::arg("fmt") = 0,
         "Like cuda_normalize_resident but output image n gathers from source image sel_dev[n] "
-        "(device int64 index array) — fused shuffle+normalize, no separate gather copy.");
+        "(device int64 index array) — fused shuffle+normalize, no separate gather copy. Same "
+        "fmt codes.");
     m.def(
         "cuda_stream_normalize_init",
         [](int num_slots) { return turboloader::cuda::stream_normalize_init(num_slots); },

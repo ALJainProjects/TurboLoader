@@ -44,6 +44,12 @@
     #define SIMD_FLOAT_WIDTH 4
     #define SIMD_INT32_WIDTH 4
 #endif
+// F16C (float16 conversion) is dispatched at runtime on x86, so its intrinsics are
+// needed even for the portable -msse4.2 wheel builds.
+#if defined(__x86_64__) || defined(__i386__)
+    #include <immintrin.h>
+    #include <cpuid.h>
+#endif
 
 namespace turboloader {
 namespace transforms {
@@ -2222,6 +2228,86 @@ inline void deinterleave_hwc_to_chw_f32(
 }
 
 #endif
+
+// ============================================================================
+// float32 -> float16 (IEEE binary16, round to nearest even)
+// ============================================================================
+// Scalar reference: bit-equal to numpy's astype(float16). Exists because the
+// manylinux toolchain (GCC 10) has no _Float16 and the portable x86 wheel is
+// built without F16C.
+inline uint16_t f32_to_f16_bits_scalar(float f) {
+    uint32_t x;
+    std::memcpy(&x, &f, sizeof(x));
+    const uint32_t sign = (x >> 16) & 0x8000u;
+    uint32_t mant = x & 0x7fffffu;
+    const uint32_t exp8 = (x >> 23) & 0xffu;
+    if (exp8 == 0xffu) return static_cast<uint16_t>(sign | 0x7c00u | (mant ? 0x200u : 0u));
+    int32_t exp = static_cast<int32_t>(exp8) - 127 + 15;
+    if (exp >= 0x1f) return static_cast<uint16_t>(sign | 0x7c00u);
+    if (exp <= 0) {
+        if (exp < -10) return static_cast<uint16_t>(sign);
+        mant |= 0x800000u;
+        const uint32_t shift = static_cast<uint32_t>(14 - exp);
+        uint32_t half = mant >> shift;
+        const uint32_t rem = mant & ((1u << shift) - 1u), halfway = 1u << (shift - 1);
+        if (rem > halfway || (rem == halfway && (half & 1u))) ++half;
+        return static_cast<uint16_t>(sign | half);
+    }
+    uint32_t half = sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13);
+    const uint32_t rem = mant & 0x1fffu;
+    if (rem > 0x1000u || (rem == 0x1000u && (half & 1u))) ++half;
+    return static_cast<uint16_t>(half);
+}
+
+#if defined(__x86_64__) || defined(__i386__)
+// CPUID leaf 1: F16C (ECX bit 29) and AVX (bit 28), with the OS saving YMM state
+// (OSXSAVE bit 27 and XCR0 bits 1 and 2). Apple clang rejects "f16c" in
+// __builtin_cpu_supports, so this reads CPUID directly.
+inline bool detail_cpu_has_f16c() {
+    unsigned eax = 0, ebx = 0, ecx = 0, edx = 0;
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx)) return false;
+    const bool f16c = (ecx & (1u << 29)) != 0, avx = (ecx & (1u << 28)) != 0,
+               osxsave = (ecx & (1u << 27)) != 0;
+    if (!(f16c && avx && osxsave)) return false;
+    unsigned lo = 0, hi = 0;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return (lo & 6u) == 6u;
+}
+
+// Compiled with F16C+AVX enabled for this function only; called after a runtime check.
+__attribute__((target("f16c,avx")))
+inline void f32_to_f16_bulk_f16c(const float* src, uint16_t* dst, size_t n) {
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 v = _mm256_loadu_ps(src + i);
+        __m128i h = _mm256_cvtps_ph(v, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i), h);
+    }
+    for (; i < n; ++i) dst[i] = f32_to_f16_bits_scalar(src[i]);
+}
+#endif
+
+// Bulk conversion: NEON vcvt (8 values per iteration) on ARM, F16C on x86 when the
+// CPU has it (runtime dispatch), scalar otherwise. All three round to nearest even,
+// so the result is identical whichever path runs.
+inline void f32_to_f16_bulk(const float* src, uint16_t* dst, size_t n) {
+    size_t i = 0;
+#if defined(TURBOLOADER_SIMD_NEON)
+    for (; i + 8 <= n; i += 8) {
+        float16x4_t lo = vcvt_f16_f32(vld1q_f32(src + i));
+        float16x4_t hi = vcvt_f16_f32(vld1q_f32(src + i + 4));
+        vst1_u16(dst + i, vreinterpret_u16_f16(lo));
+        vst1_u16(dst + i + 4, vreinterpret_u16_f16(hi));
+    }
+#elif defined(__x86_64__) || defined(__i386__)
+    static const bool has_f16c = detail_cpu_has_f16c();
+    if (has_f16c) {
+        f32_to_f16_bulk_f16c(src, dst, n);
+        return;
+    }
+#endif
+    for (; i < n; ++i) dst[i] = f32_to_f16_bits_scalar(src[i]);
+}
 
 } // namespace simd
 } // namespace transforms

@@ -39,11 +39,11 @@ class _CudaArray:
     adopt it zero-copy (``torch.as_tensor(x, device='cuda')``). Valid until the loader yields
     the next batch (the device pool is reused), exactly like a DALI pipeline output."""
 
-    def __init__(self, ptr, shape):
+    def __init__(self, ptr, shape, typestr="<f4"):
         self.__cuda_array_interface__ = {
             "data": (int(ptr), False),
             "shape": tuple(shape),
-            "typestr": "<f4",
+            "typestr": typestr,  # "<f4" float32, "<f2" float16
             "version": 3,
         }
 
@@ -392,6 +392,10 @@ class CudaResidentLoader:
     ~79k, DALI ~15k, interleaved-drift aside — measured isolated, the real single-loader case).
     Needs ``N * image_size**2 * 3`` bytes of VRAM (Imagenette-160 ≈ 727 MB on a 24 GB card).
     Yields GPU-resident ``(N, 3, H, W)`` float32 batches (``__cuda_array_interface__``).
+    ``dtype='float16'`` halves the bytes the kernel writes (the float32 kernel is bound by
+    its output traffic) and matches what AMP training consumes; ``channels_last=True``
+    yields ``(N, H, W, 3)`` for channels_last models (adopt with ``torch.as_tensor(x,
+    device='cuda').permute(0, 3, 1, 2)``).
 
     For datasets too large for VRAM, use ``CudaImageLoader(decode="nvimgcodec")`` (on-the-fly,
     beats DALI) — this loader deliberately trades generality for the fits-in-VRAM speed win.
@@ -412,6 +416,8 @@ class CudaResidentLoader:
         return_indices=False,
         world_rank=0,
         world_size=1,
+        dtype="float32",
+        channels_last=False,
     ):
         self._setup(
             image_size,
@@ -424,6 +430,8 @@ class CudaResidentLoader:
             return_indices,
             world_rank,
             world_size,
+            dtype,
+            channels_last,
         )
         from concurrent.futures import ThreadPoolExecutor
 
@@ -456,11 +464,20 @@ class CudaResidentLoader:
         return_indices,
         world_rank=0,
         world_size=1,
+        dtype="float32",
+        channels_last=False,
     ):
         """Shared field/capability setup for both constructors (path list, .tbl)."""
         self.world_rank, self.world_size = int(world_rank), int(world_size)
         if self.world_size < 1 or not 0 <= self.world_rank < self.world_size:
             raise ValueError("need 0 <= world_rank < world_size")
+        if dtype not in ("float32", "float16"):
+            raise ValueError("dtype must be 'float32' or 'float16'")
+        self.dtype, self.channels_last = dtype, bool(channels_last)
+        # Kernel output format: bit0 = float16 (halves the write bandwidth that bounds the
+        # float32 kernel), bit1 = NHWC / channels_last. 0 keeps the original kernel.
+        self._fmt = (1 if dtype == "float16" else 0) | (2 if self.channels_last else 0)
+        self._typestr = "<f2" if dtype == "float16" else "<f4"
         import turboloader as t
         import torch
 
@@ -495,6 +512,8 @@ class CudaResidentLoader:
         return_indices=False,
         world_rank=0,
         world_size=1,
+        dtype="float32",
+        channels_last=False,
     ):
         """Build from a pre-processed RAW_U8 ``.tbl`` (see ``preprocess_to_tbl``):
         the decode-all pass disappears — upload reads straight through the mmap.
@@ -516,6 +535,8 @@ class CudaResidentLoader:
             return_indices,
             world_rank,
             world_size,
+            dtype,
+            channels_last,
         )
         self._n = view.shape[0]
         # Chunked upload through the mmap: peak host memory is one chunk, not
@@ -557,22 +578,27 @@ class CudaResidentLoader:
             order = full[self.world_rank :: self.world_size][:n_rank]
             perm = torch.from_numpy(np.ascontiguousarray(order, dtype=np.int64)).cuda()
         gather = getattr(t, "cuda_normalize_resident_gather", None)
+        fmt = getattr(self, "_fmt", 0)
+        extra = {"fmt": fmt} if fmt else {}  # fmt=0 keeps the original kernel (and old builds)
+        out_shape = (bs, H, W, 3) if getattr(self, "channels_last", False) else (bs, 3, H, W)
         for b in range(0, end, bs):
             n = min(bs, n_rank - b)
             if perm is not None and gather is not None:
                 # Fused gather+normalize: no torch gather copy — shuffle at ~full sequential speed.
                 sl = perm[b : b + n]  # GPU int64 index slice (held across the call)
-                ptr = gather(base, int(sl.data_ptr()), n, H, W, mean=self.mean, std=self.std)
+                ptr = gather(
+                    base, int(sl.data_ptr()), n, H, W, mean=self.mean, std=self.std, **extra
+                )
             elif perm is not None:
                 batch = self._gpu[perm[b : b + n]].contiguous()  # fallback: torch gather copy
                 ptr = t.cuda_normalize_resident(
-                    batch.data_ptr(), n, H, W, mean=self.mean, std=self.std
+                    batch.data_ptr(), n, H, W, mean=self.mean, std=self.std, **extra
                 )
             else:
                 ptr = t.cuda_normalize_resident(
-                    base + b * stride, n, H, W, mean=self.mean, std=self.std
+                    base + b * stride, n, H, W, mean=self.mean, std=self.std, **extra
                 )
-            batch = _CudaArray(ptr, (n, 3, H, W))
+            batch = _CudaArray(ptr, (n,) + out_shape[1:], getattr(self, "_typestr", "<f4"))
             if self.return_indices:
                 # Sample indices (into the ctor `paths` order) for this batch — align labels
                 # in a real training loop: yb = labels[idx]. GPU int64 tensor under shuffle,

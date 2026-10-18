@@ -108,11 +108,12 @@ int resident_images_create(size_t n, int h, int w, size_t max_batch);
 // straight into it (unified memory: this IS the GPU buffer). Null if bad handle.
 uint8_t* resident_images_data(int handle);
 
-// Fused gather + normalize: out[b] = (src[idx[b]]/255 - mean) / std as CHW
-// float32, one kernel launch for the whole batch. Returns the output pointer
-// (b*3*h*w floats, valid until the next gather on this handle), or nullptr.
-const float* resident_images_gather(int handle, const int32_t* idx, size_t b,
-                                    const float mean[3], const float std_[3]);
+// Fused gather + normalize: out[b] = (src[idx[b]]/255 - mean) / std, one kernel
+// launch for the whole batch. fmt bit0 = half (float16) output, bit1 = NHWC
+// (channels_last) layout; 0 = CHW float32. Returns the output pointer (b*3*h*w
+// elements, valid until the next gather on this handle), or nullptr.
+const void* resident_images_gather(int handle, const int32_t* idx, size_t b,
+                                   const float mean[3], const float std_[3], int fmt = 0);
 
 void resident_images_destroy(int handle);
 

@@ -121,21 +121,25 @@ kernel void train_transform(
 kernel void gather_normalize_u8(
     device const uchar* src    [[buffer(0)]],   // resident N x H x W x 3
     device const int*   idx    [[buffer(1)]],   // B sample indices
-    device float*       dst    [[buffer(2)]],   // B x 3 x H x W
-    constant uint4&     dims   [[buffer(3)]],   // W, H, B, unused
+    device uchar*       dstb   [[buffer(2)]],   // B x 3 x H x W (CHW) or B x H x W x 3 (NHWC); float or half
+    constant uint4&     dims   [[buffer(3)]],   // W, H, B, fmt (bit0: half output, bit1: NHWC layout)
     constant float3&    mean   [[buffer(4)]],
     constant float3&    invstd [[buffer(5)]],
     uint3 gid [[thread_position_in_grid]])
 {
-    uint W = dims.x, H = dims.y, B = dims.z;
+    uint W = dims.x, H = dims.y, B = dims.z, fmt = dims.w;
     if (gid.x >= W || gid.y >= H || gid.z >= B) return;
     ulong pix = (ulong)uint(idx[gid.z]) * H * W + (ulong)gid.y * W + gid.x;
     device const uchar* p = src + pix * 3;
     float m[3]   = { mean.x, mean.y, mean.z };
     float isd[3] = { invstd.x, invstd.y, invstd.z };
+    const bool to_half = (fmt & 1u) != 0u, nhwc = (fmt & 2u) != 0u;
     for (uint c = 0; c < 3; c++) {
-        float v = float(p[c]) / 255.0f;
-        dst[(((ulong)gid.z * 3 + c) * H + gid.y) * W + gid.x] = (v - m[c]) * isd[c];
+        float v = (float(p[c]) / 255.0f - m[c]) * isd[c];
+        ulong o = nhwc ? ((((ulong)gid.z * H + gid.y) * W + gid.x) * 3 + c)
+                       : ((((ulong)gid.z * 3 + c) * H + gid.y) * W + gid.x);
+        if (to_half) ((device half*)dstb)[o] = half(v);
+        else         ((device float*)dstb)[o] = v;
     }
 }
 
@@ -471,8 +475,8 @@ uint8_t* resident_images_data(int handle) {
     return r ? (uint8_t*)r->data.contents : nullptr;
 }
 
-const float* resident_images_gather(int handle, const int32_t* idx, size_t b,
-                                    const float mean[3], const float std_[3]) {
+const void* resident_images_gather(int handle, const int32_t* idx, size_t b,
+                                   const float mean[3], const float std_[3], int fmt) {
     ResidentImages* r = registry_get(g_res_imgs, handle);
     if (!r || !idx || b == 0 || b > r->max_batch) return nullptr;
     std::lock_guard<std::mutex> ctx_lock(r->mu);  // registry_erase waits on this
@@ -486,7 +490,9 @@ const float* resident_images_gather(int handle, const int32_t* idx, size_t b,
         id<MTLCommandBuffer> cb = [g_queue commandBuffer];
         id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
         [e setComputePipelineState:g_pso_gather];
-        uint32_t dims[4] = {(uint32_t)r->w, (uint32_t)r->h, (uint32_t)b, 0};
+        // fmt bit0: half output (halves the write bandwidth, what AMP training consumes),
+        // bit1: NHWC layout (channels_last). Output buffers are sized for float, so half fits.
+        uint32_t dims[4] = {(uint32_t)r->w, (uint32_t)r->h, (uint32_t)b, (uint32_t)(fmt & 3)};
         [e setBuffer:r->data offset:0 atIndex:0];
         [e setBuffer:r->idx offset:0 atIndex:1];
         [e setBuffer:bout offset:0 atIndex:2];
@@ -499,7 +505,7 @@ const float* resident_images_gather(int handle, const int32_t* idx, size_t b,
         [cb commit];
         [cb waitUntilCompleted];
         if (cb.error) return nullptr;
-        return (const float*)bout.contents;
+        return (const void*)bout.contents;
     }
 }
 

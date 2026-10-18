@@ -157,7 +157,13 @@ class TblRawImageLoader:
             larger than ``image_size`` to give the crop room.
         hflip_prob: horizontal-flip probability (applies with or without
             ``train_aug``; default 0).
-        dtype: ``'float32'`` (default) or ``'float16'`` output.
+        dtype: ``'float32'`` (default) or ``'float16'`` output. float16 halves the
+            bytes written and copied to the device; it is what AMP training reads.
+        channels_last: emit ``(B, H, W, 3)`` instead of ``(B, 3, H, W)``. The source
+            is already HWC, so this skips the planar deinterleave entirely. With
+            ``pin_memory`` the yielded tensor is NCHW-shaped with channels_last
+            strides (``x.is_contiguous(memory_format=torch.channels_last)``), ready
+            for a channels_last model with no copy.
         pin_memory: yield torch tensors backed by a reused ring of ``ring``
             page-locked buffers (CUDA hosts). LIFETIME: with background prefetch
             the batch you hold is never overwritten, but the previous one may be
@@ -193,12 +199,14 @@ class TblRawImageLoader:
         ratio=(3.0 / 4.0, 4.0 / 3.0),
         image_size=None,
         dtype="float32",
+        channels_last=False,
         world_rank=0,
         world_size=1,
     ):
         import turboloader as t
 
         self._t = t
+        self.channels_last = bool(channels_last)
         self.path = os.fspath(path)
         self.batch_size = int(batch_size)
         if (mean is None) != (std is None):
@@ -237,12 +245,18 @@ class TblRawImageLoader:
         else:
             oh, ow = (image_size, image_size) if isinstance(image_size, int) else image_size
             self._oh, self._ow = int(oh), int(ow)
-        # The exact gather path is only for the identity case (no crop/resize/flip,
-        # float32) — it is bit-identical to the TAR pipeline. Everything else goes
-        # through the fused crop kernel (same math as the Metal / CUDA crop kernels).
-        self._resample = (
-            self.train_aug or (self._oh, self._ow) != (self._h, self._w) or dtype == "float16"
+        # The exact gather path serves the identity case (no crop/resize) in any
+        # dtype/layout; float32 CHW is bit-identical to the TAR pipeline. Crops,
+        # resizes, and flips in float16/NHWC go through the fused crop kernel (same
+        # math as the Metal / CUDA crop kernels).
+        self._resample = self.train_aug or (self._oh, self._ow) != (self._h, self._w)
+        self._flip_via_kernel = (
+            not self._resample
+            and self.hflip_prob > 0
+            and (dtype == "float16" or self.channels_last)
         )
+        if self._flip_via_kernel:
+            self._resample = True
 
     # ------------------------------------------------------------------ api
     def __len__(self):
@@ -298,6 +312,9 @@ class TblRawImageLoader:
         crops, flips = self._epoch_aug(len(order))
         flip_only = (not self._resample) and self.hflip_prob > 0
 
+        def out_shape(k):
+            return (k, oh, ow, 3) if self.channels_last else (k, 3, oh, ow)
+
         if self._pin:
             import torch
 
@@ -305,7 +322,7 @@ class TblRawImageLoader:
                 raise RuntimeError("pin_memory=True needs CUDA (page-locked memory)")
             tdt = torch.float16 if self.dtype == "float16" else torch.float32
             ring = [
-                torch.empty((bs, 3, oh, ow), dtype=tdt, pin_memory=True) for _ in range(self._ring)
+                torch.empty(out_shape(bs), dtype=tdt, pin_memory=True) for _ in range(self._ring)
             ]
             ring_np = [r.numpy() for r in ring]
         stage = np.empty((bs, self._h, self._w, 3), dtype=np.uint8) if flip_only else None
@@ -317,7 +334,7 @@ class TblRawImageLoader:
                 out_t = ring[b % self._ring]
                 out = ring_np[b % self._ring]
             else:
-                out = np.empty((k, 3, oh, ow), dtype=self._np_dtype)
+                out = np.empty(out_shape(k), dtype=self._np_dtype)
             sl = slice(b * bs, b * bs + k)
             if self._resample:
                 # ONE fused pass: gather + RandomResizedCrop/resize + hflip + normalize
@@ -340,7 +357,12 @@ class TblRawImageLoader:
             if self.train_aug:
                 meta["crops"] = crops[sl].copy()
                 meta["flips"] = flips[sl].copy()
-            return (out_t[:k], meta) if self._pin else (out, meta)
+            if self._pin:
+                t_out = out_t[:k]
+                # channels_last: the buffer is NHWC; permute gives the NCHW-shaped tensor
+                # torch expects, with channels_last strides and no copy.
+                return (t_out.permute(0, 3, 1, 2) if self.channels_last else t_out), meta
+            return out, meta
 
         # Background prefetch: batch b+1 is produced (SIMD ops release the GIL)
         # while the consumer trains on batch b — without this the whole serve

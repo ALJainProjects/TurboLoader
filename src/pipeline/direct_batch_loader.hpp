@@ -194,33 +194,33 @@ private:
         thread_local std::vector<uint8_t> resized;
 
         int aw = 0, ah = 0, ch = 0;
-        try {
-            turboloader::span<const uint8_t> jpeg = reader_->get_sample(idx);  // const, thread-safe
-            decoder.decode_scaled(jpeg, decoded, W, H, aw, ah, ch);
-        } catch (...) {
-            record_decode_failure(idx, "decode failed (corrupt or unsupported file)");
-            std::memset(out, 0, num_pixels * C * sizeof(float));
-            return;
-        }
-        if (ch != C) {
-            // Unexpected channel count (e.g. CMYK/gray) — zero-fill rather than corrupt.
-            record_decode_failure(idx, "unexpected channel count (e.g. CMYK/grayscale)");
-            std::memset(out, 0, num_pixels * C * sizeof(float));
-            return;
-        }
-
         if (train_aug_) {
-            // Fused RandomResizedCrop + horizontal flip. The crop rect is chosen on the
-            // DCT-scaled decoded image (aw x ah) — proportionally identical to choosing it
-            // on the original, and every crop pixel keeps >= target resolution because the
-            // scaled decode already covers the FULL image at target size. Crop rows are
-            // packed contiguous (memcpy, small vs decode) so the SIMD resize applies.
+            // Fused RandomResizedCrop + horizontal flip, decoding ONLY the crop window.
+            // begin_scaled() reports the DCT-scaled size without decoding pixels; the
+            // window is chosen on that size (proportionally identical to choosing it on
+            // the original, and every crop pixel keeps >= target resolution because the
+            // scaled decode covers the FULL image at target size). read_region() then
+            // decodes just the window's rows over its iMCU column span: rows above skip
+            // the IDCT, rows below are never entropy-decoded. Crop rows are packed
+            // contiguous (memcpy, small vs decode) so the SIMD resize applies.
+            thread_local std::vector<uint8_t> strip;
             thread_local std::vector<uint8_t> cropped;
-            CropRect r = pick_crop(aw, ah, idx);
+            CropRect r{0, 0, 0, 0, false};
+            int sx = 0, sw = 0;
+            try {
+                turboloader::span<const uint8_t> jpeg = reader_->get_sample(idx);
+                decoder.begin_scaled(jpeg, W, H, aw, ah, ch);  // throws unless 3-channel
+                r = pick_crop(aw, ah, idx);
+                decoder.read_region(strip, r.x, r.y, r.w, r.h, sx, sw);
+            } catch (...) {
+                record_decode_failure(idx, "decode failed (corrupt or unsupported file)");
+                std::memset(out, 0, num_pixels * C * sizeof(float));
+                return;
+            }
             cropped.resize(static_cast<size_t>(r.w) * r.h * C);
             for (int y = 0; y < r.h; ++y) {
                 std::memcpy(cropped.data() + static_cast<size_t>(y) * r.w * C,
-                            decoded.data() + ((static_cast<size_t>(r.y) + y) * aw + r.x) * C,
+                            strip.data() + (static_cast<size_t>(y) * sw + (r.x - sx)) * C,
                             static_cast<size_t>(r.w) * C);
             }
             resized.resize(static_cast<size_t>(W) * H * C);
@@ -254,6 +254,21 @@ private:
                     for (size_t e = 0; e < num_pixels * C; ++e) out[e] = src_aug[e] * scale;
                 }
             }
+            return;
+        }
+
+        try {
+            turboloader::span<const uint8_t> jpeg = reader_->get_sample(idx);  // const, thread-safe
+            decoder.decode_scaled(jpeg, decoded, W, H, aw, ah, ch);
+        } catch (...) {
+            record_decode_failure(idx, "decode failed (corrupt or unsupported file)");
+            std::memset(out, 0, num_pixels * C * sizeof(float));
+            return;
+        }
+        if (ch != C) {
+            // Unexpected channel count (e.g. CMYK/gray) — zero-fill rather than corrupt.
+            record_decode_failure(idx, "unexpected channel count (e.g. CMYK/grayscale)");
+            std::memset(out, 0, num_pixels * C * sizeof(float));
             return;
         }
 

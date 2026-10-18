@@ -254,37 +254,7 @@ public:
             throw std::runtime_error("Failed to read JPEG header");
         }
 
-        int orig_width = cinfo_.image_width;
-        int orig_height = cinfo_.image_height;
-
-        // Calculate optimal DCT scale factor
-        // libjpeg-turbo supports scale_denom 1-16 with scale_num 1-16
-        // Common ratios: 1/8, 1/4, 3/8, 1/2, 5/8, 3/4, 7/8, 1
-        if (target_width > 0 && target_height > 0) {
-            // Find best scale factor that gives dimensions >= target
-            unsigned int best_num = 8;
-            unsigned int best_denom = 8;
-
-            // Try common scale ratios from smallest to largest
-            static const struct { unsigned int num, denom; } scales[] = {
-                {1, 8}, {1, 4}, {3, 8}, {1, 2}, {5, 8}, {3, 4}, {7, 8}, {1, 1},
-                {9, 8}, {5, 4}, {11, 8}, {3, 2}, {13, 8}, {7, 4}, {15, 8}, {2, 1}
-            };
-
-            for (const auto& scale : scales) {
-                int scaled_w = (orig_width * scale.num + scale.denom - 1) / scale.denom;
-                int scaled_h = (orig_height * scale.num + scale.denom - 1) / scale.denom;
-
-                if (scaled_w >= target_width && scaled_h >= target_height) {
-                    best_num = scale.num;
-                    best_denom = scale.denom;
-                    break;
-                }
-            }
-
-            cinfo_.scale_num = best_num;
-            cinfo_.scale_denom = best_denom;
-        }
+        select_scale(target_width, target_height);
 
         // Force RGB output
         cinfo_.out_color_space = JCS_RGB;
@@ -327,6 +297,101 @@ public:
     }
 
     /**
+     * @brief Two-phase scaled decode for crop-window reads.
+     *
+     * begin_scaled() reads the header, picks the DCT scale for the target exactly like
+     * decode_scaled(), starts decompression and reports the scaled output size WITHOUT
+     * decoding any pixels. read_region() then decodes only rows [y, y+h) of the
+     * iMCU-aligned column span covering [x, x+w) (jpeg_crop_scanline + jpeg_skip_scanlines)
+     * and aborts the rest: rows above the window skip the IDCT and color conversion, rows
+     * below it are never entropy-decoded at all. For RandomResizedCrop (average window
+     * ~50% of the image) that removes a third or more of the decode work.
+     */
+    void begin_scaled(
+        std::span<const uint8_t> jpeg_data,
+        int target_width,
+        int target_height,
+        int& scaled_width,
+        int& scaled_height,
+        int& channels
+    ) {
+        if (jpeg_data.empty()) {
+            throw std::runtime_error("Empty JPEG data");
+        }
+        if (setjmp(jerr_.setjmp_buffer)) {
+            jpeg_abort_decompress(&cinfo_);
+            throw std::runtime_error("JPEG decode error");
+        }
+        jpeg_mem_src(&cinfo_,
+                     const_cast<unsigned char*>(jpeg_data.data()),
+                     jpeg_data.size());
+        if (jpeg_read_header(&cinfo_, TRUE) != JPEG_HEADER_OK) {
+            throw std::runtime_error("Failed to read JPEG header");
+        }
+        select_scale(target_width, target_height);
+        cinfo_.out_color_space = JCS_RGB;
+        cinfo_.dct_method = JDCT_IFAST;
+        jpeg_start_decompress(&cinfo_);
+        scaled_width = cinfo_.output_width;
+        scaled_height = cinfo_.output_height;
+        channels = cinfo_.output_components;
+        if (channels != 3) {
+            jpeg_abort_decompress(&cinfo_);
+            throw std::runtime_error("Expected RGB output (3 channels)");
+        }
+    }
+
+    /**
+     * @brief Decode rows [y, y+h) of the iMCU-aligned span covering columns [x, x+w).
+     *
+     * Must follow begin_scaled(). On return strip_x <= x and strip_x + strip_w >= x + w
+     * describe the decoded columns; output holds h rows of strip_w * 3 bytes. The
+     * decompressor is reset afterwards (the remaining rows are skipped, not decoded).
+     */
+    void read_region(
+        std::vector<uint8_t>& output,
+        int x, int y, int w, int h,
+        int& strip_x,
+        int& strip_w
+    ) {
+        if (setjmp(jerr_.setjmp_buffer)) {
+            jpeg_abort_decompress(&cinfo_);
+            throw std::runtime_error("JPEG decode error");
+        }
+        // Ask for one extra column on each side (inside the image): libjpeg-turbo's
+        // fancy chroma upsampler treats the strip's first and last columns as image
+        // edges, so a 4:2:2 strip differs from the full decode exactly there. Keeping
+        // those columns outside the requested window makes the window pixel-identical
+        // to a full decode for every subsampling (4:2:0 and 4:4:4 already were).
+        const int out_w = static_cast<int>(cinfo_.output_width);
+        const int x0 = std::max(0, x - 1), x1 = std::min(out_w, x + w + 1);
+        JDIMENSION xoff = static_cast<JDIMENSION>(x0), width = static_cast<JDIMENSION>(x1 - x0);
+        jpeg_crop_scanline(&cinfo_, &xoff, &width);  // widens to iMCU boundaries
+        strip_x = static_cast<int>(xoff);
+        strip_w = static_cast<int>(width);
+        if (y > 0) {
+            jpeg_skip_scanlines(&cinfo_, static_cast<JDIMENSION>(y));
+        }
+        const size_t row_stride = static_cast<size_t>(width) * cinfo_.output_components;
+        output.resize(static_cast<size_t>(h) * row_stride);
+        int rows = 0;
+        while (rows < h) {
+            unsigned int rows_to_read = std::min(static_cast<unsigned int>(h - rows), 16u);
+            JSAMPROW row_pointers[16];
+            for (unsigned int r = 0; r < rows_to_read; ++r) {
+                row_pointers[r] = output.data() + (static_cast<size_t>(rows) + r) * row_stride;
+            }
+            JDIMENSION got = jpeg_read_scanlines(&cinfo_, row_pointers, rows_to_read);
+            if (got == 0) {
+                jpeg_abort_decompress(&cinfo_);
+                throw std::runtime_error("JPEG decode error (short read)");
+            }
+            rows += static_cast<int>(got);
+        }
+        jpeg_abort_decompress(&cinfo_);  // rows below the window: never decoded
+    }
+
+    /**
      * @brief Decode JPEG sample with DCT scaling
      *
      * @param sample Sample with jpeg_data filled in
@@ -366,6 +431,32 @@ public:
     }
 
 private:
+    // Pick the smallest libjpeg-turbo DCT scale (num/denom, 1/8 .. 2/1) whose
+    // ceil-scaled output still covers the target in both dimensions. Must run after
+    // jpeg_read_header (uses image_width/height) and before jpeg_start_decompress.
+    void select_scale(int target_width, int target_height) {
+        if (target_width <= 0 || target_height <= 0) return;
+        const int orig_width = cinfo_.image_width;
+        const int orig_height = cinfo_.image_height;
+        unsigned int best_num = 8;
+        unsigned int best_denom = 8;
+        static const struct { unsigned int num, denom; } scales[] = {
+            {1, 8}, {1, 4}, {3, 8}, {1, 2}, {5, 8}, {3, 4}, {7, 8}, {1, 1},
+            {9, 8}, {5, 4}, {11, 8}, {3, 2}, {13, 8}, {7, 4}, {15, 8}, {2, 1}
+        };
+        for (const auto& scale : scales) {
+            int scaled_w = (orig_width * scale.num + scale.denom - 1) / scale.denom;
+            int scaled_h = (orig_height * scale.num + scale.denom - 1) / scale.denom;
+            if (scaled_w >= target_width && scaled_h >= target_height) {
+                best_num = scale.num;
+                best_denom = scale.denom;
+                break;
+            }
+        }
+        cinfo_.scale_num = best_num;
+        cinfo_.scale_denom = best_denom;
+    }
+
     BufferPool* buffer_pool_;         // Optional buffer pool
     jpeg_decompress_struct cinfo_;    // libjpeg decompressor
     JPEGErrorMgr jerr_;               // Error handler

@@ -818,7 +818,15 @@ try:
                 pixels (same rule as DALI pipeline outputs). Default False (fresh
                 arrays every batch).
             train_aug (bool): Fused RandomResizedCrop + horizontal flip inside
-                the C++ pass (torchvision-parity distribution; ~3% overhead).
+                the C++ pass (torchvision-parity distribution). On the TAR path
+                only the crop window is decoded (jpeg_crop_scanline +
+                jpeg_skip_scanlines), so augmented epochs cost LESS than plain
+                resize, not more.
+            dtype (str): ``'float32'`` (default) or ``'float16'``; ``.tbl`` inputs
+                only. Halves the bytes written and copied to the device.
+            channels_last (bool): yield ``(B, H, W, 3)`` instead of ``(B, 3, H, W)``;
+                ``.tbl`` inputs only (with ``pin_memory`` the tensor is NCHW-shaped
+                with channels_last strides). Skips the planar deinterleave.
 
         Example:
             >>> # With transforms
@@ -869,6 +877,8 @@ try:
             pin_memory=False,
             train_aug=False,
             hflip_prob=0.5,
+            dtype="float32",
+            channels_last=False,
         ):
             self._transform = transform
             self._output_format = output_format
@@ -925,11 +935,19 @@ try:
                     image_size=target,
                     train_aug=train_aug,
                     hflip_prob=hflip_prob if train_aug else 0.0,
+                    dtype=dtype,
+                    channels_last=channels_last,
                     world_rank=world_rank if enable_distributed else 0,
                     world_size=world_size if enable_distributed else 1,
                 )
                 self._fast = False
                 return
+            if dtype != "float32" or channels_last:
+                raise ValueError(
+                    "dtype= and channels_last= are served by the pre-processed .tbl path "
+                    "(preprocess_to_tbl); the TAR fast path emits float32 CHW (or HWC via "
+                    "output_format='numpy')."
+                )
 
             # Non-image modalities delegate to a dedicated loader (single entry point).
             if modality in ("tokens", "token", "text"):
@@ -1252,6 +1270,15 @@ try:
                 self._impl.set_epoch(epoch)
             elif self._loader is not None:
                 self._loader.set_epoch(epoch)
+
+        def to_jax(self, **kwargs):
+            """Wrap this loader for JAX (TPU, GPU, CPU): batches arrive as ``jax.Array``s
+            moved with an asynchronous ``device_put`` from a background thread. See
+            :class:`turboloader.jax_adapter.JaxDeviceLoader` for ``sharding=``,
+            ``device=``, ``prefetch=`` and ``dtype=``."""
+            from turboloader.jax_adapter import JaxDeviceLoader
+
+            return JaxDeviceLoader(self, **kwargs)
 
         def state_dict(self):
             """Checkpoint the loader position: {'epoch', 'batches_served'}.
@@ -2703,9 +2730,9 @@ try:
 
     # CPU JPEG decode primitive (powers the GPU loader: decode on CPU, transform on GPU).
     try:
-        from _turboloader import decode_jpeg
+        from _turboloader import decode_jpeg, decode_jpeg_scaled, decode_jpeg_region
 
-        __all__ += ["decode_jpeg"]
+        __all__ += ["decode_jpeg", "decode_jpeg_scaled", "decode_jpeg_region"]
     except Exception:
         pass
 
@@ -2768,6 +2795,14 @@ try:
         from turboloader.webdataset import WebDatasetLoader
 
         __all__ += ["WebDatasetLoader"]
+    except Exception:
+        pass
+
+    # JAX / PyTorch-XLA handoff (TPU, Trainium, GPU): pure Python, imports jax lazily.
+    try:
+        from turboloader.jax_adapter import JaxDeviceLoader, xla_device_loader
+
+        __all__ += ["JaxDeviceLoader", "xla_device_loader"]
     except Exception:
         pass
 

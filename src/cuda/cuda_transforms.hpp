@@ -46,14 +46,15 @@ bool resize_normalize_batch(const std::vector<ImageRef>& imgs, int dst_h, int ds
 // H*W, contiguous at `src_dev`) -> NCHW float32, in ONE kernel launch. No resize, no H2D. For a
 // pre-processed dataset uploaded to the GPU once (uint8) and normalized per epoch on the GPU.
 // Returns the device pointer of the (N,3,H,W) float32 result (valid until the 4th-next call), or
-// 0 on error / if CUDA is unavailable.
+// 0 on error / if CUDA is unavailable. fmt bit0 = float16 output (half the write bandwidth, what
+// AMP training consumes), bit1 = NHWC (channels_last) layout; 0 keeps the float32 CHW kernel.
 uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const float mean[3],
-                                   const float std_[3]);
+                                   const float std_[3], int fmt = 0);
 
 // Same, but output image n gathers from source image sel_dev[n] (device int64 index array) —
 // a fused shuffle+normalize so a GPU-resident loader shuffles without a separate gather copy.
 uintptr_t normalize_resident_gather_batch(uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W,
-                                          const float mean[3], const float std_[3]);
+                                          const float mean[3], const float std_[3], int fmt = 0);
 
 // Fused YUV 4:2:0 -> RGB (video-range BT.601/709) + bilinear resize + normalize for a
 // batch of decoded VIDEO frames already on the device. Covers NV12 (c_px_stride 2,
