@@ -5,7 +5,12 @@ All notable changes to TurboLoader will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.39.0] - 2026-10-18
+
+Speed sprint: decode only the crop window on the augmented TAR path, float16 and
+channels_last on every pre-processed path, and a JAX/XLA handoff for TPUs and
+Trainium. The CUDA build box is still offline: the float16 resident kernels and
+the cu13 wheels for this release are pending its return.
 
 ### Added
 - **Crop-window JPEG decode for `train_aug`** on the TAR fast path. `JPEGDecoder::begin_scaled`
