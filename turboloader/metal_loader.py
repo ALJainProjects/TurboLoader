@@ -48,6 +48,9 @@ class MetalResidentLoader:
     uint8 array, then every epoch is one fused gather+shuffle+normalize kernel
     launch per batch. Yields ``(B, 3, H, W)`` float32 zero-copy views (valid
     until the next batch; see module docstring), optionally with sample indices.
+    ``dtype='float16'`` halves the bytes the kernel writes; ``channels_last=True``
+    yields ``(B, H, W, 3)`` (``torch.from_numpy(x).permute(0, 3, 1, 2)`` is then a
+    channels_last NCHW tensor with no copy).
     """
 
     def __init__(
@@ -65,6 +68,8 @@ class MetalResidentLoader:
         return_indices=False,
         world_rank=0,
         world_size=1,
+        dtype="float32",
+        channels_last=False,
     ):
         t = _require_metal()
         self._t = t
@@ -78,6 +83,12 @@ class MetalResidentLoader:
         self.world_rank, self.world_size = int(world_rank), int(world_size)
         if self.world_size < 1 or not 0 <= self.world_rank < self.world_size:
             raise ValueError("need 0 <= world_rank < world_size")
+        if dtype not in ("float32", "float16"):
+            raise ValueError("dtype must be 'float32' or 'float16'")
+        self.dtype, self.channels_last = dtype, bool(channels_last)
+        # Kernel output format: bit0 = float16 (half the bytes the kernel writes, which
+        # is what bounds it), bit1 = NHWC / channels_last (B, H, W, 3).
+        self._fmt = (1 if dtype == "float16" else 0) | (2 if self.channels_last else 0)
         self._epoch = 0
         self._handle = None
 
@@ -142,7 +153,7 @@ class MetalResidentLoader:
         for b in range(0, end, bs):
             idx = order[b : b + min(bs, n - b)]
             batch = t.metal_resident_images_gather(
-                self._handle, idx, self._H, self._W, mean=self.mean, std=self.std
+                self._handle, idx, self._H, self._W, mean=self.mean, std=self.std, fmt=self._fmt
             )
             if self.return_indices:
                 yield batch, idx

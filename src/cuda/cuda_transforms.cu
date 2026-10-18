@@ -8,6 +8,7 @@
 
 #include "cuda_transforms.hpp"
 
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #ifdef HAVE_NVJPEG
 #include <nvjpeg.h>
@@ -132,6 +133,39 @@ __global__ void normalize_gather_kernel(const uint8_t* src, const long long* sel
     const float isd = (c == 0) ? invstd.x : (c == 1) ? invstd.y : invstd.z;
     const uint8_t v = src[(s * H * W + (long)y * W + x) * 3 + c];
     dst[idx] = (v / 255.0f - m) * isd;
+}
+
+// Output-format variants of the resident normalize: float16 output (half the write
+// bandwidth, which is what bounds the float32 kernel) and/or NHWC (channels_last) layout.
+// One thread per OUTPUT element in both layouts, so writes stay coalesced; `sel` may be
+// null (identity). The float32 CHW case keeps the two kernels above, bit for bit.
+__device__ __forceinline__ void rn_store(float* p, float v) { *p = v; }
+__device__ __forceinline__ void rn_store(__half* p, float v) { *p = __float2half_rn(v); }
+
+template <typename OutT, bool NHWC>
+__global__ void normalize_resident_fmt_kernel(const uint8_t* src, const long long* sel, OutT* dst,
+                                              int N, int H, int W, float3 mean, float3 invstd) {
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    const long total = (long)N * 3 * H * W;
+    if (idx >= total) return;
+    int x, y, c;
+    long n;
+    if (NHWC) {
+        c = (int)(idx % 3);
+        x = (int)((idx / 3) % W);
+        y = (int)((idx / (3L * W)) % H);
+        n = idx / (3L * W * H);
+    } else {
+        x = (int)(idx % W);
+        y = (int)((idx / W) % H);
+        c = (int)((idx / ((long)W * H)) % 3);
+        n = idx / ((long)W * H * 3);
+    }
+    const long s = sel ? (long)sel[n] : n;
+    const float m = (c == 0) ? mean.x : (c == 1) ? mean.y : mean.z;
+    const float isd = (c == 0) ? invstd.x : (c == 1) ? invstd.y : invstd.z;
+    const uint8_t v = src[(s * H * W + (long)y * W + x) * 3 + c];
+    rn_store(dst + idx, (v / 255.0f - m) * isd);
 }
 
 // Port of the (numpy-validated) Metal `nv12_resize_normalize` kernel, generalized
@@ -351,7 +385,7 @@ bool crop_resize_normalize_batch(const std::vector<ImageRef>& imgs,
 // valid while the consumer reads an earlier one.
 static cudaStream_t g_rn_stream = nullptr;
 static const int RN_RING = 4;
-static float* g_rn_pool[RN_RING] = {nullptr};
+static void* g_rn_pool[RN_RING] = {nullptr};  // float32 or float16 output, per fmt
 static size_t g_rn_cap[RN_RING] = {0};
 static int g_rn_idx = 0;
 static std::mutex g_rn_mutex;
@@ -472,17 +506,21 @@ uintptr_t video_clip_yuv420(const std::vector<uintptr_t>& y_ptrs,
     return reinterpret_cast<uintptr_t>(outp);
 }
 
-uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const float mean[3],
-                                   const float std_[3]) {
-    if (!available() || !src_dev || N <= 0 || H <= 0 || W <= 0) return 0;
-    std::lock_guard<std::mutex> lk(g_rn_mutex);
+// Shared launcher for the resident normalize (sel == 0: identity). fmt bit0 = float16 output,
+// bit1 = NHWC layout; fmt 0 keeps the original float32 CHW kernels bit for bit. Output comes
+// from a 4-deep device ring (valid until the 4th-next call). Caller holds g_rn_mutex.
+static uintptr_t resident_launch(uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W,
+                                 const float mean[3], const float std_[3], int fmt,
+                                 const char* what) {
     if (!g_rn_stream && cudaStreamCreate(&g_rn_stream) != cudaSuccess) return 0;
+    const bool f16 = (fmt & 1) != 0, nhwc = (fmt & 2) != 0;
     const size_t per = (size_t)3 * H * W;
-    const size_t out_bytes = (size_t)N * per * sizeof(float);
-    float*& outp = g_rn_pool[g_rn_idx];
+    const size_t out_bytes = (size_t)N * per * (f16 ? sizeof(__half) : sizeof(float));
+    void*& outp = g_rn_pool[g_rn_idx];
     if (out_bytes > g_rn_cap[g_rn_idx]) {
         if (outp) cudaFree(outp);
         if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
+            outp = nullptr;
             g_rn_cap[g_rn_idx] = 0;
             return 0;
         }
@@ -493,54 +531,50 @@ uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const
     const long total = (long)N * 3 * H * W;
     const int block = 256;
     const long grid = (total + block - 1) / block;
-    normalize_nhwc_to_nchw_kernel<<<(unsigned)grid, block, 0, g_rn_stream>>>(
-        reinterpret_cast<const uint8_t*>(src_dev), outp, N, H, W, m, isd);
+    const uint8_t* src = reinterpret_cast<const uint8_t*>(src_dev);
+    const long long* sel = reinterpret_cast<const long long*>(sel_dev);
+    if (fmt == 0) {
+        if (sel)
+            normalize_gather_kernel<<<(unsigned)grid, block, 0, g_rn_stream>>>(
+                src, sel, static_cast<float*>(outp), N, H, W, m, isd);
+        else
+            normalize_nhwc_to_nchw_kernel<<<(unsigned)grid, block, 0, g_rn_stream>>>(
+                src, static_cast<float*>(outp), N, H, W, m, isd);
+    } else if (f16 && nhwc) {
+        normalize_resident_fmt_kernel<__half, true><<<(unsigned)grid, block, 0, g_rn_stream>>>(
+            src, sel, static_cast<__half*>(outp), N, H, W, m, isd);
+    } else if (f16) {
+        normalize_resident_fmt_kernel<__half, false><<<(unsigned)grid, block, 0, g_rn_stream>>>(
+            src, sel, static_cast<__half*>(outp), N, H, W, m, isd);
+    } else {
+        normalize_resident_fmt_kernel<float, true><<<(unsigned)grid, block, 0, g_rn_stream>>>(
+            src, sel, static_cast<float*>(outp), N, H, W, m, isd);
+    }
     cudaError_t err = cudaStreamSynchronize(g_rn_stream);
     if (err == cudaSuccess) err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "[turboloader cuda] resident normalize: %s\n", cudaGetErrorString(err));
+        fprintf(stderr, "[turboloader cuda] %s: %s\n", what, cudaGetErrorString(err));
         return 0;
     }
-    float* result = outp;
+    void* result = outp;
     g_rn_idx = (g_rn_idx + 1) % RN_RING;
     return reinterpret_cast<uintptr_t>(result);
+}
+
+uintptr_t normalize_resident_batch(uintptr_t src_dev, int N, int H, int W, const float mean[3],
+                                   const float std_[3], int fmt) {
+    if (!available() || !src_dev || N <= 0 || H <= 0 || W <= 0) return 0;
+    std::lock_guard<std::mutex> lk(g_rn_mutex);
+    return resident_launch(src_dev, 0, N, H, W, mean, std_, fmt, "resident normalize");
 }
 
 // GPU-resident normalize with a fused gather: output image n pulls from source image sel[n]
 // (device int64 index array). Lets CudaResidentLoader shuffle at full speed (no torch gather).
 uintptr_t normalize_resident_gather_batch(uintptr_t src_dev, uintptr_t sel_dev, int N, int H, int W,
-                                          const float mean[3], const float std_[3]) {
+                                          const float mean[3], const float std_[3], int fmt) {
     if (!available() || !src_dev || !sel_dev || N <= 0 || H <= 0 || W <= 0) return 0;
     std::lock_guard<std::mutex> lk(g_rn_mutex);
-    if (!g_rn_stream && cudaStreamCreate(&g_rn_stream) != cudaSuccess) return 0;
-    const size_t per = (size_t)3 * H * W;
-    const size_t out_bytes = (size_t)N * per * sizeof(float);
-    float*& outp = g_rn_pool[g_rn_idx];
-    if (out_bytes > g_rn_cap[g_rn_idx]) {
-        if (outp) cudaFree(outp);
-        if (cudaMalloc(&outp, out_bytes) != cudaSuccess) {
-            g_rn_cap[g_rn_idx] = 0;
-            return 0;
-        }
-        g_rn_cap[g_rn_idx] = out_bytes;
-    }
-    const float3 m = make_float3(mean[0], mean[1], mean[2]);
-    const float3 isd = make_float3(1.0f / std_[0], 1.0f / std_[1], 1.0f / std_[2]);
-    const long total = (long)N * 3 * H * W;
-    const int block = 256;
-    const long grid = (total + block - 1) / block;
-    normalize_gather_kernel<<<(unsigned)grid, block, 0, g_rn_stream>>>(
-        reinterpret_cast<const uint8_t*>(src_dev), reinterpret_cast<const long long*>(sel_dev),
-        outp, N, H, W, m, isd);
-    cudaError_t err = cudaStreamSynchronize(g_rn_stream);
-    if (err == cudaSuccess) err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "[turboloader cuda] resident gather: %s\n", cudaGetErrorString(err));
-        return 0;
-    }
-    float* result = outp;
-    g_rn_idx = (g_rn_idx + 1) % RN_RING;
-    return reinterpret_cast<uintptr_t>(result);
+    return resident_launch(src_dev, sel_dev, N, H, W, mean, std_, fmt, "resident gather");
 }
 
 // ---- Streaming: K-slot async H2D + normalize (dataset in host RAM, larger than VRAM) ----

@@ -15,7 +15,7 @@ turboloader.DataLoader(
     enable_cache=False, cache_l1_mb=512, cache_l2_gb=0, cache_dir='/tmp/turboloader_cache',
     auto_smart_batching=False, enable_smart_batching=False,
     prefetch_batches=4, cache_decoded=False, antialias=False, pin_memory=False,
-    train_aug=False, hflip_prob=0.5,
+    train_aug=False, hflip_prob=0.5, dtype='float32', channels_last=False,
 )
 ```
 
@@ -47,7 +47,8 @@ The fast path **requires a fixed size**: pass `image_size=N` or `(H, W)`, or a `
 - **`antialias`** — antialiased downscale (torchvision `antialias=True` parity); default False is plain bilinear with half-pixel centers (PIL/OpenCV/TF convention).
 
 ### Training-loop features
-- **`train_aug`** — fused RandomResizedCrop (torchvision-parity distribution incl. the aspect-clamped central-crop fallback) + horizontal flip with probability **`hflip_prob`** (default 0.5), inside the C++ pass (~3% overhead). Per-epoch randomness follows `(seed, epoch)`.
+- **`train_aug`** — fused RandomResizedCrop (torchvision-parity distribution incl. the aspect-clamped central-crop fallback) + horizontal flip with probability **`hflip_prob`** (default 0.5), inside the C++ pass. Since 2.39 only the crop window is decoded (`jpeg_crop_scanline` + `jpeg_skip_scanlines`), pixel-identical to cropping a full decode, so augmented epochs cost less than plain resize (+15 to 17% on the M4 Max). Per-epoch randomness follows `(seed, epoch)`.
+- **`dtype`**, **`channels_last`** — `.tbl` inputs only: `'float16'` output and/or `(N,H,W,3)` layout; the TAR fast path raises if they are set.
 - **`pin_memory`** — stream batches through a **ring of recycled page-locked torch buffers** for async `.to(device, non_blocking=True)`. LIFETIME: the batch you hold is never overwritten, but the previous one may be recycled as soon as you take the next batch (the ring is `prefetch_batches + 2` buffers: yours, the queued ones, and one being filled). Consume (`.to(device)`) or `.clone()` before calling `next()` again. Requires torch + CUDA.
 - **`prefetch_batches`** — decode-ahead depth (default 4). The loader keeps working while your step runs.
 - **`cache_decoded`** — decode the whole dataset once into a contiguous float32 cache (index-ordered, one allocation as of v2.37), then serve every epoch from RAM with a parallel C++ row gather. Costs 4× the uint8 bytes as anonymous RAM and a decode-all pass at every process start — for many-epoch training prefer TBL-RAW, which keeps uint8 in evictable page cache. Numbers: [Benchmarks](https://github.com/ALJainProjects/TurboLoader/wiki/Benchmarks).
@@ -76,6 +77,6 @@ Fast-path batches come with `meta = {"indices": [...], "batch_size": n}` — `in
 
 ## Related classes
 
-- `TblRawImageLoader` — the `.tbl` serve class with every knob (`train_aug`, `scale`/`ratio`, `hflip_prob`, `image_size`, `dtype`, `world_rank`/`world_size`, `ring`, `prefetch_batches`, `mean/std`); `DataLoader('x.tbl')` forwards `batch_size`, `shuffle`, `seed`, `drop_last`, `pin_memory`, `prefetch_batches`, `image_size` (or a `Resize` in `transform` — a serve-time resize), `train_aug`/`hflip_prob`, and `enable_distributed`/`world_rank`/`world_size`; `transform` may contain `Resize` and `ImageNetNormalize` only (other transforms raise with guidance).
+- `TblRawImageLoader` — the `.tbl` serve class with every knob (`train_aug`, `scale`/`ratio`, `hflip_prob`, `image_size`, `dtype`, `channels_last`, `world_rank`/`world_size`, `ring`, `prefetch_batches`, `mean/std`); `DataLoader('x.tbl')` forwards `batch_size`, `shuffle`, `seed`, `drop_last`, `pin_memory`, `prefetch_batches`, `image_size` (or a `Resize` in `transform` — a serve-time resize), `train_aug`/`hflip_prob`, and `enable_distributed`/`world_rank`/`world_size`; `transform` may contain `Resize` and `ImageNetNormalize` only (other transforms raise with guidance).
 - `FastDataLoader`, `Loader()`, `create_loader()` — legacy; see [Which Loader Do I Use](https://github.com/ALJainProjects/TurboLoader/wiki/Which-Loader-Do-I-Use).
 - `PyTorchCompatibleLoader(data_path, label_extractor=..., transform=..., device=...)` — `(images, labels)` tuples with `FolderLabelExtractor`, `FilenamePatternExtractor`, `JSONSidecarExtractor`, `MetadataLabelExtractor`, `CallableLabelExtractor`; `TransformAdapter` converts torchvision transforms; `convert_imagefolder` / `ImageFolderConverter` write an ImageFolder tree to a TAR.

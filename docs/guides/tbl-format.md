@@ -61,17 +61,18 @@ loader = tl.DataLoader("imagenet_192.tbl", batch_size=128, image_size=160,
 ### `preprocess_to_tbl(source, dst, image_size=160, *, batch_size=64, num_workers=8, compression=False)`
 Runs `DataLoader(source, output_format='pytorch', image_size=..., shuffle=False)` and writes each sample as `SampleFormat.RAW_U8` with its dims. Asserts in-order delivery. Returns the sample count. `compression=True` is allowed but pointless for photos (LZ4 measured **1.06×** on decoded images) and disables the mmap fast path.
 
-### `TblRawImageLoader(path, batch_size=64, *, mean=IMAGENET, std=IMAGENET, shuffle=True, seed=42, drop_last=False, pin_memory=False, ring=4, hflip_prob=0.0, prefetch_batches=2, train_aug=False, scale=(0.08, 1), ratio=(3/4, 4/3), image_size=None, dtype='float32', world_rank=0, world_size=1)`
+### `TblRawImageLoader(path, batch_size=64, *, mean=IMAGENET, std=IMAGENET, shuffle=True, seed=42, drop_last=False, pin_memory=False, ring=4, hflip_prob=0.0, prefetch_batches=2, train_aug=False, scale=(0.08, 1), ratio=(3/4, 4/3), image_size=None, dtype='float32', channels_last=False, world_rank=0, world_size=1)`
 - `mean=None, std=None` → plain `[0,1]` floats.
 - `image_size` — output size; default the file's sample size; a different size is a serve-time bilinear resize.
 - `train_aug` — RandomResizedCrop (`scale`, `ratio`) + hflip (`hflip_prob`) through the fused crop kernel; `hflip_prob` alone (no crop, same size, float32) uses the exact uint8-mirror path.
-- `dtype='float16'` — half-precision output (portable round-to-nearest-even converter; bit-equal to numpy's own conversion), halves pinned-ring bytes and H2D.
+- `dtype='float16'` — half-precision output (vectorized round-to-nearest-even converter: NEON, F16C with runtime dispatch, scalar fallback; bit-equal to numpy's own conversion), halves the bytes written and copied to the device. Since 2.39 the identity path serves float16 directly.
+- `channels_last=True` — `(B, H, W, 3)` output; the source is already HWC so the planar deinterleave disappears. With `pin_memory` the yielded tensor is NCHW-shaped with channels_last strides, ready for a channels_last model with no copy.
 - `world_rank`/`world_size` — disjoint, equal-size per-rank slice of the global `(seed, epoch)` permutation (`num_samples // world_size` per rank).
 - `pin_memory=True` → torch page-locked ring of `ring` buffers (needs CUDA); a yielded batch's buffer is overwritten `ring` batches later. With prefetch the effective depth is clamped to `ring - 2` so nothing is overwritten while you or the queue hold it.
 - `prefetch_batches` — background producer thread (stop-aware; winds down on early exit); `0` = synchronous. Output is identical either way (tested, including the flip and aug paths).
 - `set_epoch`, `state_dict`/`load_state_dict`, `__len__`, `close()`, context manager — the family contract.
 
-`DataLoader('x.tbl', ...)` forwards `batch_size`, `shuffle`, `seed`, `drop_last`, `pin_memory`, `prefetch_batches`, `image_size` (or a `Resize` in `transform`), `train_aug`/`hflip_prob`, and `enable_distributed`/`world_rank`/`world_size`; `transform` may contain `Resize` and `ImageNetNormalize` only.
+`DataLoader('x.tbl', ...)` forwards `batch_size`, `shuffle`, `seed`, `drop_last`, `pin_memory`, `prefetch_batches`, `image_size` (or a `Resize` in `transform`), `train_aug`/`hflip_prob`, `dtype`, `channels_last`, and `enable_distributed`/`world_rank`/`world_size`; `transform` may contain `Resize` and `ImageNetNormalize` only.
 
 ### `turboloader.tbl.open_raw_view(path) -> (view, H, W)`
 Validates the file (all `RAW_U8`, uniform dims, uncompressed, `size == W*H*3`, contiguous arithmetic offsets) and returns a zero-copy `(N, H, W, 3)` uint8 memmap view. This is the ingestion primitive the resident loaders use.

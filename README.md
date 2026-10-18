@@ -30,9 +30,9 @@ flowchart LR
 
 - **Fast on CPU**: ~55k img/s on-the-fly (2.0× `tf.data`, 2.7× PyTorch DataLoader); trains a real ResNet-18 **1.05–1.17× faster end-to-end** (run-dependent), ~9% above the pure-GPU floor
 - **Fast on GPU**: beats **NVIDIA DALI** on-the-fly (+12%, RTX 3090) and **FFCV** on pre-processed data (1.6–3.5×); ~757k img/s resident on Apple unified memory
-- **Pre-processed pipeline (TBL-RAW)**: decode once, mmap-serve every epoch — **586k img/s raw serve on CPU**, and with **serve-time RandomResizedCrop + flip** (fused SIMD kernel, torchvision-parity sampler) **87k img/s = 2.7× the on-the-fly `train_aug` path** for the full-augmentation recipe; bit-identical batches on the identity path, `float16` output, DDP sharding, any hardware; **fastest e2e input pipeline we've measured** (3.64s epochs vs 3.76 TAR / 3.92 PyTorch, floor 3.39)
+- **Pre-processed pipeline (TBL-RAW)**: decode once, mmap-serve every epoch — **586k img/s raw serve on CPU**, and with **serve-time RandomResizedCrop + flip** (fused SIMD kernel, torchvision-parity sampler) **87k img/s = 2.7× the on-the-fly `train_aug` path** for the full-augmentation recipe; bit-identical batches on the identity path, `float16` and `channels_last` output, DDP sharding, any hardware; **fastest e2e input pipeline we've measured** (3.64s epochs vs 3.76 TAR / 3.92 PyTorch, floor 3.39)
 - **Video**: hardware decode to training batches — **3.9× the best industry standard** on Apple Silicon; CUDA `VideoDatasetLoader` trains a real video classifier **1.16× faster** than the PyTorch+PyAV recipe (first e2e video benchmark)
-- **Train-ready**: fused `train_aug` (torchvision-parity RandomResizedCrop+flip), `state_dict()` mid-epoch resume, pinned-memory rings, DDP sharding
+- **Train-ready**: fused `train_aug` (torchvision-parity RandomResizedCrop+flip, decoding only the crop window), `state_dict()` mid-epoch resume, pinned-memory rings, DDP sharding, a JAX/XLA handoff for TPUs and Trainium (`loader.to_jax()`)
 - **Also tokens & arrays**: memory-mapped `TokenDataLoader` (**1.9× nanoGPT `get_batch` to-device**, zero-alloc pinned ring, `device='cuda'` overlapped H2D), `ArrayDataLoader`, and `MapDataLoader` for any `__getitem__` dataset
 - **Every number is honest**: interleaved medians, real consumption, corrections published — [full methodology](docs/benchmarks/index.md)
 
@@ -75,7 +75,7 @@ flowchart TD
 | The same, need per-sample dicts (inspection, irregular data) | `DataLoader(...)` (default `output_format='dict'`) | Several times slower; not for training loops. |
 | Labels | derive from `meta['indices']` / `sample['filename']` | Samples carry **no** `label` key; align an external label array by index. |
 | A dataset that fits in GPU/unified memory, many epochs | `CudaResidentLoader` (NVIDIA) / `MetalResidentLoader` (Apple) | Decode once, ~280k / 433–757k img/s per epoch. `return_indices=True` for labels. Both ingest `.tbl`. |
-| Many epochs, any hardware (full aug or fixed recipe) | `preprocess_to_tbl(..., image_size=192)` once → `DataLoader('data.tbl', image_size=160, train_aug=True)` | mmap serve, zero decode, ~zero owned RAM; serve-time RandomResizedCrop + flip via a fused SIMD kernel (2.7× the TAR `train_aug` path); identity path bit-identical to the TAR pipeline; `dtype='float16'`, `world_rank/world_size`. |
+| Many epochs, any hardware (full aug or fixed recipe) | `preprocess_to_tbl(..., image_size=192)` once → `DataLoader('data.tbl', image_size=160, train_aug=True)` | mmap serve, zero decode, ~zero owned RAM; serve-time RandomResizedCrop + flip via a fused SIMD kernel (2.7× the TAR `train_aug` path); identity path bit-identical to the TAR pipeline; `dtype='float16'`, `channels_last=True`, `world_rank/world_size`. |
 | A pre-processed dataset larger than VRAM (NVIDIA) | `CudaStreamLoader` | Fully-C++ streaming, ~140k img/s. |
 | On-the-fly GPU decode (NVIDIA) | `CudaImageLoader(decode='nvimgcodec', return_indices=True)` | Beats DALI; batches complete OUT of order — align labels via the returned indices. |
 | On-the-fly GPU transforms (Apple) | `MetalImageLoader` (alias of `GpuImageLoader`) | Metal decode+transforms. |

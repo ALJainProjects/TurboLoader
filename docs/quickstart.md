@@ -54,7 +54,7 @@ tl.preprocess_to_tbl("imagenette_train.tar", "imagenette_160.tbl", image_size=16
 loader = tl.DataLoader("imagenette_160.tbl", batch_size=128, transform=tl.ImageNetNormalize(), shuffle=True)
 ```
 
-Batches are bit-identical to the TAR path, served from a memory map through one fused SIMD pass: 586k img/s raw serve on an M4 Max and the fastest end-to-end epochs we've measured on the 3090. Random crop can't be applied to pre-resized samples — keep `train_aug=True` on the TAR path when you need it. Full details: [TBL RAW Preprocessed Pipeline](https://github.com/ALJainProjects/TurboLoader/wiki/TBL-RAW-Preprocessed-Pipeline).
+Batches are bit-identical to the TAR path, served from a memory map through one fused SIMD pass: 586k img/s raw serve on an M4 Max and the fastest end-to-end epochs we've measured on the 3090. Store samples a little larger (`image_size=192`) and `train_aug=True` applies RandomResizedCrop + flip at serve time through a fused kernel; `dtype='float16'` and `channels_last=True` are served directly. Full details: [TBL RAW Preprocessed Pipeline](https://github.com/ALJainProjects/TurboLoader/wiki/TBL-RAW-Preprocessed-Pipeline).
 
 ## 4. Other modalities, same ergonomics
 

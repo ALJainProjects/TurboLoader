@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Crop-window JPEG decode for `train_aug`** on the TAR fast path. `JPEGDecoder::begin_scaled`
+  reports the DCT-scaled size without decoding; `read_region` decodes only the RandomResizedCrop
+  window's rows over its iMCU column span (`jpeg_crop_scanline` + `jpeg_skip_scanlines`) and
+  aborts the rest, so rows below the window are never entropy-decoded. Pixel-identical to
+  cropping a full decode for 4:2:0, 4:2:2 and 4:4:4 (the request is widened by one column so
+  libjpeg's fancy-upsampler edge columns fall outside the window). Interleaved before/after on
+  the M4 Max, Imagenette 160 px, 3 rounds: 32.0k -> 37.4k img/s produced, 31.7k -> 36.7k
+  consumed (+15 to 17%). Exposed as `decode_jpeg_scaled` / `decode_jpeg_region` for tests.
+- **float16 and channels_last output on the pre-processed paths.** `TblRawImageLoader(dtype=,
+  channels_last=)` (and `DataLoader('x.tbl', dtype=, channels_last=)`), `MetalResidentLoader(
+  dtype=, channels_last=)`, `CudaResidentLoader(dtype=, channels_last=)` and `.from_tbl`.
+  `normalize_u8_gather` and `crop_resize_normalize_u8_gather` take the layout from the output
+  shape ((B,3,H,W) or (B,H,W,3)) and the dtype from the array; the float32 CHW path is
+  unchanged and bit-identical to the TAR pipeline, every other combination equals it
+  transposed and/or rounded to nearest even (tests). The TBL float16 identity path no longer
+  detours through the crop kernel. New vectorized `f32_to_f16_bulk` (NEON `vcvt`, F16C with
+  CPUID runtime dispatch, scalar fallback; all RNE, bit-equal to numpy): without it float16
+  serving was 4x slower than float32, with it TBL float16 produces 308k img/s vs 323k float32
+  while writing half the bytes. Metal resident at batch 256: float16 +10 to 15% produced over
+  two runs, NHWC within run-to-run noise. The CUDA kernels (`fmt` 1..3) are written but could
+  not be compiled: the CUDA build box is offline; the Python plumbing is tested GPU-free and
+  `fmt=0` keeps the original kernels.
+- **JAX / XLA handoff** for TPUs, Trainium and GPUs: `turboloader.JaxDeviceLoader` (asynchronous
+  `jax.device_put` from a background thread, `prefetch` device batches in flight, `sharding=`
+  with multi-process `make_array_from_process_local_data`, host-side `dtype=` cast),
+  `DataLoader.to_jax(**kw)`, and `xla_device_loader` (PyTorch/XLA `MpDeviceLoader`). Tested on
+  the CPU JAX backend; no TPU or Trainium run yet. No Pallas/NKI kernels by design: XLA fuses
+  the normalize into the model.
+- `benchmarks/benchmark_fp16_cropdecode.py`: per-stage subprocess benchmark for the above, with
+  `--pythonpath` for same-host before/after runs.
+
 ### Fixed
 - Docs: the `pin_memory=True` lifetime contract was overstated. The ring is
   `prefetch_batches + 2` buffers (the consumer's, the queued ones, one being filled),
